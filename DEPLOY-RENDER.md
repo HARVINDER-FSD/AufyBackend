@@ -25,8 +25,10 @@ https://render.com
 - Runtime: `Node`
 
 **Build & Deploy:**
-- Build Command: `npm install`
-- Start Command: `npm run dev`
+- Build Command: `npm install && npm run build`
+- Start Command: `npm start`
+
+**IMPORTANT**: Must include `npm run build` to compile TypeScript!
 
 ### 5. Add Environment Variables
 
