@@ -4,10 +4,10 @@
   "description": "Standalone API server for Anufy mobile app",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "nodemon --exec tsx src/index.ts",
+    "dev": "tsx src/index.ts",
     "dev:watch": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js",
+    "start": "tsx src/index.ts",
     "vercel-build": "echo 'Skipping build - using TypeScript directly'"
   },
   "dependencies": {
