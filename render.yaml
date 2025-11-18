@@ -5,7 +5,7 @@ services:
     region: oregon
     plan: free
     buildCommand: npm install
-    startCommand: npm start
+    startCommand: npx tsx src/index.ts
     envVars:
       - key: NODE_ENV
         value: production

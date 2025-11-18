@@ -2,7 +2,7 @@
   "name": "anufy-api-server",
   "version": "1.0.0",
   "description": "Standalone API server for Anufy mobile app",
-  "main": "dist/index.js",
+  "main": "src/index.ts",
   "scripts": {
     "dev": "tsx src/index.ts",
     "dev:watch": "tsx watch src/index.ts",
