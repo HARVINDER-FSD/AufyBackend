@@ -13,6 +13,7 @@
   "dependencies": {
     "@react-native-masked-view/masked-view": "^0.3.2",
     "@types/cookie-parser": "^1.4.10",
+    "@upstash/redis": "^1.28.0",
     "bcryptjs": "^2.4.3",
     "cloudinary": "^1.41.0",
     "cookie-parser": "^1.4.7",
