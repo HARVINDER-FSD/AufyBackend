@@ -9,7 +9,9 @@
     "build": "echo 'Using tsx - no build needed'",
     "start": "tsx src/index.ts",
     "vercel-build": "echo 'Skipping build - using TypeScript directly'",
-    "add-indexes": "tsx scripts/add-indexes.ts"
+    "add-indexes": "tsx scripts/add-indexes.ts",
+    "test-follows": "tsx scripts/test-follows.ts",
+    "add-test-follows": "tsx scripts/add-test-follows.ts"
   },
   "dependencies": {
     "@react-native-masked-view/masked-view": "^0.3.2",

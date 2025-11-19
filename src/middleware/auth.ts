@@ -25,15 +25,9 @@ export const authenticateToken = async (req: AuthRequest, res: Response, next: N
     // Verify token
     const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
     
-    // Find user by ID
-    const user = await User.findById(decoded.userId).select('-password');
-    
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-    
-    // Attach user to request object
-    req.user = user;
+    // Just attach the userId from token - don't verify user exists here
+    // Let individual routes handle user lookup with proper ID format handling
+    req.user = { userId: decoded.userId };
     req.userId = decoded.userId;
     
     next();

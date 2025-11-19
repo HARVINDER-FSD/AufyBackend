@@ -16,10 +16,23 @@ async function addIndexes() {
     await db.collection('users').createIndex({ email: 1 }, { unique: true })
     console.log('✓ User indexes created')
 
+    // Clean up bad follow data first
+    await db.collection('follows').deleteMany({
+      $or: [
+        { follower_id: null },
+        { following_id: null },
+        { followerId: null },
+        { followingId: null }
+      ]
+    })
+    console.log('✓ Cleaned up invalid follow records')
+
     // Follow indexes for fast follower/following queries
     await db.collection('follows').createIndex({ follower_id: 1 })
     await db.collection('follows').createIndex({ following_id: 1 })
-    await db.collection('follows').createIndex({ follower_id: 1, following_id: 1 }, { unique: true })
+    await db.collection('follows').createIndex({ followerId: 1 })
+    await db.collection('follows').createIndex({ followingId: 1 })
+    await db.collection('follows').createIndex({ followerId: 1, followingId: 1 }, { unique: true, sparse: true })
     console.log('✓ Follow indexes created')
 
     // Post indexes

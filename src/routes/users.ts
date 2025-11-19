@@ -184,12 +184,12 @@ router.put('/profile', authenticate, async (req: any, res: Response) => {
     try {
         const userId = req.userId
 
-        const { name, bio, avatar, website, location } = req.body
+        const { name, bio, avatar, website, location, username } = req.body
 
         console.log('[Backend] Profile update request for userId:', userId);
         console.log('[Backend] userId type:', typeof userId);
         console.log('[Backend] userId length:', userId?.length);
-        console.log('[Backend] Received data:', { name, bio, avatar: avatar?.substring(0, 50) + '...', website, location });
+        console.log('[Backend] Received data:', { name, bio, avatar: avatar?.substring(0, 50) + '...', website, location, username });
 
         if (!userId) {
             console.error('[Backend] Missing userId in request');
@@ -252,6 +252,91 @@ router.put('/profile', authenticate, async (req: any, res: Response) => {
             console.error('[Backend] User not found with either ObjectId or string ID');
             await client.close()
             return res.status(404).json({ message: 'User not found' })
+        }
+
+        // Handle username change with 15-day restriction
+        if (username !== undefined && username !== user.username) {
+            console.log('[Backend] Username change requested:', user.username, '->', username);
+
+            // Validate username format - only letters, numbers, underscore, and period
+            const usernameRegex = /^[a-zA-Z0-9_.]+$/;
+            if (!usernameRegex.test(username)) {
+                await client.close()
+                return res.status(400).json({ 
+                    message: 'Username can only contain letters, numbers, underscores (_), and periods (.)',
+                    error: 'INVALID_USERNAME_FORMAT'
+                })
+            }
+
+            // Check username length (3-30 characters)
+            if (username.length < 3 || username.length > 30) {
+                await client.close()
+                return res.status(400).json({ 
+                    message: 'Username must be between 3 and 30 characters',
+                    error: 'INVALID_USERNAME_LENGTH'
+                })
+            }
+
+            // Check if username is already taken
+            const existingUser = await db.collection('users').findOne({ username: username });
+            if (existingUser) {
+                // Generate username suggestions
+                const suggestions: string[] = []
+                const baseUsername = username.replace(/[0-9]+$/, '') // Remove trailing numbers
+                
+                // Try adding random numbers
+                for (let i = 0; i < 5; i++) {
+                    const randomNum = Math.floor(Math.random() * 9999) + 1
+                    const suggestion = `${baseUsername}${randomNum}`
+                    
+                    // Check if suggestion is available
+                    const exists = await db.collection('users').findOne({ username: suggestion })
+                    if (!exists && suggestion.length <= 30) {
+                        suggestions.push(suggestion)
+                    }
+                }
+                
+                // Try adding underscore and numbers
+                if (suggestions.length < 5) {
+                    for (let i = 0; i < 3; i++) {
+                        const randomNum = Math.floor(Math.random() * 999) + 1
+                        const suggestion = `${baseUsername}_${randomNum}`
+                        
+                        const exists = await db.collection('users').findOne({ username: suggestion })
+                        if (!exists && suggestion.length <= 30 && !suggestions.includes(suggestion)) {
+                            suggestions.push(suggestion)
+                        }
+                    }
+                }
+                
+                await client.close()
+                return res.status(400).json({ 
+                    message: 'Username is already taken',
+                    error: 'USERNAME_TAKEN',
+                    suggestions: suggestions.slice(0, 5) // Return up to 5 suggestions
+                })
+            }
+
+            // Check last username change date
+            const lastUsernameChange = user.last_username_change || user.createdAt || new Date(0);
+            const daysSinceLastChange = (Date.now() - new Date(lastUsernameChange).getTime()) / (1000 * 60 * 60 * 24);
+            
+            console.log('[Backend] Days since last username change:', daysSinceLastChange);
+
+            if (daysSinceLastChange < 15) {
+                const daysRemaining = Math.ceil(15 - daysSinceLastChange);
+                await client.close()
+                return res.status(400).json({ 
+                    message: `You can only change your username once every 15 days. Please wait ${daysRemaining} more day${daysRemaining > 1 ? 's' : ''}.`,
+                    error: 'USERNAME_CHANGE_TOO_SOON',
+                    daysRemaining
+                })
+            }
+
+            // Allow username change
+            updateData.username = username;
+            updateData.last_username_change = new Date();
+            console.log('[Backend] Username change allowed');
         }
 
         console.log('[Backend] Found user, updating with query:', idQuery);

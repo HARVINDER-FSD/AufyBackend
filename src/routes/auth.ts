@@ -131,17 +131,69 @@ router.post('/register', async (req: Request, res: Response) => {
     const db = await getDatabase()
     const usersCollection = db.collection('users')
 
+    // Validate username format
+    const usernameRegex = /^[a-zA-Z0-9_.]+$/
+    if (!usernameRegex.test(username)) {
+      return res.status(400).json({
+        message: 'Username can only contain letters, numbers, underscores (_), and periods (.)',
+        error: 'INVALID_USERNAME_FORMAT'
+      })
+    }
+
+    // Check username length
+    if (username.length < 3 || username.length > 30) {
+      return res.status(400).json({
+        message: 'Username must be between 3 and 30 characters',
+        error: 'INVALID_USERNAME_LENGTH'
+      })
+    }
+
     // Check if user already exists
     const existingUser = await usersCollection.findOne({
       $or: [{ email }, { username }]
     })
 
     if (existingUser) {
-      return res.status(400).json({
-        message: existingUser.email === email
-          ? "Email already registered"
-          : "Username already taken"
-      })
+      if (existingUser.email === email) {
+        return res.status(400).json({
+          message: "Email already registered"
+        })
+      } else {
+        // Username is taken - generate suggestions
+        const suggestions: string[] = []
+        const baseUsername = username.replace(/[0-9]+$/, '') // Remove trailing numbers
+        
+        // Try adding random numbers
+        for (let i = 0; i < 5; i++) {
+          const randomNum = Math.floor(Math.random() * 9999) + 1
+          const suggestion = `${baseUsername}${randomNum}`
+          
+          // Check if suggestion is available
+          const exists = await usersCollection.findOne({ username: suggestion })
+          if (!exists && suggestion.length <= 30) {
+            suggestions.push(suggestion)
+          }
+        }
+        
+        // Try adding underscore and numbers
+        if (suggestions.length < 5) {
+          for (let i = 0; i < 3; i++) {
+            const randomNum = Math.floor(Math.random() * 999) + 1
+            const suggestion = `${baseUsername}_${randomNum}`
+            
+            const exists = await usersCollection.findOne({ username: suggestion })
+            if (!exists && suggestion.length <= 30 && !suggestions.includes(suggestion)) {
+              suggestions.push(suggestion)
+            }
+          }
+        }
+        
+        return res.status(400).json({
+          message: "Username already taken",
+          error: 'USERNAME_TAKEN',
+          suggestions: suggestions.slice(0, 5)
+        })
+      }
     }
 
     // Hash password (8 rounds for faster mobile performance)
