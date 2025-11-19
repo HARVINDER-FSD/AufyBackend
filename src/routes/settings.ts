@@ -54,11 +54,19 @@ router.patch('/', authenticateToken, async (req: AuthRequest, res: Response) => 
       return res.status(404).json({ error: 'User not found' })
     }
 
+    // Initialize settings if not exists
+    if (!user.settings) {
+      user.settings = {}
+    }
+
     // Merge new settings with existing ones
     user.settings = {
       ...user.settings,
       ...req.body,
     }
+
+    // Mark settings as modified for Mixed type
+    user.markModified('settings')
 
     await user.save()
 
@@ -89,6 +97,10 @@ router.put('/:key', authenticateToken, async (req: AuthRequest, res: Response) =
     }
 
     user.settings[key] = value
+    
+    // Mark settings as modified for Mixed type
+    user.markModified('settings')
+    
     await user.save()
 
     res.json({ 
