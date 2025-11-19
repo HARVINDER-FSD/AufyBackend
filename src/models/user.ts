@@ -60,6 +60,32 @@ const userSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  settings: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {
+      darkMode: true,
+      privateAccount: false,
+      showOnlineStatus: true,
+      allowTagging: true,
+      allowMentions: true,
+      showReadReceipts: true,
+      whoCanMessage: 'everyone',
+      whoCanSeeStories: 'everyone',
+      whoCanSeeFollowers: 'everyone',
+      pushNotifications: true,
+      emailNotifications: false,
+      likes: true,
+      comments: true,
+      follows: true,
+      mentions: true,
+      directMessages: true,
+      liveVideos: false,
+      stories: true,
+      posts: true,
+      marketing: false,
+      security: true,
+    }
+  },
   created_at: {
     type: Date,
     default: Date.now
