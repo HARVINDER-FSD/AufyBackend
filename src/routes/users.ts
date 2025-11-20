@@ -107,12 +107,23 @@ router.get('/username/:username', async (req: any, res: Response) => {
 
         // Check follow status if user is logged in
         let isFollowing = false;
+        let followsBack = false;
+        let isMutualFollow = false;
+        
         if (currentUserId) {
             const followRecord = await db.collection('follows').findOne({
                 followerId: new ObjectId(currentUserId),
                 followingId: user._id
             })
             isFollowing = !!followRecord;
+
+            // Check if target user follows back
+            const reverseFollow = await db.collection('follows').findOne({
+                followerId: user._id,
+                followingId: new ObjectId(currentUserId)
+            })
+            followsBack = !!reverseFollow;
+            isMutualFollow = isFollowing && followsBack;
         }
 
         // Get follower/following counts
@@ -138,6 +149,8 @@ router.get('/username/:username', async (req: any, res: Response) => {
             followersCount,
             followingCount,
             isFollowing,
+            followsBack,
+            isMutualFollow,
             verified: user.is_verified || user.verified || false,
             posts_count: user.posts_count || 0,
             isPrivate: user.is_private || false
@@ -145,6 +158,53 @@ router.get('/username/:username', async (req: any, res: Response) => {
     } catch (error: any) {
         console.error('Get user by username error:', error)
         return res.status(500).json({ message: error.message || 'Failed to get user' })
+    }
+})
+
+// GET /api/users/:userId/mutual-followers - Get mutual followers (users who follow each other)
+router.get('/:userId/mutual-followers', authenticate, async (req: any, res: Response) => {
+    try {
+        const { userId } = req.params
+        const db = await getDb()
+
+        // Get users that this user follows
+        const following = await db.collection('follows').find({
+            followerId: new ObjectId(userId)
+        }).toArray()
+        const followingIds = following.map(f => f.followingId.toString())
+
+        // Get users that follow this user
+        const followers = await db.collection('follows').find({
+            followingId: new ObjectId(userId)
+        }).toArray()
+        const followerIds = followers.map(f => f.followerId.toString())
+
+        // Find mutual followers (intersection)
+        const mutualIds = followingIds.filter(id => followerIds.includes(id))
+
+        // Get user details for mutual followers
+        const mutualUsers = await db.collection('users').find({
+            _id: { $in: mutualIds.map(id => new ObjectId(id)) }
+        }).project({
+            password: 0
+        }).toArray()
+
+        // Format response
+        const formattedUsers = mutualUsers.map(user => ({
+            _id: user._id.toString(),
+            username: user.username,
+            fullName: user.full_name || user.fullName,
+            profileImage: user.avatar_url || user.profile_picture,
+            isVerified: user.is_verified || false
+        }))
+
+        return res.json({
+            success: true,
+            data: formattedUsers
+        })
+    } catch (error: any) {
+        console.error('Error getting mutual followers:', error)
+        return res.status(500).json({ message: error.message || 'Failed to get mutual followers' })
     }
 })
 
@@ -475,12 +535,19 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
                 followingId: new ObjectId(userId)
             })
 
+            // Check if mutual follow still exists
+            const reverseFollow = await db.collection('follows').findOne({
+                followerId: new ObjectId(userId),
+                followingId: new ObjectId(currentUserId)
+            })
+
             await client.close()
 
             return res.json({
                 message: 'Unfollowed successfully',
                 isFollowing: false,
-                followerCount
+                followerCount,
+                isMutualFollow: false
             })
         } else {
             // Follow
@@ -496,17 +563,62 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
                 followingId: new ObjectId(userId)
             })
 
+            // Check if this creates a mutual follow
+            const reverseFollow = await db.collection('follows').findOne({
+                followerId: new ObjectId(userId),
+                followingId: new ObjectId(currentUserId)
+            })
+
             await client.close()
+
+            // Create notification
+            const { notifyFollow } = require('../lib/notifications');
+            await notifyFollow(userId, currentUserId);
 
             return res.json({
                 message: 'Followed successfully',
                 isFollowing: true,
-                followerCount
+                followerCount,
+                isMutualFollow: !!reverseFollow
             })
         }
     } catch (error: any) {
         console.error('Follow error:', error)
         return res.status(500).json({ message: error.message || 'Failed to follow user' })
+    }
+})
+
+// GET /api/users/:userId/follow-status - Check follow status and mutual follow
+router.get('/:userId/follow-status', authenticate, async (req: any, res: Response) => {
+    try {
+        const currentUserId = req.userId
+        const { userId } = req.params
+
+        const client = await MongoClient.connect(MONGODB_URI)
+        const db = client.db()
+
+        // Check if current user follows target user
+        const isFollowing = await db.collection('follows').findOne({
+            followerId: new ObjectId(currentUserId),
+            followingId: new ObjectId(userId)
+        })
+
+        // Check if target user follows current user
+        const followsBack = await db.collection('follows').findOne({
+            followerId: new ObjectId(userId),
+            followingId: new ObjectId(currentUserId)
+        })
+
+        await client.close()
+
+        return res.json({
+            isFollowing: !!isFollowing,
+            followsBack: !!followsBack,
+            isMutualFollow: !!isFollowing && !!followsBack
+        })
+    } catch (error: any) {
+        console.error('Follow status error:', error)
+        return res.status(500).json({ message: error.message || 'Failed to check follow status' })
     }
 })
 
@@ -828,6 +940,331 @@ router.get('/:userId/posts', async (req: any, res: Response) => {
     } catch (error: any) {
         console.error('Get user posts error:', error)
         return res.status(500).json({ message: error.message || 'Failed to get user posts' })
+    }
+})
+
+// POST /api/users/conversations - Create conversation with Instagram-style rules
+router.post('/conversations', authenticate, async (req: any, res: Response) => {
+    try {
+        const currentUserId = req.userId
+        const { recipientId } = req.body
+
+        if (!recipientId) {
+            return res.status(400).json({ message: 'Recipient ID is required' })
+        }
+
+        if (currentUserId === recipientId) {
+            return res.status(400).json({ message: 'Cannot create conversation with yourself' })
+        }
+
+        const db = await getDb()
+
+        // Get both users
+        const [currentUser, recipient] = await Promise.all([
+            db.collection('users').findOne({ _id: new ObjectId(currentUserId) }),
+            db.collection('users').findOne({ _id: new ObjectId(recipientId) })
+        ])
+
+        if (!recipient) {
+            return res.status(404).json({ message: 'User not found' })
+        }
+
+        // Check follow status
+        const [userFollowsRecipient, recipientFollowsUser] = await Promise.all([
+            db.collection('follows').findOne({
+                followerId: new ObjectId(currentUserId),
+                followingId: new ObjectId(recipientId)
+            }),
+            db.collection('follows').findOne({
+                followerId: new ObjectId(recipientId),
+                followingId: new ObjectId(currentUserId)
+            })
+        ])
+
+        const currentUserIsPrivate = currentUser?.is_private || false
+        const recipientIsPrivate = recipient.is_private || false
+        const isMutualFollow = !!userFollowsRecipient && !!recipientFollowsUser
+
+        // Instagram-style messaging rules:
+        // 1. Both accounts public → can message
+        // 2. Mutual followers → can message
+        // 3. One follows but not mutual → goes to message requests
+        // 4. Private account not following → cannot message (need follow request first)
+
+        let canMessage = false
+        let isMessageRequest = false
+        let reason = ''
+
+        if (isMutualFollow) {
+            // Rule 1: Mutual followers can always message
+            canMessage = true
+        } else if (!recipientIsPrivate && !currentUserIsPrivate) {
+            // Rule 2: Both public accounts can message
+            canMessage = true
+        } else if (userFollowsRecipient && !recipientFollowsUser) {
+            // Rule 3: User follows recipient but not mutual → message request
+            canMessage = true
+            isMessageRequest = true
+            reason = 'Message will go to recipient\'s message requests'
+        } else if (!userFollowsRecipient && recipientIsPrivate) {
+            // Rule 4: Recipient is private and user doesn't follow → need follow request first
+            canMessage = false
+            reason = 'You need to follow this user first to send messages'
+        } else {
+            // Default: allow but as message request
+            canMessage = true
+            isMessageRequest = true
+            reason = 'Message will go to recipient\'s message requests'
+        }
+
+        if (!canMessage) {
+            return res.status(403).json({ 
+                message: reason,
+                canMessage: false,
+                isMessageRequest: false
+            })
+        }
+
+        // Return success - conversation will be created in Firebase
+        return res.json({
+            message: isMessageRequest ? reason : 'Can send message',
+            canMessage: true,
+            isMessageRequest,
+            isMutualFollow,
+            conversationId: `${[currentUserId, recipientId].sort().join('_')}`,
+            recipientId
+        })
+    } catch (error: any) {
+        console.error('Conversation creation error:', error)
+        return res.status(500).json({ message: error.message || 'Failed to create conversation' })
+    }
+})
+
+// GET /api/users/message-requests - Get message requests
+router.get('/message-requests', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.userId
+        const db = await getDb()
+
+        // Get message requests where user is recipient and not mutual followers
+        const requests = await db.collection('message_requests').find({
+            recipientId: new ObjectId(userId),
+            status: 'pending'
+        }).sort({ createdAt: -1 }).toArray()
+
+        // Get sender details
+        const senderIds = requests.map(r => r.senderId)
+        const senders = await db.collection('users').find({
+            _id: { $in: senderIds }
+        }).project({ password: 0 }).toArray()
+
+        const sendersMap = new Map(senders.map(s => [s._id.toString(), s]))
+
+        const formattedRequests = requests.map(req => ({
+            id: req._id.toString(),
+            senderId: req.senderId.toString(),
+            sender: {
+                _id: sendersMap.get(req.senderId.toString())?._id.toString(),
+                username: sendersMap.get(req.senderId.toString())?.username,
+                fullName: sendersMap.get(req.senderId.toString())?.full_name,
+                profileImage: sendersMap.get(req.senderId.toString())?.avatar_url
+            },
+            conversationId: req.conversationId,
+            lastMessage: req.lastMessage,
+            createdAt: req.createdAt
+        }))
+
+        return res.json({
+            success: true,
+            data: formattedRequests
+        })
+    } catch (error: any) {
+        console.error('Get message requests error:', error)
+        return res.status(500).json({ message: error.message || 'Failed to get message requests' })
+    }
+})
+
+// POST /api/users/message-requests/:requestId/accept - Accept message request (auto follow back)
+router.post('/message-requests/:requestId/accept', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.userId
+        const { requestId } = req.params
+        const db = await getDb()
+
+        const request = await db.collection('message_requests').findOne({
+            _id: new ObjectId(requestId),
+            recipientId: new ObjectId(userId)
+        })
+
+        if (!request) {
+            return res.status(404).json({ message: 'Message request not found' })
+        }
+
+        // Accept request
+        await db.collection('message_requests').updateOne(
+            { _id: new ObjectId(requestId) },
+            { $set: { status: 'accepted', acceptedAt: new Date() } }
+        )
+
+        // Auto follow back
+        const existingFollow = await db.collection('follows').findOne({
+            followerId: new ObjectId(userId),
+            followingId: request.senderId
+        })
+
+        if (!existingFollow) {
+            await db.collection('follows').insertOne({
+                followerId: new ObjectId(userId),
+                followingId: request.senderId,
+                createdAt: new Date()
+            })
+        }
+
+        return res.json({
+            success: true,
+            message: 'Message request accepted and followed back'
+        })
+    } catch (error: any) {
+        console.error('Accept message request error:', error)
+        return res.status(500).json({ message: error.message || 'Failed to accept message request' })
+    }
+})
+
+// DELETE /api/users/message-requests/:requestId - Delete message request
+router.delete('/message-requests/:requestId', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.userId
+        const { requestId } = req.params
+        const db = await getDb()
+
+        const result = await db.collection('message_requests').deleteOne({
+            _id: new ObjectId(requestId),
+            recipientId: new ObjectId(userId)
+        })
+
+        if (result.deletedCount === 0) {
+            return res.status(404).json({ message: 'Message request not found' })
+        }
+
+        return res.json({
+            success: true,
+            message: 'Message request deleted'
+        })
+    } catch (error: any) {
+        console.error('Delete message request error:', error)
+        return res.status(500).json({ message: error.message || 'Failed to delete message request' })
+    }
+})
+
+// POST /api/users/message-requests/:requestId/block - Block user from message request
+router.post('/message-requests/:requestId/block', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.userId
+        const { requestId } = req.params
+        const db = await getDb()
+
+        const request = await db.collection('message_requests').findOne({
+            _id: new ObjectId(requestId),
+            recipientId: new ObjectId(userId)
+        })
+
+        if (!request) {
+            return res.status(404).json({ message: 'Message request not found' })
+        }
+
+        // Block user
+        await db.collection('blocked_users').insertOne({
+            userId: new ObjectId(userId),
+            blockedUserId: request.senderId,
+            createdAt: new Date()
+        })
+
+        // Delete message request
+        await db.collection('message_requests').deleteOne({
+            _id: new ObjectId(requestId)
+        })
+
+        // Remove any follows
+        await db.collection('follows').deleteMany({
+            $or: [
+                { followerId: new ObjectId(userId), followingId: request.senderId },
+                { followerId: request.senderId, followingId: new ObjectId(userId) }
+            ]
+        })
+
+        return res.json({
+            success: true,
+            message: 'User blocked'
+        })
+    } catch (error: any) {
+        console.error('Block user error:', error)
+        return res.status(500).json({ message: error.message || 'Failed to block user' })
+    }
+})
+
+// POST /api/users/message-requests/:requestId/report - Report user from message request
+router.post('/message-requests/:requestId/report', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.userId
+        const { requestId } = req.params
+        const { reason } = req.body
+        const db = await getDb()
+
+        const request = await db.collection('message_requests').findOne({
+            _id: new ObjectId(requestId),
+            recipientId: new ObjectId(userId)
+        })
+
+        if (!request) {
+            return res.status(404).json({ message: 'Message request not found' })
+        }
+
+        // Create report
+        await db.collection('reports').insertOne({
+            reporterId: new ObjectId(userId),
+            reportedUserId: request.senderId,
+            type: 'message_request',
+            reason: reason || 'Inappropriate message',
+            messageRequestId: new ObjectId(requestId),
+            createdAt: new Date(),
+            status: 'pending'
+        })
+
+        // Delete message request
+        await db.collection('message_requests').deleteOne({
+            _id: new ObjectId(requestId)
+        })
+
+        return res.json({
+            success: true,
+            message: 'User reported'
+        })
+    } catch (error: any) {
+        console.error('Report user error:', error)
+        return res.status(500).json({ message: error.message || 'Failed to report user' })
+    }
+})
+
+// PUT /api/users/privacy - Update account privacy
+router.put('/privacy', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.userId
+        const { isPrivate } = req.body
+        const db = await getDb()
+
+        await db.collection('users').updateOne(
+            { _id: new ObjectId(userId) },
+            { $set: { is_private: !!isPrivate, updatedAt: new Date() } }
+        )
+
+        return res.json({
+            success: true,
+            message: 'Privacy settings updated',
+            isPrivate: !!isPrivate
+        })
+    } catch (error: any) {
+        console.error('Update privacy error:', error)
+        return res.status(500).json({ message: error.message || 'Failed to update privacy' })
     }
 })
 
