@@ -91,21 +91,27 @@ router.get('/list', authenticate, async (req: any, res: Response) => {
             .limit(limit)
             .toArray()
 
-        if (follows.length === 0) {
-            return res.json({
-                success: true,
-                data: { users: [] }
-            })
-        }
+        let users = []
 
-        // Get user details for all following users
-        const followingUserIds = follows.map(f => f.following_id)
-        const users = await db.collection('users')
-            .find(
-                { _id: { $in: followingUserIds } },
-                { projection: { password: 0, email: 0 } }
-            )
-            .toArray()
+        if (follows.length === 0) {
+            // If not following anyone, show all users except self
+            users = await db.collection('users')
+                .find(
+                    { _id: { $ne: currentUserId } },
+                    { projection: { password: 0, email: 0 } }
+                )
+                .limit(limit)
+                .toArray()
+        } else {
+            // Get user details for all following users
+            const followingUserIds = follows.map(f => f.following_id)
+            users = await db.collection('users')
+                .find(
+                    { _id: { $in: followingUserIds } },
+                    { projection: { password: 0, email: 0 } }
+                )
+                .toArray()
+        }
 
         const formattedUsers = users.map(user => ({
             id: user._id.toString(),
