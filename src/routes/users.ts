@@ -165,6 +165,16 @@ router.get('/username/:username', async (req: any, res: Response) => {
 router.get('/:userId/mutual-followers', authenticate, async (req: any, res: Response) => {
     try {
         const { userId } = req.params
+        
+        // Validate ObjectId format
+        if (!ObjectId.isValid(userId)) {
+            return res.status(400).json({ 
+                success: false,
+                message: 'Invalid user ID format',
+                data: []
+            })
+        }
+        
         const db = await getDb()
 
         // Get users that this user follows
@@ -204,7 +214,11 @@ router.get('/:userId/mutual-followers', authenticate, async (req: any, res: Resp
         })
     } catch (error: any) {
         console.error('Error getting mutual followers:', error)
-        return res.status(500).json({ message: error.message || 'Failed to get mutual followers' })
+        return res.status(500).json({ 
+            success: false,
+            message: error.message || 'Failed to get mutual followers',
+            data: []
+        })
     }
 })
 
