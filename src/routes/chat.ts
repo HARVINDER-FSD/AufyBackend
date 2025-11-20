@@ -2,6 +2,7 @@ import express from 'express';
 import auth from '../middleware/auth';
 import Message from '../models/message';
 import Conversation from '../models/conversation';
+import mongoose from 'mongoose';
 
 const router = express.Router();
 
@@ -91,52 +92,50 @@ router.post('/conversations/:conversationId/messages', auth, async (req, res) =>
 
     // Check if this should create a message request
     if (recipientId) {
-      const { MongoClient, ObjectId } = require('mongodb');
-      const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/socialmedia';
-      const client = await MongoClient.connect(MONGODB_URI);
-      const db = client.db();
+      const db = mongoose.connection.db;
+      if (!db) {
+        console.error('Database connection not available');
+      } else {
+        // Check mutual follow
+        const [userFollowsRecipient, recipientFollowsUser] = await Promise.all([
+          db.collection('follows').findOne({
+            followerId: new mongoose.Types.ObjectId(req.user!._id),
+            followingId: new mongoose.Types.ObjectId(recipientId)
+          }),
+          db.collection('follows').findOne({
+            followerId: new mongoose.Types.ObjectId(recipientId),
+            followingId: new mongoose.Types.ObjectId(req.user!._id)
+          })
+        ]);
 
-      // Check mutual follow
-      const [userFollowsRecipient, recipientFollowsUser] = await Promise.all([
-        db.collection('follows').findOne({
-          followerId: new ObjectId(req.user!._id),
-          followingId: new ObjectId(recipientId)
-        }),
-        db.collection('follows').findOne({
-          followerId: new ObjectId(recipientId),
-          followingId: new ObjectId(req.user!._id)
-        })
-      ]);
+        const isMutualFollow = !!userFollowsRecipient && !!recipientFollowsUser;
 
-      const isMutualFollow = !!userFollowsRecipient && !!recipientFollowsUser;
-
-      // If not mutual follow, create/update message request
-      if (!isMutualFollow) {
-        await db.collection('message_requests').updateOne(
-          {
-            senderId: new ObjectId(req.user!._id),
-            recipientId: new ObjectId(recipientId)
-          },
-          {
-            $set: {
-              conversationId,
-              lastMessage: {
-                content,
-                image,
-                timestamp: new Date()
-              },
-              updatedAt: new Date()
+        // If not mutual follow, create/update message request
+        if (!isMutualFollow) {
+          await db.collection('message_requests').updateOne(
+            {
+              senderId: new mongoose.Types.ObjectId(req.user!._id),
+              recipientId: new mongoose.Types.ObjectId(recipientId)
             },
-            $setOnInsert: {
-              status: 'pending',
-              createdAt: new Date()
-            }
-          },
-          { upsert: true }
-        );
+            {
+              $set: {
+                conversationId,
+                lastMessage: {
+                  content,
+                  image,
+                  timestamp: new Date()
+                },
+                updatedAt: new Date()
+              },
+              $setOnInsert: {
+                status: 'pending',
+                createdAt: new Date()
+              }
+            },
+            { upsert: true }
+          );
+        }
       }
-
-      await client.close();
     }
 
     const populatedMessage = await message.populate('sender', 'username fullName profileImage');
