@@ -222,15 +222,11 @@ router.get('/:userId/mutual-followers', authenticate, async (req: any, res: Resp
     }
 })
 
-// GET /api/users/:userId - Get user by ID
-router.get('/:userId', async (req: Request, res: Response) => {
+// GET /api/users/:userId - Get user by ID (MUST be last /:userId route)
+// This route should only match /api/users/SOMEID, not /api/users/SOMEID/something
+router.get('/:userId([0-9a-fA-F]{24})', async (req: Request, res: Response) => {
     try {
         const { userId } = req.params
-        
-        // Skip if not a valid ObjectId (let other routes handle it)
-        if (!ObjectId.isValid(userId)) {
-            return res.status(400).json({ message: 'Invalid user ID format' })
-        }
 
         const client = await MongoClient.connect(MONGODB_URI)
         const db = client.db()
