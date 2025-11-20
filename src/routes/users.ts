@@ -78,6 +78,53 @@ router.get('/me', authenticate, async (req: any, res: Response) => {
     }
 })
 
+// GET /api/users/list - List following users (for sharing, etc.)
+router.get('/list', authenticate, async (req: any, res: Response) => {
+    try {
+        const db = await getDb()
+        const limit = parseInt(req.query.limit as string) || 50
+        const currentUserId = new ObjectId(req.userId)
+        
+        // Get users that current user is following
+        const follows = await db.collection('follows')
+            .find({ follower_id: currentUserId })
+            .limit(limit)
+            .toArray()
+
+        if (follows.length === 0) {
+            return res.json({
+                success: true,
+                data: { users: [] }
+            })
+        }
+
+        // Get user details for all following users
+        const followingUserIds = follows.map(f => f.following_id)
+        const users = await db.collection('users')
+            .find(
+                { _id: { $in: followingUserIds } },
+                { projection: { password: 0, email: 0 } }
+            )
+            .toArray()
+
+        const formattedUsers = users.map(user => ({
+            id: user._id.toString(),
+            username: user.username,
+            full_name: user.full_name || user.name || user.username,
+            avatar_url: user.avatar_url || user.avatar || `https://ui-avatars.com/api/?name=${user.username}&background=667eea&color=fff`,
+            verified: user.is_verified || user.verified || false
+        }))
+
+        return res.json({
+            success: true,
+            data: { users: formattedUsers }
+        })
+    } catch (error: any) {
+        console.error('List users error:', error)
+        return res.status(500).json({ message: error.message || 'Failed to list users' })
+    }
+})
+
 // GET /api/users/username/:username - Get user by username (MUST be before /:userId)
 router.get('/username/:username', async (req: any, res: Response) => {
     try {
