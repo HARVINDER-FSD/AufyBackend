@@ -109,15 +109,17 @@ router.delete("/:reelId", authenticateToken, async (req, res) => {
   }
 })
 
-// Like reel
+// Toggle like reel (like/unlike)
 router.post("/:reelId/like", authenticateToken, async (req, res) => {
   try {
     const { reelId } = req.params
-    await ReelService.likeReel(req.userId!, reelId)
+    // Check if already liked, then toggle
+    const result = await ReelService.toggleLikeReel(req.userId!, reelId)
 
     res.json({
       success: true,
-      message: "Reel liked successfully",
+      message: result.liked ? "Reel liked successfully" : "Reel unliked successfully",
+      data: { liked: result.liked }
     })
   } catch (error: any) {
     res.status(error.statusCode || 500).json({
@@ -127,7 +129,7 @@ router.post("/:reelId/like", authenticateToken, async (req, res) => {
   }
 })
 
-// Unlike reel
+// Unlike reel (legacy endpoint)
 router.delete("/:reelId/like", authenticateToken, async (req, res) => {
   try {
     const { reelId } = req.params
@@ -136,6 +138,24 @@ router.delete("/:reelId/like", authenticateToken, async (req, res) => {
     res.json({
       success: true,
       message: "Reel unliked successfully",
+    })
+  } catch (error: any) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      error: error.message,
+    })
+  }
+})
+
+// Share reel (track share count)
+router.post("/:reelId/share", authenticateToken, async (req, res) => {
+  try {
+    const { reelId } = req.params
+    await ReelService.incrementShareCount(reelId)
+
+    res.json({
+      success: true,
+      message: "Share tracked successfully",
     })
   } catch (error: any) {
     res.status(error.statusCode || 500).json({

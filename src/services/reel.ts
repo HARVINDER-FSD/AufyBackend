@@ -499,6 +499,69 @@ export class ReelService {
     await cache.del(`reel:${reelId}`)
   }
 
+  // Toggle like reel (like if not liked, unlike if already liked)
+  static async toggleLikeReel(userId: string, reelId: string): Promise<{ liked: boolean }> {
+    const db = await getDatabase()
+    const reelsCollection = db.collection('reels')
+    const likesCollection = db.collection('likes')
+
+    const reel = await reelsCollection.findOne({
+      _id: new ObjectId(reelId)
+    })
+
+    if (!reel) {
+      throw errors.notFound("Reel not found")
+    }
+
+    const existingLike = await likesCollection.findOne({
+      user_id: new ObjectId(userId),
+      post_id: new ObjectId(reelId)
+    })
+
+    if (existingLike) {
+      // Unlike
+      await likesCollection.deleteOne({
+        user_id: new ObjectId(userId),
+        post_id: new ObjectId(reelId)
+      })
+      await cache.del(`reel:${reelId}`)
+      return { liked: false }
+    } else {
+      // Like
+      await likesCollection.insertOne({
+        user_id: new ObjectId(userId),
+        post_id: new ObjectId(reelId),
+        created_at: new Date()
+      })
+      await cache.del(`reel:${reelId}`)
+      return { liked: true }
+    }
+  }
+
+  // Increment share count
+  static async incrementShareCount(reelId: string): Promise<void> {
+    const db = await getDatabase()
+    const reelsCollection = db.collection('reels')
+
+    const reel = await reelsCollection.findOne({
+      _id: new ObjectId(reelId)
+    })
+
+    if (!reel) {
+      throw errors.notFound("Reel not found")
+    }
+
+    await reelsCollection.updateOne(
+      { _id: new ObjectId(reelId) },
+      {
+        $inc: { shares_count: 1 },
+        $set: { updated_at: new Date() }
+      }
+    )
+
+    await cache.del(`reel:${reelId}`)
+  }
+
   // Get reel likes
   static async getReelLikes(reelId: string, page = 1, limit = 20): Promise<PaginatedResponse<any>> {
     const { page: validPage, limit: validLimit } = pagination.validateParams(page.toString(), limit.toString())
