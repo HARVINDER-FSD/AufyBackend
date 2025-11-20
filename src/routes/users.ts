@@ -238,15 +238,19 @@ router.get('/:userId([0-9a-fA-F]{24})', async (req: Request, res: Response) => {
             return res.status(404).json({ message: 'User not found' })
         }
 
+        // Use avatar_url or avatar, with fallback
+        const avatarUrl = user.avatar_url || user.avatar || '/placeholder-user.jpg';
+        
         return res.json({
             id: user._id.toString(),
             username: user.username,
-            name: user.name || '',
+            name: user.name || user.full_name || '',
             bio: user.bio || '',
-            avatar: user.avatar || '/placeholder-user.jpg',
-            followers: user.followers || 0,
-            following: user.following || 0,
-            verified: user.verified || false
+            avatar: avatarUrl,
+            avatar_url: avatarUrl,
+            followers: user.followers || user.followers_count || 0,
+            following: user.following || user.following_count || 0,
+            verified: user.verified || user.is_verified || false
         })
     } catch (error: any) {
         console.error('Get user error:', error)
