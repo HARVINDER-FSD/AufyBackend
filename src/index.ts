@@ -27,6 +27,7 @@ import searchRoutes from './routes/search'
 import analyticsRoutes from './routes/analytics'
 import bookmarksRoutes from './routes/bookmarks'
 import settingsRoutes from './routes/settings'
+import pushRoutes from './routes/push'
 
 const app = express()
 const PORT = parseInt(process.env.PORT || '8000')
@@ -89,6 +90,7 @@ app.use('/api/search', searchRoutes)
 app.use('/api/analytics', analyticsRoutes)
 app.use('/api/bookmarks', bookmarksRoutes)
 app.use('/api/settings', settingsRoutes)
+app.use('/api/push', pushRoutes)
 
 // Error handling
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
