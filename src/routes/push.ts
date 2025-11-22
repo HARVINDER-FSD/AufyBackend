@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { connectToDatabase } from '../lib/database';
-import User from '../models/User';
+import User from '../models/user';
 import { authenticateToken } from '../middleware/auth';
 import { Expo, ExpoPushMessage } from 'expo-server-sdk';
 
