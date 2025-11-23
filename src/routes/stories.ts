@@ -192,14 +192,24 @@ router.post("/:storyId/view", authenticateToken, async (req: AuthRequest, res: R
       })
     }
 
-    // Increment view count
-    await Story.findByIdAndUpdate(storyId, {
-      $inc: { views_count: 1 }
-    })
+    // Import StoryView model
+    const StoryView = (await import('../models/story-view')).default
+
+    // Create or update view record (upsert)
+    await StoryView.findOneAndUpdate(
+      { story_id: new mongoose.Types.ObjectId(storyId), viewer_id: new mongoose.Types.ObjectId(userId) },
+      { viewed_at: new Date() },
+      { upsert: true, new: true }
+    )
+
+    // Update view count
+    const viewCount = await StoryView.countDocuments({ story_id: new mongoose.Types.ObjectId(storyId) })
+    await Story.findByIdAndUpdate(storyId, { views_count: viewCount })
 
     res.json({
       success: true,
-      message: "Story viewed"
+      message: "Story viewed",
+      views_count: viewCount
     })
   } catch (error: any) {
     console.error('Error viewing story:', error)
@@ -210,7 +220,67 @@ router.post("/:storyId/view", authenticateToken, async (req: AuthRequest, res: R
   }
 })
 
-// Get story views
+// Get story viewers (detailed list)
+router.get("/:storyId/viewers", authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    await connectToDatabase()
+
+    const { storyId } = req.params
+    const userId = req.userId!
+
+    const story = await Story.findById(storyId)
+
+    if (!story) {
+      return res.status(404).json({
+        success: false,
+        error: 'Story not found'
+      })
+    }
+
+    if (story.user_id.toString() !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'You can only view your own story viewers'
+      })
+    }
+
+    // Import StoryView model
+    const StoryView = (await import('../models/story-view')).default
+
+    // Get all viewers with user details
+    const viewers = await StoryView.find({ story_id: new mongoose.Types.ObjectId(storyId) })
+      .populate('viewer_id', 'username full_name avatar_url is_verified')
+      .sort({ viewed_at: -1 })
+      .lean()
+
+    const formattedViewers = viewers
+      .filter((view: any) => view.viewer_id) // Filter out deleted users
+      .map((view: any) => ({
+        id: view.viewer_id._id.toString(),
+        username: view.viewer_id.username,
+        full_name: view.viewer_id.full_name,
+        avatar_url: view.viewer_id.avatar_url,
+        is_verified: view.viewer_id.is_verified || false,
+        viewed_at: view.viewed_at
+      }))
+
+    res.json({
+      success: true,
+      data: {
+        viewers: formattedViewers,
+        total_views: formattedViewers.length
+      }
+    })
+  } catch (error: any) {
+    console.error('Error fetching story viewers:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch story viewers'
+    })
+  }
+})
+
+// Get story views count (backward compatibility)
 router.get("/:storyId/views", authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     await connectToDatabase()

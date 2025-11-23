@@ -59,17 +59,31 @@ router.get('/me', authenticate, async (req: any, res: Response) => {
             return res.status(404).json({ message: 'User not found' })
         }
 
+        // Get actual follower/following counts from follows collection
+        const followersCount = await db.collection('follows').countDocuments({
+            followingId: user._id
+        })
+        const followingCount = await db.collection('follows').countDocuments({
+            followerId: user._id
+        })
+
         return res.json({
             id: user._id.toString(),
             username: user.username,
             email: user.email,
             name: user.full_name || user.name || '',
+            full_name: user.full_name || user.name || '',
             bio: user.bio || '',
             avatar: user.avatar_url || user.avatar || '/placeholder-user.jpg',
             avatar_url: user.avatar_url || user.avatar || '/placeholder-user.jpg',
-            followers: user.followers_count || user.followers || 0,
-            following: user.following_count || user.following || 0,
+            followers: followersCount,
+            following: followingCount,
+            followers_count: followersCount,
+            following_count: followingCount,
+            followersCount,
+            followingCount,
             verified: user.is_verified || user.verified || false,
+            is_verified: user.is_verified || user.verified || false,
             posts_count: user.posts_count || 0
         })
     } catch (error: any) {
@@ -194,6 +208,7 @@ router.get('/username/:username', async (req: any, res: Response) => {
             id: user._id.toString(),
             username: user.username,
             fullName: user.full_name || user.name || '',
+            full_name: user.full_name || user.name || '',
             name: user.full_name || user.name || '',
             bio: user.bio || '',
             avatar: user.avatar_url || user.avatar || '/placeholder-user.jpg',
@@ -201,10 +216,14 @@ router.get('/username/:username', async (req: any, res: Response) => {
             following: [],
             followersCount,
             followingCount,
+            followers_count: followersCount,
+            following_count: followingCount,
             isFollowing,
+            is_following: isFollowing,
             followsBack,
             isMutualFollow,
             verified: user.is_verified || user.verified || false,
+            is_verified: user.is_verified || user.verified || false,
             posts_count: user.posts_count || 0,
             isPrivate: user.is_private || false
         })

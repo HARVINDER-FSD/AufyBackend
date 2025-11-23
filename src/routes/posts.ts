@@ -2,6 +2,8 @@ import { Router } from "express"
 import { PostService } from "../services/post"
 import { CommentService } from "../services/comment"
 import { authenticateToken, optionalAuth } from "../middleware/auth"
+import { getDatabase } from "../lib/database"
+import { ObjectId } from "mongodb"
 
 const router = Router()
 
@@ -108,17 +110,71 @@ router.delete("/:postId", authenticateToken, async (req, res) => {
   }
 })
 
-// Like post
+// Like post (toggle behavior)
 router.post("/:postId/like", authenticateToken, async (req, res) => {
   try {
     const { postId } = req.params
-    await PostService.likePost(req.userId!, postId)
+    const userId = req.userId!
+    
+    const db = await getDatabase()
+    const likesCollection = db.collection('likes')
+    
+    // Check if already liked - if so, unlike it (toggle behavior)
+    const existingLike = await likesCollection.findOne({
+      user_id: new ObjectId(userId),
+      post_id: new ObjectId(postId)
+    })
+    
+    let isLiked: boolean
+    
+    if (existingLike) {
+      // Unlike - delete the like
+      await likesCollection.deleteOne({
+        user_id: new ObjectId(userId),
+        post_id: new ObjectId(postId)
+      })
+      isLiked = false
+    } else {
+      // Like - insert new like
+      await likesCollection.insertOne({
+        user_id: new ObjectId(userId),
+        post_id: new ObjectId(postId),
+        created_at: new Date()
+      })
+      isLiked = true
+    }
+    
+    // Get updated like count
+    const likeCount = await likesCollection.countDocuments({ post_id: new ObjectId(postId) })
+    
+    // Get users who liked (for "liked by" display)
+    const recentLikes = await likesCollection.aggregate([
+      { $match: { post_id: new ObjectId(postId) } },
+      { $sort: { created_at: -1 } },
+      { $limit: 3 },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'user_id',
+          foreignField: '_id',
+          as: 'user'
+        }
+      },
+      { $unwind: '$user' },
+      { $project: { 'user.username': 1 } }
+    ]).toArray()
+    
+    const likedBy = recentLikes.map((like: any) => like.user.username)
 
     res.json({
       success: true,
-      message: "Post liked successfully",
+      liked: isLiked,
+      likeCount,
+      likedBy,
+      message: isLiked ? "Post liked successfully" : "Post unliked successfully",
     })
   } catch (error: any) {
+    console.error('Like error:', error)
     res.status(error.statusCode || 500).json({
       success: false,
       error: error.message,
