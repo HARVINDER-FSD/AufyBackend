@@ -84,6 +84,8 @@ router.get('/me', authenticate, async (req: any, res: Response) => {
             followingCount,
             verified: user.is_verified || user.verified || false,
             is_verified: user.is_verified || user.verified || false,
+            badge_type: user.badge_type || user.verification_type || null,
+            badgeType: user.badge_type || user.verification_type || null,
             posts_count: user.posts_count || 0
         })
     } catch (error: any) {
@@ -224,6 +226,8 @@ router.get('/username/:username', async (req: any, res: Response) => {
             isMutualFollow,
             verified: user.is_verified || user.verified || false,
             is_verified: user.is_verified || user.verified || false,
+            badge_type: user.badge_type || user.verification_type || null,
+            badgeType: user.badge_type || user.verification_type || null,
             posts_count: user.posts_count || 0,
             isPrivate: user.is_private || false
         })
@@ -322,7 +326,8 @@ router.get('/:userId([0-9a-fA-F]{24})', async (req: Request, res: Response) => {
             avatar_url: avatarUrl,
             followers: user.followers || user.followers_count || 0,
             following: user.following || user.following_count || 0,
-            verified: user.verified || user.is_verified || false
+            verified: user.verified || user.is_verified || false,
+            badge_type: user.badge_type || user.verification_type || null
         })
     } catch (error: any) {
         console.error('Get user error:', error)

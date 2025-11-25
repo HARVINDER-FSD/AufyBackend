@@ -52,12 +52,12 @@ export class PostService {
       throw errors.notFound("User not found")
     }
 
-    const postWithUser = {
+    const postWithUser: Post = {
       id: result.insertedId.toString(),
       user_id: userId,
       content: postDoc.content,
       media_urls: postDoc.media_urls,
-      media_type: postDoc.media_type,
+      media_type: postDoc.media_type as any,
       location: postDoc.location,
       is_archived: postDoc.is_archived,
       created_at: postDoc.created_at,
@@ -68,6 +68,7 @@ export class PostService {
         full_name: user.full_name,
         avatar_url: user.avatar_url,
         is_verified: user.is_verified || false,
+        badge_type: user.badge_type || user.verification_type || null,
       },
       likes_count: 0,
       comments_count: 0,
@@ -134,6 +135,7 @@ export class PostService {
         full_name: user.full_name,
         avatar_url: user.avatar_url,
         is_verified: user.is_verified || false,
+        badge_type: user.badge_type || user.verification_type || null,
       },
       likes_count: likesCount,
       comments_count: commentsCount,
@@ -213,11 +215,12 @@ export class PostService {
             full_name: post.user.full_name,
             avatar_url: post.user.avatar_url,
             is_verified: post.user.is_verified || false,
-          },
+            badge_type: post.user.badge_type || post.user.verification_type || null,
+          } as any,
           likes_count: likesCount,
           comments_count: commentsCount,
           is_liked
-        } as Post
+        } as any as Post
       })
     )
 
@@ -301,6 +304,7 @@ export class PostService {
             full_name: post.user.full_name,
             avatar_url: post.user.avatar_url,
             is_verified: post.user.is_verified || false,
+            badge_type: post.user.badge_type || post.user.verification_type || null,
           },
           likes_count: likesCount,
           comments_count: commentsCount,
@@ -375,6 +379,7 @@ export class PostService {
         full_name: user!.full_name,
         avatar_url: user!.avatar_url,
         is_verified: user!.is_verified || false,
+        badge_type: user!.badge_type || user!.verification_type || null,
       },
       likes_count: 0,
       comments_count: 0,

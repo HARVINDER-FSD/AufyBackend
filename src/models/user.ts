@@ -40,6 +40,48 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  badge_type: {
+    type: String,
+    enum: ['blue', 'gold', 'purple', 'green', 'gray', null],
+    default: null
+  },
+  verification_type: {
+    type: String,
+    enum: ['blue', 'gold', 'purple', 'green', 'gray', null],
+    default: null
+  },
+  verification_date: {
+    type: Date,
+    default: null
+  },
+  verification_status: {
+    type: String,
+    enum: ['none', 'pending', 'approved', 'rejected'],
+    default: 'none'
+  },
+  // Premium subscription fields
+  premium_tier: {
+    type: String,
+    enum: ['none', 'basic', 'plus', 'pro', 'enterprise'],
+    default: 'none'
+  },
+  premium_status: {
+    type: String,
+    enum: ['none', 'active', 'cancelled', 'expired'],
+    default: 'none'
+  },
+  premium_start_date: {
+    type: Date,
+    default: null
+  },
+  premium_end_date: {
+    type: Date,
+    default: null
+  },
+  premium_auto_renew: {
+    type: Boolean,
+    default: true
+  },
   is_private: {
     type: Boolean,
     default: false

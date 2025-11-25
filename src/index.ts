@@ -28,6 +28,11 @@ import analyticsRoutes from './routes/analytics'
 import bookmarksRoutes from './routes/bookmarks'
 import settingsRoutes from './routes/settings'
 import pushRoutes from './routes/push'
+import closeFriendsRoutes from './routes/close-friends'
+import highlightsRoutes from './routes/highlights'
+import storiesCloseFriendsRoutes from './routes/stories-close-friends'
+import notesRoutes from './routes/notes'
+import crushListRoutes from './routes/crush-list'
 
 const app = express()
 const PORT = parseInt(process.env.PORT || '8000')
@@ -91,6 +96,11 @@ app.use('/api/analytics', analyticsRoutes)
 app.use('/api/bookmarks', bookmarksRoutes)
 app.use('/api/settings', settingsRoutes)
 app.use('/api/push', pushRoutes)
+app.use('/api/close-friends', closeFriendsRoutes)
+app.use('/api/highlights', highlightsRoutes)
+app.use('/api/stories', storiesCloseFriendsRoutes)
+app.use('/api/notes', notesRoutes)
+app.use('/api/crush-list', crushListRoutes)
 
 // Error handling
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

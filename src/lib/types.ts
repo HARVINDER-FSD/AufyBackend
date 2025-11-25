@@ -9,6 +9,8 @@ export interface User {
   avatar_url?: string
   phone?: string
   is_verified: boolean
+  badge_type?: 'blue' | 'gold' | 'purple' | 'gray' | 'green' | null
+  verification_type?: 'blue' | 'gold' | 'purple' | 'gray' | 'green' | null
   is_private: boolean
   is_active: boolean
   last_seen?: Date
@@ -26,7 +28,7 @@ export interface Post {
   is_archived: boolean
   created_at: Date
   updated_at: Date
-  user?: User
+  user?: Partial<User> & { id: string; username: string }
   likes_count?: number
   comments_count?: number
   is_liked?: boolean
