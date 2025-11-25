@@ -22,7 +22,6 @@ const crushListSchema = new mongoose.Schema({
 })
 
 // Index for faster queries
-crushListSchema.index({ user_id: 1 })
 crushListSchema.index({ user_id: 1, crush_ids: 1 })
 
 export default mongoose.model('CrushList', crushListSchema)

@@ -98,6 +98,19 @@ const userSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  // Secret Crush Feature
+  secretCrushCount: {
+    type: Number,
+    default: 0
+  },
+  maxSecretCrushes: {
+    type: Number,
+    default: 5  // 5 for free users, 10 for premium
+  },
+  isPremium: {
+    type: Boolean,
+    default: false
+  },
   posts_count: {
     type: Number,
     default: 0

@@ -21,7 +21,6 @@ const closeFriendSchema = new mongoose.Schema({
 })
 
 // Index for faster queries
-closeFriendSchema.index({ user_id: 1 })
 closeFriendSchema.index({ user_id: 1, close_friend_ids: 1 })
 
 export default mongoose.model('CloseFriend', closeFriendSchema)

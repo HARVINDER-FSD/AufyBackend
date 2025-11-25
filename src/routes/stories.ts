@@ -249,12 +249,21 @@ router.post("/:storyId/view", authenticateToken, async (req: AuthRequest, res: R
     const { storyId } = req.params
     const userId = req.userId!
 
-    const story = await Story.findById(storyId)
+    const story: any = await Story.findById(storyId)
 
     if (!story) {
       return res.status(404).json({
         success: false,
         error: 'Story not found'
+      })
+    }
+
+    // Don't count view if viewer is the story owner
+    if (story.user_id.toString() === userId) {
+      return res.json({
+        success: true,
+        message: "Own story - view not counted",
+        views_count: story.views_count || 0
       })
     }
 
@@ -268,8 +277,11 @@ router.post("/:storyId/view", authenticateToken, async (req: AuthRequest, res: R
       { upsert: true, new: true }
     )
 
-    // Update view count
-    const viewCount = await StoryView.countDocuments({ story_id: new mongoose.Types.ObjectId(storyId) })
+    // Update view count (excluding owner)
+    const viewCount = await StoryView.countDocuments({ 
+      story_id: new mongoose.Types.ObjectId(storyId),
+      viewer_id: { $ne: new mongoose.Types.ObjectId(story.user_id) }
+    })
     await (Story as any).findByIdAndUpdate(storyId, { views_count: viewCount })
 
     res.json({
