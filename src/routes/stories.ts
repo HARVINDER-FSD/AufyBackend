@@ -1,8 +1,11 @@
 import { Router, Request, Response } from "express"
 import { connectToDatabase } from "../lib/database"
-import Story from "../models/story"
+import StoryModel from "../models/story"
 import { authenticateToken, optionalAuth } from "../middleware/auth"
-import mongoose from "mongoose"
+import mongoose, { Model } from "mongoose"
+
+// Type the Story model properly
+const Story = StoryModel as Model<any>
 
 const router = Router()
 
@@ -107,6 +110,69 @@ router.post("/", authenticateToken, async (req: AuthRequest, res: Response) => {
   }
 })
 
+// Get single story by ID
+router.get("/:storyId", optionalAuth, async (req: Request, res: Response) => {
+  try {
+    await connectToDatabase()
+
+    const { storyId } = req.params
+
+    // Validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(storyId)) {
+      return res.status(404).json({
+        success: false,
+        error: 'Story not found'
+      })
+    }
+
+    const story: any = await Story.findOne({
+      _id: new mongoose.Types.ObjectId(storyId),
+      expires_at: { $gt: new Date() },
+      is_deleted: false
+    })
+      .populate('user_id', 'username full_name avatar_url is_verified')
+      .lean()
+
+    if (!story) {
+      return res.status(404).json({
+        success: false,
+        error: 'Story not found or has expired'
+      })
+    }
+
+    // Format story for frontend
+    const formattedStory = {
+      id: story._id.toString(),
+      user_id: story.user_id._id.toString(),
+      username: story.user_id.username,
+      full_name: story.user_id.full_name,
+      avatar_url: story.user_id.avatar_url,
+      is_verified: story.user_id.is_verified || false,
+      media_url: story.media_url,
+      media_type: story.media_type,
+      caption: story.caption,
+      created_at: story.created_at,
+      expires_at: story.expires_at,
+      texts: story.texts || [],
+      stickers: story.stickers || [],
+      filter: story.filter || 'none',
+      music: story.music || null,
+      views_count: story.views_count || 0
+    }
+
+    res.json({
+      success: true,
+      data: formattedStory
+    })
+  } catch (error: any) {
+    console.error('Error fetching story:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch story'
+    })
+  }
+})
+
 // Get user stories
 router.get("/user/:userId", async (req: Request, res: Response) => {
   try {
@@ -193,7 +259,7 @@ router.post("/:storyId/view", authenticateToken, async (req: AuthRequest, res: R
     }
 
     // Import StoryView model
-    const StoryView = (await import('../models/story-view')).default
+    const StoryView: any = (await import('../models/story-view')).default
 
     // Create or update view record (upsert)
     await StoryView.findOneAndUpdate(
@@ -204,7 +270,7 @@ router.post("/:storyId/view", authenticateToken, async (req: AuthRequest, res: R
 
     // Update view count
     const viewCount = await StoryView.countDocuments({ story_id: new mongoose.Types.ObjectId(storyId) })
-    await Story.findByIdAndUpdate(storyId, { views_count: viewCount })
+    await (Story as any).findByIdAndUpdate(storyId, { views_count: viewCount })
 
     res.json({
       success: true,
@@ -245,10 +311,10 @@ router.get("/:storyId/viewers", authenticateToken, async (req: AuthRequest, res:
     }
 
     // Import StoryView model
-    const StoryView = (await import('../models/story-view')).default
+    const StoryView: any = (await import('../models/story-view')).default
 
     // Get all viewers with user details
-    const viewers = await StoryView.find({ story_id: new mongoose.Types.ObjectId(storyId) })
+    const viewers: any[] = await StoryView.find({ story_id: new mongoose.Types.ObjectId(storyId) })
       .populate('viewer_id', 'username full_name avatar_url is_verified')
       .sort({ viewed_at: -1 })
       .lean()
