@@ -173,7 +173,7 @@ router.get("/:storyId", optionalAuth, async (req: Request, res: Response) => {
   }
 })
 
-// Get user stories
+// Get user stories (active only)
 router.get("/user/:userId", async (req: Request, res: Response) => {
   try {
     await connectToDatabase()
@@ -198,6 +198,38 @@ router.get("/user/:userId", async (req: Request, res: Response) => {
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to fetch user stories'
+    })
+  }
+})
+
+// Get ALL user stories (including expired) - for creating memories
+router.get("/user/:userId/all", async (req: Request, res: Response) => {
+  try {
+    await connectToDatabase()
+
+    const { userId } = req.params
+
+    // Get ALL stories (including expired), sorted by newest first
+    const stories = await Story.find({
+      user_id: new mongoose.Types.ObjectId(userId),
+      is_deleted: false
+    })
+      .populate('user_id', 'username full_name avatar_url is_verified')
+      .sort({ created_at: -1 })
+      .lean()
+
+    res.json({
+      success: true,
+      data: { 
+        stories,
+        total: stories.length 
+      }
+    })
+  } catch (error: any) {
+    console.error('Error fetching all user stories:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch all user stories'
     })
   }
 })

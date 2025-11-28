@@ -11,6 +11,31 @@ const noteSchema = new mongoose.Schema({
     required: true,
     maxlength: 60,
   },
+  note_type: {
+    type: String,
+    enum: ['text', 'photo', 'music'],
+    default: 'text',
+  },
+  photo_url: {
+    type: String,
+    default: null,
+  },
+  music_title: {
+    type: String,
+    default: null,
+  },
+  music_artist: {
+    type: String,
+    default: null,
+  },
+  music_preview_url: {
+    type: String,
+    default: null,
+  },
+  music_artwork_url: {
+    type: String,
+    default: null,
+  },
   emoji: {
     type: String,
     default: null,
@@ -39,8 +64,18 @@ const noteSchema = new mongoose.Schema({
   },
   visibility: {
     type: String,
-    enum: ['friends', 'crush-list', 'custom'],
-    default: 'friends',
+    enum: ['everyone', 'close-friends', 'groups', 'favorite', 'custom'],
+    default: 'everyone',
+  },
+  group_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Group',
+    default: null,
+  },
+  favorite_user_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null,
   },
   hidden_from: [{
     type: mongoose.Schema.Types.ObjectId,

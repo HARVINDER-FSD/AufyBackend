@@ -15,13 +15,13 @@ async function getDb(): Promise<Db> {
     if (cachedDb && cachedClient) {
         return cachedDb
     }
-    
+
     cachedClient = await MongoClient.connect(MONGODB_URI, {
         maxPoolSize: 10,
         minPoolSize: 2
     })
     cachedDb = cachedClient.db()
-    
+
     console.log('✅ MongoDB connection pool established')
     return cachedDb
 }
@@ -49,7 +49,7 @@ router.get('/me', authenticate, async (req: any, res: Response) => {
     try {
         const userId = req.userId
         const db = await getDb()
-        
+
         const user = await db.collection('users').findOne(
             { _id: new ObjectId(userId) },
             { projection: { password: 0 } } // Don't fetch password
@@ -100,7 +100,7 @@ router.get('/list', authenticate, async (req: any, res: Response) => {
         const db = await getDb()
         const limit = parseInt(req.query.limit as string) || 50
         const currentUserId = new ObjectId(req.userId)
-        
+
         // Get users that current user is following
         const follows = await db.collection('follows')
             .find({ follower_id: currentUserId })
@@ -151,7 +151,7 @@ router.get('/list', authenticate, async (req: any, res: Response) => {
 router.get('/username/:username', async (req: any, res: Response) => {
     try {
         const { username } = req.params
-        
+
         // Try to get current user ID from token (optional)
         let currentUserId = null;
         try {
@@ -178,7 +178,9 @@ router.get('/username/:username', async (req: any, res: Response) => {
         let isFollowing = false;
         let followsBack = false;
         let isMutualFollow = false;
-        
+        let isPending = false;
+        let followRequestStatus = 'none';
+
         if (currentUserId) {
             const followRecord = await db.collection('follows').findOne({
                 followerId: new ObjectId(currentUserId),
@@ -193,6 +195,22 @@ router.get('/username/:username', async (req: any, res: Response) => {
             })
             followsBack = !!reverseFollow;
             isMutualFollow = isFollowing && followsBack;
+
+            // Check for pending follow request
+            if (!isFollowing) {
+                const pendingRequest = await db.collection('followRequests').findOne({
+                    requester_id: new ObjectId(currentUserId),
+                    requested_id: user._id,
+                    status: 'pending'
+                })
+
+                if (pendingRequest) {
+                    isPending = true;
+                    followRequestStatus = 'pending';
+                }
+            } else {
+                followRequestStatus = 'approved';
+            }
         }
 
         // Get follower/following counts
@@ -224,12 +242,15 @@ router.get('/username/:username', async (req: any, res: Response) => {
             is_following: isFollowing,
             followsBack,
             isMutualFollow,
+            isPending,
+            followRequestStatus,
             verified: user.is_verified || user.verified || false,
             is_verified: user.is_verified || user.verified || false,
             badge_type: user.badge_type || user.verification_type || null,
             badgeType: user.badge_type || user.verification_type || null,
             posts_count: user.posts_count || 0,
-            isPrivate: user.is_private || false
+            isPrivate: user.is_private || false,
+            is_private: user.is_private || false
         })
     } catch (error: any) {
         console.error('Get user by username error:', error)
@@ -241,16 +262,16 @@ router.get('/username/:username', async (req: any, res: Response) => {
 router.get('/:userId/mutual-followers', authenticate, async (req: any, res: Response) => {
     try {
         const { userId } = req.params
-        
+
         // Validate ObjectId format
         if (!ObjectId.isValid(userId)) {
-            return res.status(400).json({ 
+            return res.status(400).json({
                 success: false,
                 message: 'Invalid user ID format',
                 data: []
             })
         }
-        
+
         const db = await getDb()
 
         // Get users that this user follows
@@ -290,7 +311,7 @@ router.get('/:userId/mutual-followers', authenticate, async (req: any, res: Resp
         })
     } catch (error: any) {
         console.error('Error getting mutual followers:', error)
-        return res.status(500).json({ 
+        return res.status(500).json({
             success: false,
             message: error.message || 'Failed to get mutual followers',
             data: []
@@ -316,7 +337,7 @@ router.get('/:userId([0-9a-fA-F]{24})', async (req: Request, res: Response) => {
 
         // Use avatar_url or avatar, with fallback
         const avatarUrl = user.avatar_url || user.avatar || '/placeholder-user.jpg';
-        
+
         return res.json({
             id: user._id.toString(),
             username: user.username,
@@ -418,7 +439,7 @@ router.put('/profile', authenticate, async (req: any, res: Response) => {
             const usernameRegex = /^[a-zA-Z0-9_.]+$/;
             if (!usernameRegex.test(username)) {
                 await client.close()
-                return res.status(400).json({ 
+                return res.status(400).json({
                     message: 'Username can only contain letters, numbers, underscores (_), and periods (.)',
                     error: 'INVALID_USERNAME_FORMAT'
                 })
@@ -427,7 +448,7 @@ router.put('/profile', authenticate, async (req: any, res: Response) => {
             // Check username length (3-30 characters)
             if (username.length < 3 || username.length > 30) {
                 await client.close()
-                return res.status(400).json({ 
+                return res.status(400).json({
                     message: 'Username must be between 3 and 30 characters',
                     error: 'INVALID_USERNAME_LENGTH'
                 })
@@ -439,34 +460,34 @@ router.put('/profile', authenticate, async (req: any, res: Response) => {
                 // Generate username suggestions
                 const suggestions: string[] = []
                 const baseUsername = username.replace(/[0-9]+$/, '') // Remove trailing numbers
-                
+
                 // Try adding random numbers
                 for (let i = 0; i < 5; i++) {
                     const randomNum = Math.floor(Math.random() * 9999) + 1
                     const suggestion = `${baseUsername}${randomNum}`
-                    
+
                     // Check if suggestion is available
                     const exists = await db.collection('users').findOne({ username: suggestion })
                     if (!exists && suggestion.length <= 30) {
                         suggestions.push(suggestion)
                     }
                 }
-                
+
                 // Try adding underscore and numbers
                 if (suggestions.length < 5) {
                     for (let i = 0; i < 3; i++) {
                         const randomNum = Math.floor(Math.random() * 999) + 1
                         const suggestion = `${baseUsername}_${randomNum}`
-                        
+
                         const exists = await db.collection('users').findOne({ username: suggestion })
                         if (!exists && suggestion.length <= 30 && !suggestions.includes(suggestion)) {
                             suggestions.push(suggestion)
                         }
                     }
                 }
-                
+
                 await client.close()
-                return res.status(400).json({ 
+                return res.status(400).json({
                     message: 'Username is already taken',
                     error: 'USERNAME_TAKEN',
                     suggestions: suggestions.slice(0, 5) // Return up to 5 suggestions
@@ -476,13 +497,13 @@ router.put('/profile', authenticate, async (req: any, res: Response) => {
             // Check last username change date
             const lastUsernameChange = user.last_username_change || user.createdAt || new Date(0);
             const daysSinceLastChange = (Date.now() - new Date(lastUsernameChange).getTime()) / (1000 * 60 * 60 * 24);
-            
+
             console.log('[Backend] Days since last username change:', daysSinceLastChange);
 
             if (daysSinceLastChange < 15) {
                 const daysRemaining = Math.ceil(15 - daysSinceLastChange);
                 await client.close()
-                return res.status(400).json({ 
+                return res.status(400).json({
                     message: `You can only change your username once every 15 days. Please wait ${daysRemaining} more day${daysRemaining > 1 ? 's' : ''}.`,
                     error: 'USERNAME_CHANGE_TOO_SOON',
                     daysRemaining
@@ -597,7 +618,7 @@ router.get('/search', async (req: Request, res: Response) => {
     }
 })
 
-// POST /api/users/:userId/follow - Follow/Unfollow user
+// POST /api/users/:userId/follow - Follow/Unfollow user (with private account support)
 router.post('/:userId/follow', authenticate, async (req: any, res: Response) => {
     try {
         const currentUserId = req.userId
@@ -612,6 +633,16 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
         const client = await MongoClient.connect(MONGODB_URI)
         const db = client.db()
 
+        // Get target user to check if private
+        const targetUser = await db.collection('users').findOne({ _id: new ObjectId(userId) })
+        if (!targetUser) {
+            await client.close()
+            return res.status(404).json({ message: 'User not found' })
+        }
+
+        const isPrivate = targetUser.is_private || false
+        console.log('[FOLLOW] Target user is private:', isPrivate);
+
         // Check if already following
         const existingFollow = await db.collection('follows').findOne({
             followerId: new ObjectId(currentUserId),
@@ -619,22 +650,22 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
         })
 
         if (existingFollow) {
-            // Unfollow
+            // UNFOLLOW - same for both private and public accounts
             console.log('[FOLLOW] Unfollowing user');
             await db.collection('follows').deleteOne({
                 followerId: new ObjectId(currentUserId),
                 followingId: new ObjectId(userId)
             })
 
+            // Remove any pending follow request if exists
+            await db.collection('followRequests').deleteMany({
+                requester_id: new ObjectId(currentUserId),
+                requested_id: new ObjectId(userId)
+            })
+
             // Get updated count
             const followerCount = await db.collection('follows').countDocuments({
                 followingId: new ObjectId(userId)
-            })
-
-            // Check if mutual follow still exists
-            const reverseFollow = await db.collection('follows').findOne({
-                followerId: new ObjectId(userId),
-                followingId: new ObjectId(currentUserId)
             })
 
             await client.close()
@@ -642,41 +673,109 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
             return res.json({
                 message: 'Unfollowed successfully',
                 isFollowing: false,
+                isPending: false,
+                followRequestStatus: 'none',
                 followerCount,
                 isMutualFollow: false
             })
         } else {
-            // Follow
-            console.log('[FOLLOW] Following user');
-            await db.collection('follows').insertOne({
-                followerId: new ObjectId(currentUserId),
-                followingId: new ObjectId(userId),
-                createdAt: new Date()
+            // CHECK FOR EXISTING FOLLOW REQUEST
+            const existingRequest = await db.collection('followRequests').findOne({
+                requester_id: new ObjectId(currentUserId),
+                requested_id: new ObjectId(userId),
+                status: 'pending'
             })
 
-            // Get updated count
-            const followerCount = await db.collection('follows').countDocuments({
-                followingId: new ObjectId(userId)
-            })
+            if (existingRequest) {
+                // CANCEL PENDING REQUEST
+                console.log('[FOLLOW] Canceling pending follow request');
+                await db.collection('followRequests').deleteOne({
+                    _id: existingRequest._id
+                })
 
-            // Check if this creates a mutual follow
-            const reverseFollow = await db.collection('follows').findOne({
-                followerId: new ObjectId(userId),
-                followingId: new ObjectId(currentUserId)
-            })
+                await client.close()
 
-            await client.close()
+                return res.json({
+                    message: 'Follow request canceled',
+                    isFollowing: false,
+                    isPending: false,
+                    followRequestStatus: 'none',
+                    followerCount: targetUser.followers_count || 0,
+                    isMutualFollow: false
+                })
+            }
 
-            // Create notification
-            const { notifyFollow } = require('../lib/notifications');
-            await notifyFollow(userId, currentUserId);
+            // NEW FOLLOW/REQUEST
+            if (isPrivate) {
+                // PRIVATE ACCOUNT - Create follow request
+                console.log('[FOLLOW] Creating follow request for private account');
 
-            return res.json({
-                message: 'Followed successfully',
-                isFollowing: true,
-                followerCount,
-                isMutualFollow: !!reverseFollow
-            })
+                await db.collection('followRequests').insertOne({
+                    requester_id: new ObjectId(currentUserId),
+                    requested_id: new ObjectId(userId),
+                    status: 'pending',
+                    created_at: new Date(),
+                    updated_at: new Date()
+                })
+
+                await client.close()
+
+                // Send notification
+                try {
+                    const { notifyFollowRequest } = require('../lib/notifications');
+                    await notifyFollowRequest(userId, currentUserId);
+                } catch (err) {
+                    console.error('[FOLLOW] Notification error:', err);
+                }
+
+                return res.json({
+                    message: 'Follow request sent',
+                    isFollowing: false,
+                    isPending: true,
+                    followRequestStatus: 'pending',
+                    followerCount: targetUser.followers_count || 0,
+                    isMutualFollow: false
+                })
+            } else {
+                // PUBLIC ACCOUNT - Instant follow
+                console.log('[FOLLOW] Following public account instantly');
+
+                await db.collection('follows').insertOne({
+                    followerId: new ObjectId(currentUserId),
+                    followingId: new ObjectId(userId),
+                    createdAt: new Date()
+                })
+
+                // Get updated count
+                const followerCount = await db.collection('follows').countDocuments({
+                    followingId: new ObjectId(userId)
+                })
+
+                // Check if this creates a mutual follow
+                const reverseFollow = await db.collection('follows').findOne({
+                    followerId: new ObjectId(userId),
+                    followingId: new ObjectId(currentUserId)
+                })
+
+                await client.close()
+
+                // Create notification
+                try {
+                    const { notifyFollow } = require('../lib/notifications');
+                    await notifyFollow(userId, currentUserId);
+                } catch (err) {
+                    console.error('[FOLLOW] Notification error:', err);
+                }
+
+                return res.json({
+                    message: 'Followed successfully',
+                    isFollowing: true,
+                    isPending: false,
+                    followRequestStatus: 'approved',
+                    followerCount,
+                    isMutualFollow: !!reverseFollow
+                })
+            }
         }
     } catch (error: any) {
         console.error('Follow error:', error)
@@ -764,16 +863,16 @@ router.get('/:userId/followers', async (req: Request, res: Response) => {
         const follows = await db.collection('follows').find({
             followingId: new ObjectId(userId)
         }).toArray()
-        
+
         console.log('[FOLLOWERS] Found', follows.length, 'follow records')
 
         const followerIds = follows.map(f => f.followerId)
         console.log('[FOLLOWERS] Follower IDs:', followerIds.map(id => id.toString()))
-        
+
         const followers = await db.collection('users').find({
             _id: { $in: followerIds }
         }).toArray()
-        
+
         console.log('[FOLLOWERS] Found', followers.length, 'user records')
 
         await client.close()
@@ -785,7 +884,7 @@ router.get('/:userId/followers', async (req: Request, res: Response) => {
             avatar: user.avatar_url || user.avatar || '/placeholder-user.jpg',
             verified: user.is_verified || user.verified || false
         }))
-        
+
         console.log('[FOLLOWERS] Returning', result.length, 'followers')
         return res.json(result)
     } catch (error: any) {
@@ -1114,7 +1213,7 @@ router.post('/conversations', authenticate, async (req: any, res: Response) => {
         }
 
         if (!canMessage) {
-            return res.status(403).json({ 
+            return res.status(403).json({
                 message: reason,
                 canMessage: false,
                 isMessageRequest: false
@@ -1361,6 +1460,205 @@ router.put('/privacy', authenticate, async (req: any, res: Response) => {
     } catch (error: any) {
         console.error('Update privacy error:', error)
         return res.status(500).json({ message: error.message || 'Failed to update privacy' })
+    }
+})
+
+// GET /api/users/follow-requests - Get pending follow requests (received)
+router.get('/follow-requests', authenticate, async (req: any, res: Response) => {
+    try {
+        const currentUserId = req.userId
+        const db = await getDb()
+
+        const requests = await db.collection('followRequests').find({
+            requested_id: new ObjectId(currentUserId),
+            status: 'pending'
+        }).sort({ created_at: -1 }).toArray()
+
+        // Get requester details
+        const requesterIds = requests.map(r => r.requester_id)
+        const requesters = await db.collection('users').find({
+            _id: { $in: requesterIds }
+        }).project({
+            password: 0
+        }).toArray()
+
+        // Map requests with user data
+        const formattedRequests = requests.map(req => {
+            const requester = requesters.find(u => u._id.toString() === req.requester_id.toString())
+            return {
+                id: req._id.toString(),
+                requester: {
+                    id: requester?._id.toString(),
+                    username: requester?.username,
+                    full_name: requester?.full_name || requester?.name,
+                    avatar_url: requester?.avatar_url || requester?.avatar || '/placeholder-user.jpg',
+                    is_verified: requester?.is_verified || false,
+                    badge_type: requester?.badge_type
+                },
+                created_at: req.created_at,
+                status: req.status
+            }
+        })
+
+        return res.json({
+            success: true,
+            data: formattedRequests,
+            count: formattedRequests.length
+        })
+    } catch (error: any) {
+        console.error('Get follow requests error:', error)
+        return res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to get follow requests'
+        })
+    }
+})
+
+// POST /api/users/follow-requests/:requestId/approve - Approve follow request
+router.post('/follow-requests/:requestId/approve', authenticate, async (req: any, res: Response) => {
+    try {
+        const currentUserId = req.userId
+        const { requestId } = req.params
+        const db = await getDb()
+
+        // Find the request
+        const request = await db.collection('followRequests').findOne({
+            _id: new ObjectId(requestId),
+            requested_id: new ObjectId(currentUserId),
+            status: 'pending'
+        })
+
+        if (!request) {
+            return res.status(404).json({
+                success: false,
+                message: 'Follow request not found or already processed'
+            })
+        }
+
+        // Update request status
+        await db.collection('followRequests').updateOne(
+            { _id: new ObjectId(requestId) },
+            {
+                $set: {
+                    status: 'approved',
+                    updated_at: new Date()
+                }
+            }
+        )
+
+        // Create follow relationship
+        await db.collection('follows').insertOne({
+            followerId: request.requester_id,
+            followingId: request.requested_id,
+            createdAt: new Date()
+        })
+
+        // Update follower counts
+        const followerCount = await db.collection('follows').countDocuments({
+            followingId: new ObjectId(currentUserId)
+        })
+
+        // Send notification
+        try {
+            const { notifyFollowRequestAccepted } = require('../lib/notifications');
+            await notifyFollowRequestAccepted(request.requester_id.toString(), currentUserId);
+        } catch (err) {
+            console.error('[FOLLOW REQUEST] Notification error:', err);
+        }
+
+        return res.json({
+            success: true,
+            message: 'Follow request approved',
+            followerCount
+        })
+    } catch (error: any) {
+        console.error('Approve follow request error:', error)
+        return res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to approve follow request'
+        })
+    }
+})
+
+// POST /api/users/follow-requests/:requestId/decline - Decline follow request
+router.post('/follow-requests/:requestId/decline', authenticate, async (req: any, res: Response) => {
+    try {
+        const currentUserId = req.userId
+        const { requestId } = req.params
+        const db = await getDb()
+
+        // Find the request
+        const request = await db.collection('followRequests').findOne({
+            _id: new ObjectId(requestId),
+            requested_id: new ObjectId(currentUserId),
+            status: 'pending'
+        })
+
+        if (!request) {
+            return res.status(404).json({
+                success: false,
+                message: 'Follow request not found or already processed'
+            })
+        }
+
+        // Update request status to declined
+        await db.collection('followRequests').updateOne(
+            { _id: new ObjectId(requestId) },
+            {
+                $set: {
+                    status: 'declined',
+                    updated_at: new Date()
+                }
+            }
+        )
+
+        return res.json({
+            success: true,
+            message: 'Follow request declined'
+        })
+    } catch (error: any) {
+        console.error('Decline follow request error:', error)
+        return res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to decline follow request'
+        })
+    }
+})
+
+// GET /api/users/:userId/follow-request-status - Check follow request status
+router.get('/:userId/follow-request-status', authenticate, async (req: any, res: Response) => {
+    try {
+        const currentUserId = req.userId
+        const { userId } = req.params
+        const db = await getDb()
+
+        // Check for pending request
+        const request = await db.collection('followRequests').findOne({
+            requester_id: new ObjectId(currentUserId),
+            requested_id: new ObjectId(userId),
+            status: 'pending'
+        })
+
+        if (request) {
+            return res.json({
+                success: true,
+                isPending: true,
+                status: 'pending',
+                requestId: request._id.toString()
+            })
+        }
+
+        return res.json({
+            success: true,
+            isPending: false,
+            status: 'none'
+        })
+    } catch (error: any) {
+        console.error('Check follow request status error:', error)
+        return res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to check follow request status'
+        })
     }
 })
 

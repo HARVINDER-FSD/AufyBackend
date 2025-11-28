@@ -11,45 +11,94 @@ interface AuthRequest extends Request {
   userId?: string
 }
 
+// Health check for notes endpoint
+router.get('/health', (_req: Request, res: Response) => {
+  res.json({ success: true, message: 'Notes API is working' })
+})
+
 // Get active notes from friends and crush list
 router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.userId!
 
-    // Get user's friends (following)
-    const db = mongoose.connection.db
-    const followsCollection = db?.collection('follows')
-    const follows = await followsCollection?.find({ follower_id: new mongoose.Types.ObjectId(userId) }).toArray()
-    const friendIds = follows?.map((f: any) => f.following_id) || []
+    // Initialize arrays
+    let friendIds: any[] = []
+    let closeFriendIds: any[] = []
+    let crushIds: any[] = []
 
-    // Get crush list
-    const crushList = await CrushList.findOne({ user_id: new mongoose.Types.ObjectId(userId) })
-    const crushIds = crushList?.crush_ids || []
+    try {
+      // Get user's friends (following)
+      const db = mongoose.connection.db
+      if (db) {
+        const followsCollection = db.collection('follows')
+        const follows = await followsCollection.find({ follower_id: new mongoose.Types.ObjectId(userId) }).toArray()
+        friendIds = follows?.map((f: any) => f.following_id) || []
+      }
+    } catch (err) {
+      console.log('Could not fetch follows:', err)
+    }
 
-    // Combine friend and crush IDs
-    const visibleUserIds = [...friendIds, ...crushIds]
+    try {
+      // Get close friends
+      const closeFriends = await CloseFriend.find({ user_id: new mongoose.Types.ObjectId(userId) })
+      closeFriendIds = closeFriends.map((cf: any) => cf.friend_id)
+    } catch (err) {
+      console.log('Could not fetch close friends:', err)
+    }
 
-    // Get active notes from these users
-    const notes = await (Note as any).find({
-      user_id: { $in: visibleUserIds },
+    try {
+      // Get crush list (favorites)
+      const crushList = await CrushList.findOne({ user_id: new mongoose.Types.ObjectId(userId) })
+      crushIds = crushList?.crush_ids || []
+    } catch (err) {
+      console.log('Could not fetch crush list:', err)
+    }
+
+    // Build query for visible notes - simplified to avoid errors
+    const orConditions: any[] = [
+      // User's own notes
+      { user_id: new mongoose.Types.ObjectId(userId) }
+    ]
+
+    // Add conditions only if we have data
+    if (friendIds.length > 0) {
+      orConditions.push({ visibility: 'everyone', user_id: { $in: friendIds } })
+    }
+    if (closeFriendIds.length > 0) {
+      orConditions.push({ visibility: 'close-friends', user_id: { $in: closeFriendIds } })
+    }
+    if (friendIds.length > 0 || crushIds.length > 0) {
+      orConditions.push({ visibility: 'custom', user_id: { $in: [...friendIds, ...crushIds] } })
+    }
+    // Favorite visibility
+    orConditions.push({ visibility: 'favorite', favorite_user_id: new mongoose.Types.ObjectId(userId) })
+
+    const notesQuery: any = {
       is_active: true,
       expires_at: { $gt: new Date() },
-      hidden_from: { $ne: new mongoose.Types.ObjectId(userId) }
-    })
+      $or: orConditions
+    }
+
+    // Get active notes
+    const notes = await (Note as any).find(notesQuery)
       .populate('user_id', 'username full_name avatar_url is_verified')
+      .populate('favorite_user_id', 'username full_name avatar_url')
       .populate('reactions.user_id', 'username avatar_url')
       .sort({ created_at: -1 })
+      .limit(50) // Limit results
       .lean()
 
     res.json({
       success: true,
-      data: { notes }
+      data: { notes: notes || [] }
     })
   } catch (error: any) {
     console.error('Error fetching notes:', error)
+    console.error('Error stack:', error.stack)
     res.status(500).json({
       success: false,
-      error: error.message || 'Failed to fetch notes'
+      error: error.message || 'Failed to fetch notes',
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     })
   }
 })
@@ -87,6 +136,12 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     const userId = req.userId!
     const {
       content,
+      note_type,
+      photo_url,
+      music_title,
+      music_artist,
+      music_preview_url,
+      music_artwork_url,
       emoji,
       text_color,
       background_style,
@@ -94,6 +149,8 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       gradient_colors,
       emotion,
       visibility,
+      group_id,
+      favorite_user_id,
       hidden_from
     } = req.body
 
@@ -111,6 +168,21 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       })
     }
 
+    // Validate note type specific fields
+    if (note_type === 'photo' && !photo_url) {
+      return res.status(400).json({
+        success: false,
+        error: 'Photo URL is required for photo notes'
+      })
+    }
+
+    if (note_type === 'music' && (!music_title || !music_artist)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Music title and artist are required for music notes'
+      })
+    }
+
     // Deactivate any existing active notes
     await (Note as any).updateMany(
       { user_id: new mongoose.Types.ObjectId(userId), is_active: true },
@@ -121,13 +193,21 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     const note = await (Note as any).create({
       user_id: new mongoose.Types.ObjectId(userId),
       content: content.trim(),
+      note_type: note_type || 'text',
+      photo_url: photo_url || null,
+      music_title: music_title || null,
+      music_artist: music_artist || null,
+      music_preview_url: music_preview_url || null,
+      music_artwork_url: music_artwork_url || null,
       emoji: emoji || null,
       text_color: text_color || '#FFFFFF',
       background_style: background_style || 'solid',
       background_color: background_color || '#6366f1',
       gradient_colors: gradient_colors || null,
       emotion: emotion || 'custom',
-      visibility: visibility || 'friends',
+      visibility: visibility || 'everyone',
+      group_id: group_id ? new mongoose.Types.ObjectId(group_id) : null,
+      favorite_user_id: favorite_user_id ? new mongoose.Types.ObjectId(favorite_user_id) : null,
       hidden_from: hidden_from || [],
       reactions: [],
       expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
@@ -136,6 +216,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
 
     const populatedNote = await (Note as any).findById(note._id)
       .populate('user_id', 'username full_name avatar_url is_verified')
+      .populate('favorite_user_id', 'username full_name avatar_url')
       .lean()
 
     res.status(201).json({
