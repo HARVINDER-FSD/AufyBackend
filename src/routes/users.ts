@@ -1740,3 +1740,215 @@ router.get('/:userId/follow-request-status', authenticate, async (req: any, res:
 })
 
 export default router
+
+
+// POST /api/users/change-password - Change password
+router.post('/change-password', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.userId
+        const { currentPassword, newPassword } = req.body
+
+        if (!currentPassword || !newPassword) {
+            return res.status(400).json({ message: 'Current and new password are required' })
+        }
+
+        if (newPassword.length < 6) {
+            return res.status(400).json({ message: 'Password must be at least 6 characters' })
+        }
+
+        const db = await getDb()
+        const user = await db.collection('users').findOne({ _id: new ObjectId(userId) })
+
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' })
+        }
+
+        // Verify current password
+        const bcrypt = require('bcryptjs')
+        const isValid = await bcrypt.compare(currentPassword, user.password)
+
+        if (!isValid) {
+            return res.status(401).json({ message: 'Current password is incorrect' })
+        }
+
+        // Hash new password
+        const hashedPassword = await bcrypt.hash(newPassword, 10)
+
+        // Update password
+        await db.collection('users').updateOne(
+            { _id: new ObjectId(userId) },
+            {
+                $set: {
+                    password: hashedPassword,
+                    updatedAt: new Date()
+                }
+            }
+        )
+
+        return res.json({ message: 'Password changed successfully' })
+    } catch (error: any) {
+        console.error('Change password error:', error)
+        return res.status(500).json({ message: error.message || 'Failed to change password' })
+    }
+})
+
+// GET /api/users/muted - Get muted users
+router.get('/muted', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.userId
+        const db = await getDb()
+
+        // Get muted user IDs
+        const mutedRecords = await db.collection('muted').find({
+            userId: new ObjectId(userId)
+        }).toArray()
+
+        const mutedUserIds = mutedRecords.map(r => r.mutedUserId)
+
+        // Get user details
+        const users = await db.collection('users').find({
+            _id: { $in: mutedUserIds }
+        }).project({
+            password: 0
+        }).toArray()
+
+        const formattedUsers = users.map(user => ({
+            id: user._id.toString(),
+            username: user.username,
+            name: user.full_name || user.name || '',
+            avatar: user.avatar_url || user.avatar || '/placeholder-user.jpg',
+            verified: user.is_verified || user.verified || false
+        }))
+
+        return res.json({ muted: formattedUsers })
+    } catch (error: any) {
+        console.error('Get muted users error:', error)
+        return res.status(500).json({ message: error.message || 'Failed to get muted users' })
+    }
+})
+
+// POST /api/users/:userId/mute - Mute/Unmute user
+router.post('/:userId/mute', authenticate, async (req: any, res: Response) => {
+    try {
+        const currentUserId = req.userId
+        const { userId } = req.params
+
+        if (currentUserId === userId) {
+            return res.status(400).json({ message: 'Cannot mute yourself' })
+        }
+
+        const db = await getDb()
+
+        // Check if already muted
+        const existingMute = await db.collection('muted').findOne({
+            userId: new ObjectId(currentUserId),
+            mutedUserId: new ObjectId(userId)
+        })
+
+        if (existingMute) {
+            // Unmute
+            await db.collection('muted').deleteOne({
+                userId: new ObjectId(currentUserId),
+                mutedUserId: new ObjectId(userId)
+            })
+
+            return res.json({ message: 'User unmuted', isMuted: false })
+        } else {
+            // Mute
+            await db.collection('muted').insertOne({
+                userId: new ObjectId(currentUserId),
+                mutedUserId: new ObjectId(userId),
+                createdAt: new Date()
+            })
+
+            return res.json({ message: 'User muted', isMuted: true })
+        }
+    } catch (error: any) {
+        console.error('Mute user error:', error)
+        return res.status(500).json({ message: error.message || 'Failed to mute user' })
+    }
+})
+
+// GET /api/users/login-activity - Get login activity
+router.get('/login-activity', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.userId
+        const db = await getDb()
+
+        const activity = await db.collection('loginActivity').find({
+            userId: new ObjectId(userId)
+        }).sort({ timestamp: -1 }).limit(10).toArray()
+
+        const formattedActivity = activity.map(a => ({
+            device: a.device || 'Unknown Device',
+            location: a.location || 'Unknown Location',
+            timestamp: a.timestamp,
+            ipAddress: a.ipAddress
+        }))
+
+        return res.json({ activity: formattedActivity })
+    } catch (error: any) {
+        console.error('Get login activity error:', error)
+        return res.status(500).json({ message: error.message || 'Failed to get login activity' })
+    }
+})
+
+// PATCH /api/users/me - Update user profile (new endpoint)
+router.patch('/me', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.userId
+        const { name, username, email, bio, website, gender, birthday, location } = req.body
+
+        const db = await getDb()
+
+        const updateData: any = { updatedAt: new Date() }
+        if (name !== undefined) {
+            updateData.name = name
+            updateData.full_name = name
+        }
+        if (username !== undefined) {
+            // Check if username is taken
+            const existingUser = await db.collection('users').findOne({
+                username,
+                _id: { $ne: new ObjectId(userId) }
+            })
+            if (existingUser) {
+                return res.status(400).json({ message: 'Username is already taken' })
+            }
+            updateData.username = username
+        }
+        if (email !== undefined) updateData.email = email
+        if (bio !== undefined) updateData.bio = bio
+        if (website !== undefined) updateData.website = website
+        if (gender !== undefined) updateData.gender = gender
+        if (birthday !== undefined) updateData.birthday = birthday
+        if (location !== undefined) updateData.location = location
+
+        await db.collection('users').updateOne(
+            { _id: new ObjectId(userId) },
+            { $set: updateData }
+        )
+
+        const updatedUser = await db.collection('users').findOne(
+            { _id: new ObjectId(userId) },
+            { projection: { password: 0 } }
+        )
+
+        return res.json({
+            id: updatedUser?._id.toString(),
+            username: updatedUser?.username,
+            email: updatedUser?.email,
+            name: updatedUser?.full_name || updatedUser?.name || '',
+            bio: updatedUser?.bio || '',
+            website: updatedUser?.website || '',
+            gender: updatedUser?.gender || '',
+            birthday: updatedUser?.birthday || '',
+            location: updatedUser?.location || '',
+            avatar: updatedUser?.avatar_url || updatedUser?.avatar || '/placeholder-user.jpg',
+            verified: updatedUser?.is_verified || updatedUser?.verified || false
+        })
+    } catch (error: any) {
+        console.error('Update user error:', error)
+        return res.status(500).json({ message: error.message || 'Failed to update user' })
+    }
+})
