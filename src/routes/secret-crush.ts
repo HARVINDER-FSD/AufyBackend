@@ -220,32 +220,55 @@ router.get('/my-list', authenticateToken, async (req: AuthRequest, res: Response
   try {
     const userId = req.userId;
 
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    // Get user's limits first
+    const user = await (User as any).findOne({ _id: userId }).lean();
+    const maxCrushes = user?.isPremium ? 10 : 5;
+
+    // Find crushes with defensive query
     const crushes = await SecretCrush.find({
       userId,
       isActive: true
     })
     .populate('crushUserId', 'username full_name avatar_url is_verified badge_type')
-    .sort({ createdAt: -1 });
+    .sort({ createdAt: -1 })
+    .lean()
+    .catch(err => {
+      console.error('Error querying crushes:', err);
+      return [];
+    });
 
-    const mutualCount = crushes.filter(c => c.isMutual).length;
+    if (!crushes || !Array.isArray(crushes)) {
+      return res.json({
+        success: true,
+        crushes: [],
+        count: 0,
+        mutualCount: 0,
+        maxCrushes,
+        isPremium: user?.isPremium || false
+      });
+    }
 
-    const crushList = crushes.map(crush => ({
+    // Filter out any crushes with missing user data
+    const validCrushes = crushes.filter(crush => crush.crushUserId && typeof crush.crushUserId === 'object');
+    const mutualCount = validCrushes.filter(c => c.isMutual).length;
+
+    const crushList = validCrushes.map(crush => ({
       id: crush._id,
       user: crush.crushUserId,
-      isMutual: crush.isMutual,
-      chatId: crush.mutualChatId,
+      isMutual: crush.isMutual || false,
+      chatId: crush.mutualChatId || null,
       addedAt: crush.createdAt,
-      mutualSince: crush.mutualDetectedAt
+      mutualSince: crush.mutualDetectedAt || null
     }));
-
-    // Get user's limits
-    const user = await (User as any).findOne({ _id: userId });
-    const maxCrushes = user?.isPremium ? 10 : 5;
 
     res.json({
       success: true,
       crushes: crushList,
-      count: crushes.length,
+      count: validCrushes.length,
       mutualCount,
       maxCrushes,
       isPremium: user?.isPremium || false
@@ -253,7 +276,15 @@ router.get('/my-list', authenticateToken, async (req: AuthRequest, res: Response
 
   } catch (error) {
     console.error('Error fetching secret crush list:', error);
-    res.status(500).json({ success: false, message: 'Server error' });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error',
+      crushes: [],
+      count: 0,
+      mutualCount: 0,
+      maxCrushes: 5,
+      isPremium: false
+    });
   }
 });
 
@@ -262,19 +293,39 @@ router.get('/mutual', authenticateToken, async (req: AuthRequest, res: Response)
   try {
     const userId = req.userId;
 
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
     const mutualCrushes = await SecretCrush.find({
       userId,
       isActive: true,
       isMutual: true
     })
     .populate('crushUserId', 'username full_name avatar_url is_verified badge_type')
-    .sort({ mutualDetectedAt: -1 });
+    .sort({ mutualDetectedAt: -1 })
+    .lean()
+    .catch(err => {
+      console.error('Error querying mutual crushes:', err);
+      return [];
+    });
 
-    const crushList = mutualCrushes.map(crush => ({
+    if (!mutualCrushes || !Array.isArray(mutualCrushes)) {
+      return res.json({
+        success: true,
+        mutualCrushes: [],
+        count: 0
+      });
+    }
+
+    // Filter out any crushes with missing user data
+    const validCrushes = mutualCrushes.filter(crush => crush.crushUserId && typeof crush.crushUserId === 'object');
+
+    const crushList = validCrushes.map(crush => ({
       id: crush._id,
       user: crush.crushUserId,
-      chatId: crush.mutualChatId,
-      mutualSince: crush.mutualDetectedAt
+      chatId: crush.mutualChatId || null,
+      mutualSince: crush.mutualDetectedAt || null
     }));
 
     res.json({
@@ -285,7 +336,12 @@ router.get('/mutual', authenticateToken, async (req: AuthRequest, res: Response)
 
   } catch (error) {
     console.error('Error fetching mutual crushes:', error);
-    res.status(500).json({ success: false, message: 'Server error' });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error',
+      mutualCrushes: [],
+      count: 0
+    });
   }
 });
 
