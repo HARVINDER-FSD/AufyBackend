@@ -852,13 +852,42 @@ router.delete('/:userId/follow', authenticate, async (req: any, res: Response) =
 })
 
 // GET /api/users/:userId/followers - Get user followers
-router.get('/:userId/followers', async (req: Request, res: Response) => {
+router.get('/:userId/followers', async (req: any, res: Response) => {
     try {
         const { userId } = req.params
+        const currentUserId = req.userId // From auth middleware
         console.log('[FOLLOWERS] Fetching followers for user:', userId)
 
         const client = await MongoClient.connect(MONGODB_URI)
         const db = client.db()
+
+        // Check if target user is private
+        const targetUser = await db.collection('users').findOne({ _id: new ObjectId(userId) })
+        if (!targetUser) {
+            await client.close()
+            return res.status(404).json({ message: 'User not found' })
+        }
+
+        const isPrivate = targetUser.is_private || false
+        const isOwnProfile = currentUserId && currentUserId === userId
+
+        // If private account, check if current user is following
+        if (isPrivate && !isOwnProfile) {
+            if (!currentUserId) {
+                await client.close()
+                return res.status(403).json({ message: 'This account is private' })
+            }
+
+            const isFollowing = await db.collection('follows').findOne({
+                followerId: new ObjectId(currentUserId),
+                followingId: new ObjectId(userId)
+            })
+
+            if (!isFollowing) {
+                await client.close()
+                return res.status(403).json({ message: 'This account is private' })
+            }
+        }
 
         const follows = await db.collection('follows').find({
             followingId: new ObjectId(userId)
@@ -867,8 +896,6 @@ router.get('/:userId/followers', async (req: Request, res: Response) => {
         console.log('[FOLLOWERS] Found', follows.length, 'follow records')
 
         const followerIds = follows.map(f => f.followerId)
-        console.log('[FOLLOWERS] Follower IDs:', followerIds.map(id => id.toString()))
-
         const followers = await db.collection('users').find({
             _id: { $in: followerIds }
         }).toArray()
@@ -880,13 +907,15 @@ router.get('/:userId/followers', async (req: Request, res: Response) => {
         const result = followers.map(user => ({
             id: user._id.toString(),
             username: user.username,
-            name: user.name || user.full_name || '',
+            full_name: user.name || user.full_name || '',
             avatar: user.avatar_url || user.avatar || '/placeholder-user.jpg',
-            verified: user.is_verified || user.verified || false
+            is_verified: user.is_verified || user.verified || false,
+            badge_type: user.badge_type || null,
+            is_private: user.is_private || false
         }))
 
         console.log('[FOLLOWERS] Returning', result.length, 'followers')
-        return res.json(result)
+        return res.json({ data: result })
     } catch (error: any) {
         console.error('Get followers error:', error)
         return res.status(500).json({ message: error.message || 'Failed to get followers' })
@@ -945,12 +974,41 @@ router.get('/:userId/followers/debug', async (req: Request, res: Response) => {
 })
 
 // GET /api/users/:userId/following - Get user following
-router.get('/:userId/following', async (req: Request, res: Response) => {
+router.get('/:userId/following', async (req: any, res: Response) => {
     try {
         const { userId } = req.params
+        const currentUserId = req.userId // From auth middleware
 
         const client = await MongoClient.connect(MONGODB_URI)
         const db = client.db()
+
+        // Check if target user is private
+        const targetUser = await db.collection('users').findOne({ _id: new ObjectId(userId) })
+        if (!targetUser) {
+            await client.close()
+            return res.status(404).json({ message: 'User not found' })
+        }
+
+        const isPrivate = targetUser.is_private || false
+        const isOwnProfile = currentUserId && currentUserId === userId
+
+        // If private account, check if current user is following
+        if (isPrivate && !isOwnProfile) {
+            if (!currentUserId) {
+                await client.close()
+                return res.status(403).json({ message: 'This account is private' })
+            }
+
+            const isFollowing = await db.collection('follows').findOne({
+                followerId: new ObjectId(currentUserId),
+                followingId: new ObjectId(userId)
+            })
+
+            if (!isFollowing) {
+                await client.close()
+                return res.status(403).json({ message: 'This account is private' })
+            }
+        }
 
         const follows = await db.collection('follows').find({
             followerId: new ObjectId(userId)
@@ -963,13 +1021,17 @@ router.get('/:userId/following', async (req: Request, res: Response) => {
 
         await client.close()
 
-        return res.json(following.map(user => ({
+        const result = following.map(user => ({
             id: user._id.toString(),
             username: user.username,
-            name: user.name || '',
-            avatar: user.avatar || '/placeholder-user.jpg',
-            verified: user.verified || false
-        })))
+            full_name: user.name || user.full_name || '',
+            avatar: user.avatar_url || user.avatar || '/placeholder-user.jpg',
+            is_verified: user.is_verified || user.verified || false,
+            badge_type: user.badge_type || null,
+            is_private: user.is_private || false
+        }))
+
+        return res.json({ data: result })
     } catch (error: any) {
         console.error('Get following error:', error)
         return res.status(500).json({ message: error.message || 'Failed to get following' })
