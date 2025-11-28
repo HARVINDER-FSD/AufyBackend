@@ -1,3 +1,4 @@
+// Secret Crush (Favorites Friend) API Routes - Enhanced with defensive queries
 import express, { Response } from 'express';
 import { SecretCrush } from '../models/secret-crush';
 import User from '../models/user';
