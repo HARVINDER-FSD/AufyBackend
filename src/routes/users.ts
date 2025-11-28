@@ -1038,7 +1038,7 @@ router.get('/blocked', authenticate, async (req: any, res: Response) => {
     }
 })
 
-// GET /api/users/:userId/posts - Get user's posts
+// GET /api/users/:userId/posts - Get user's posts (supports both userId and username)
 router.get('/:userId/posts', async (req: any, res: Response) => {
     try {
         const { userId } = req.params
@@ -1049,9 +1049,24 @@ router.get('/:userId/posts', async (req: any, res: Response) => {
         const client = await MongoClient.connect(MONGODB_URI)
         const db = client.db()
 
+        // Check if userId is an ObjectId or username
+        let userObjectId: ObjectId
+        if (ObjectId.isValid(userId) && userId.length === 24) {
+            // It's a valid ObjectId
+            userObjectId = new ObjectId(userId)
+        } else {
+            // It's a username, look up the user
+            const user = await db.collection('users').findOne({ username: userId })
+            if (!user) {
+                await client.close()
+                return res.status(404).json({ success: false, message: 'User not found' })
+            }
+            userObjectId = user._id
+        }
+
         // Get total count
         const total = await db.collection('posts').countDocuments({
-            user_id: new ObjectId(userId),
+            user_id: userObjectId,
             is_archived: { $ne: true }
         })
 
@@ -1059,7 +1074,7 @@ router.get('/:userId/posts', async (req: any, res: Response) => {
         const posts = await db.collection('posts').aggregate([
             {
                 $match: {
-                    user_id: new ObjectId(userId),
+                    user_id: userObjectId,
                     is_archived: { $ne: true }
                 }
             },
