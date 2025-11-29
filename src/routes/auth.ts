@@ -322,20 +322,15 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
       }
     );
 
-    // Send password reset email using Resend
+    // Send password reset email asynchronously (don't wait for it)
     const { sendPasswordResetEmail } = await import('../services/email-resend');
-    const emailSent = await sendPasswordResetEmail(email, token, user.username || user.full_name);
+    sendPasswordResetEmail(email, token, user.username || user.full_name).catch(err => {
+      console.error('[FORGOT PASSWORD] Email send error:', err);
+    });
 
-    if (!emailSent) {
-      // Email not configured, log token for development
-      console.log(`[FORGOT PASSWORD] Reset token for ${email}:`, token);
-      console.log(`[FORGOT PASSWORD] Reset link: http://localhost:8081/reset-password?token=${token}`);
-    }
-
+    // Respond immediately without waiting for email
     res.json({ 
-      message: 'If an account exists with this email, you will receive a password reset link.',
-      // Only return token in development when email is not configured
-      devToken: (!emailSent && process.env.NODE_ENV !== 'production') ? token : undefined
+      message: 'If an account exists with this email, you will receive a password reset link.'
     });
 
   } catch (error) {
@@ -398,9 +393,11 @@ router.post('/reset-password', async (req: Request, res: Response) => {
 
     console.log(`[RESET PASSWORD] Password reset successful for user: ${user.email}`);
 
-    // Send confirmation email
-    const { sendPasswordChangedEmail } = await import('../services/email');
-    await sendPasswordChangedEmail(user.email, user.username || user.full_name);
+    // Send confirmation email asynchronously (don't wait for it)
+    const { sendPasswordChangedEmail } = await import('../services/email-resend');
+    sendPasswordChangedEmail(user.email, user.username || user.full_name).catch(err => {
+      console.error('[RESET PASSWORD] Email send error:', err);
+    });
 
     res.json({ message: 'Password reset successful. You can now login with your new password.' });
 
@@ -474,9 +471,11 @@ router.post('/change-password', async (req: Request, res: Response) => {
 
     console.log(`[CHANGE PASSWORD] Password changed successfully for user: ${user.email}`);
 
-    // Send confirmation email
-    const { sendPasswordChangedEmail } = await import('../services/email');
-    await sendPasswordChangedEmail(user.email, user.username || user.full_name);
+    // Send confirmation email asynchronously (don't wait for it)
+    const { sendPasswordChangedEmail } = await import('../services/email-resend');
+    sendPasswordChangedEmail(user.email, user.username || user.full_name).catch(err => {
+      console.error('[CHANGE PASSWORD] Email send error:', err);
+    });
 
     res.json({ message: 'Password changed successfully' });
 

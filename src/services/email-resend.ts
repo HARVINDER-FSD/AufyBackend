@@ -1,7 +1,20 @@
 import { Resend } from 'resend';
 
-// Initialize Resend
+// Initialize Resend with timeout
 const resend = new Resend(process.env.RESEND_API_KEY);
+
+// Retry helper for failed email sends
+const retryEmailSend = async (fn: () => Promise<any>, retries = 2): Promise<any> => {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (i === retries) throw error;
+      console.log(`⚠️  Email send attempt ${i + 1} failed, retrying...`);
+      await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1))); // Exponential backoff
+    }
+  }
+};
 
 /**
  * Send password reset email using Resend
@@ -21,7 +34,7 @@ export const sendPasswordResetEmail = async (
   const resetUrl = `${backendUrl}/reset-password?token=${resetToken}`;
 
   try {
-    const { data, error } = await resend.emails.send({
+    const { data, error } = await retryEmailSend(() => resend.emails.send({
       from: 'Anufy <onboarding@resend.dev>', // Use resend.dev domain for testing
       to: [to],
       subject: 'Reset Your Anufy Password',
@@ -115,7 +128,7 @@ export const sendPasswordResetEmail = async (
         </body>
         </html>
       `,
-    });
+    }));
 
     if (error) {
       console.error('❌ Resend error:', error);
@@ -148,7 +161,7 @@ export const sendPasswordChangedEmail = async (
   }
 
   try {
-    const { data, error } = await resend.emails.send({
+    const { data, error } = await retryEmailSend(() => resend.emails.send({
       from: 'Anufy <onboarding@resend.dev>',
       to: [to],
       subject: 'Your Anufy Password Was Changed',
@@ -221,7 +234,7 @@ export const sendPasswordChangedEmail = async (
         </body>
         </html>
       `,
-    });
+    }));
 
     if (error) {
       console.error('❌ Resend error:', error);
