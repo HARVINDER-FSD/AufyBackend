@@ -56,9 +56,13 @@ export const sendPasswordResetEmail = async (
     return false;
   }
 
-  const resetUrl = process.env.FRONTEND_URL 
-    ? `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`
-    : `http://localhost:8081/reset-password?token=${resetToken}`;
+  // Generate reset URL based on environment
+  // For mobile app: use deep link (anufy://reset-password?token=...)
+  // For web app: use https URL
+  const frontendUrl = process.env.FRONTEND_URL || 'anufy://';
+  const resetUrl = frontendUrl.startsWith('http') 
+    ? `${frontendUrl}/reset-password?token=${resetToken}`
+    : `${frontendUrl}reset-password?token=${resetToken}`;
 
   const mailOptions = {
     from: `"Anufy" <${EMAIL_CONFIG.auth.user}>`,
