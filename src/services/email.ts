@@ -81,10 +81,18 @@ export const sendPasswordResetEmail = async (
           <tr>
             <td align="center">
               <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                <!-- Header -->
+                <!-- Header with Logo -->
                 <tr>
-                  <td style="padding: 40px 40px 20px; text-align: center;">
-                    <h1 style="margin: 0; color: #0095f6; font-size: 32px; font-weight: 700;">Anufy</h1>
+                  <td style="padding: 40px 40px 20px; text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+                    <!-- App Icon/Logo -->
+                    <div style="margin-bottom: 16px;">
+                      <svg width="80" height="80" viewBox="0 0 80 80" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="80" height="80" rx="16" fill="#ffffff"/>
+                        <text x="40" y="55" font-family="Arial, sans-serif" font-size="36" font-weight="bold" fill="#667eea" text-anchor="middle">A</text>
+                      </svg>
+                    </div>
+                    <h1 style="margin: 0; color: #ffffff; font-size: 32px; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,0.1);">Anufy</h1>
+                    <p style="margin: 8px 0 0; color: #ffffff; font-size: 14px; opacity: 0.9;">Connect. Share. Inspire.</p>
                   </td>
                 </tr>
                 
@@ -231,9 +239,18 @@ export const sendPasswordChangedEmail = async (
           <tr>
             <td align="center">
               <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                <!-- Header with Logo -->
                 <tr>
-                  <td style="padding: 40px 40px 20px; text-align: center;">
-                    <h1 style="margin: 0; color: #0095f6; font-size: 32px; font-weight: 700;">Anufy</h1>
+                  <td style="padding: 40px 40px 20px; text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+                    <!-- App Icon/Logo -->
+                    <div style="margin-bottom: 16px;">
+                      <svg width="80" height="80" viewBox="0 0 80 80" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="80" height="80" rx="16" fill="#ffffff"/>
+                        <text x="40" y="55" font-family="Arial, sans-serif" font-size="36" font-weight="bold" fill="#667eea" text-anchor="middle">A</text>
+                      </svg>
+                    </div>
+                    <h1 style="margin: 0; color: #ffffff; font-size: 32px; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,0.1);">Anufy</h1>
+                    <p style="margin: 8px 0 0; color: #ffffff; font-size: 14px; opacity: 0.9;">Connect. Share. Inspire.</p>
                   </td>
                 </tr>
                 
