@@ -1,14 +1,25 @@
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
 
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID || '',
-  key_secret: process.env.RAZORPAY_KEY_SECRET || '',
-});
+// Initialize Razorpay only if keys are provided
+let razorpay: Razorpay | null = null;
+
+if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
+  razorpay = new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_KEY_SECRET,
+  });
+  console.log('✅ Razorpay initialized');
+} else {
+  console.log('⚠️  Razorpay not configured (keys missing)');
+}
 
 export const razorpayService = {
   // Create order for one-time payment
   async createOrder(amount: number, currency: string = 'INR', receipt: string) {
+    if (!razorpay) {
+      throw new Error('Razorpay not configured. Please add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET to environment variables.');
+    }
     try {
       const order = await razorpay.orders.create({
         amount: amount * 100, // Convert to paise
@@ -45,6 +56,9 @@ export const razorpayService = {
 
   // Create subscription plan (one-time setup)
   async createPlan(amount: number, interval: string = 'monthly') {
+    if (!razorpay) {
+      throw new Error('Razorpay not configured');
+    }
     try {
       const plan = await razorpay.plans.create({
         period: interval,
@@ -65,6 +79,9 @@ export const razorpayService = {
 
   // Create subscription
   async createSubscription(planId: string, totalCount: number = 12) {
+    if (!razorpay) {
+      throw new Error('Razorpay not configured');
+    }
     try {
       const subscription = await razorpay.subscriptions.create({
         plan_id: planId,
@@ -81,6 +98,9 @@ export const razorpayService = {
 
   // Cancel subscription
   async cancelSubscription(subscriptionId: string) {
+    if (!razorpay) {
+      throw new Error('Razorpay not configured');
+    }
     try {
       const subscription = await razorpay.subscriptions.cancel(subscriptionId);
       return subscription;
@@ -92,6 +112,9 @@ export const razorpayService = {
 
   // Fetch subscription details
   async fetchSubscription(subscriptionId: string) {
+    if (!razorpay) {
+      throw new Error('Razorpay not configured');
+    }
     try {
       const subscription = await razorpay.subscriptions.fetch(subscriptionId);
       return subscription;
