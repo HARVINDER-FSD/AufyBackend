@@ -102,9 +102,17 @@ app.use(express.json({ limit: '50mb' }))
 app.use(express.urlencoded({ extended: true, limit: '50mb' }))
 app.use(cookieParser())
 
+// Serve static files (for password reset redirect page)
+app.use(express.static(path.join(__dirname, '..', 'public')))
+
 // Health check
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', message: 'Anufy API Server is running' })
+})
+
+// Password reset redirect page
+app.get('/reset-password', (_req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'reset-redirect.html'))
 })
 
 // Routes

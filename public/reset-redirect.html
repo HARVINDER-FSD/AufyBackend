@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reset Password - Anufy</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    
+    .container {
+      background: white;
+      border-radius: 20px;
+      padding: 40px;
+      max-width: 500px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    }
+    
+    .logo {
+      width: 80px;
+      height: 80px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 24px;
+      font-size: 36px;
+      font-weight: bold;
+      color: white;
+    }
+    
+    h1 {
+      font-size: 28px;
+      color: #262626;
+      margin-bottom: 12px;
+    }
+    
+    p {
+      font-size: 16px;
+      color: #666;
+      line-height: 1.6;
+      margin-bottom: 24px;
+    }
+    
+    .button {
+      display: inline-block;
+      background: #0095f6;
+      color: white;
+      padding: 16px 40px;
+      border-radius: 12px;
+      text-decoration: none;
+      font-size: 18px;
+      font-weight: 700;
+      margin: 12px 0;
+      transition: all 0.3s;
+      box-shadow: 0 4px 12px rgba(0, 149, 246, 0.3);
+    }
+    
+    .button:hover {
+      background: #0084d9;
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(0, 149, 246, 0.4);
+    }
+    
+    .spinner {
+      border: 3px solid #f3f3f3;
+      border-top: 3px solid #0095f6;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+      margin: 20px auto;
+    }
+    
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    
+    .status {
+      margin-top: 20px;
+      padding: 16px;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+    
+    .status.success {
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+    
+    .status.error {
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo">A</div>
+    <h1>Reset Your Password</h1>
+    <p id="message">Opening Anufy app...</p>
+    <div class="spinner" id="spinner"></div>
+    <div id="status"></div>
+    <a href="#" id="manualButton" class="button" style="display: none;">Open Anufy App</a>
+  </div>
+
+  <script>
+    // Get token from URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const token = urlParams.get('token');
+    
+    if (!token) {
+      document.getElementById('message').textContent = 'Invalid reset link';
+      document.getElementById('spinner').style.display = 'none';
+      document.getElementById('status').innerHTML = '<div class="status error">❌ This reset link is invalid or expired.</div>';
+    } else {
+      // Try to open the app
+      const deepLink = `anufy://reset-password?token=${token}`;
+      
+      // Attempt 1: Try to open deep link immediately
+      window.location.href = deepLink;
+      
+      // Attempt 2: Show manual button after 2 seconds
+      setTimeout(() => {
+        document.getElementById('spinner').style.display = 'none';
+        document.getElementById('message').textContent = 'Tap the button below to open Anufy';
+        document.getElementById('manualButton').style.display = 'inline-block';
+        document.getElementById('manualButton').href = deepLink;
+        
+        // Show helpful message
+        document.getElementById('status').innerHTML = `
+          <div class="status success">
+            <strong>📱 Instructions:</strong><br>
+            1. Tap the button above<br>
+            2. Select "Open in Anufy"<br>
+            3. Enter your new password
+          </div>
+        `;
+      }, 2000);
+      
+      // Attempt 3: Try opening via intent (Android)
+      setTimeout(() => {
+        const intentLink = `intent://reset-password?token=${token}#Intent;scheme=anufy;package=com.anufy.mobile;end`;
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = intentLink;
+        document.body.appendChild(iframe);
+      }, 500);
+    }
+    
+    // Handle manual button click
+    document.getElementById('manualButton').addEventListener('click', function(e) {
+      e.preventDefault();
+      window.location.href = deepLink;
+      
+      // Show confirmation
+      setTimeout(() => {
+        document.getElementById('status').innerHTML = `
+          <div class="status success">
+            ✅ Opening Anufy app...<br>
+            <small>If the app doesn't open, make sure Anufy is installed on your device.</small>
+          </div>
+        `;
+      }, 500);
+    });
+  </script>
+</body>
+</html>

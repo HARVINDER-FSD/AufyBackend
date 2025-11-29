@@ -56,13 +56,10 @@ export const sendPasswordResetEmail = async (
     return false;
   }
 
-  // Generate reset URL based on environment
-  // For mobile app: use deep link (anufy://reset-password?token=...)
-  // For web app: use https URL
-  const frontendUrl = process.env.FRONTEND_URL || 'anufy://';
-  const resetUrl = frontendUrl.startsWith('http') 
-    ? `${frontendUrl}/reset-password?token=${resetToken}`
-    : `${frontendUrl}reset-password?token=${resetToken}`;
+  // Generate reset URL - use backend redirect page that opens the app
+  // This works better in email clients than direct deep links
+  const backendUrl = process.env.BACKEND_URL || 'http://localhost:5001';
+  const resetUrl = `${backendUrl}/reset-password?token=${resetToken}`;
 
   const mailOptions = {
     from: `"Anufy" <${EMAIL_CONFIG.auth.user}>`,
@@ -110,20 +107,26 @@ export const sendPasswordResetEmail = async (
                     </p>
                     
                     <!-- Button -->
-                    <table width="100%" cellpadding="0" cellspacing="0" style="margin: 30px 0;">
+                    <table width="100%" cellpadding="0" cellspacing="0" style="margin: 40px 0;">
                       <tr>
                         <td align="center">
-                          <a href="${resetUrl}" style="display: inline-block; padding: 14px 32px; background-color: #0095f6; color: #ffffff; text-decoration: none; border-radius: 8px; font-size: 16px; font-weight: 600;">Reset Password</a>
+                          <!--[if mso]>
+                          <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${resetUrl}" style="height:56px;v-text-anchor:middle;width:280px;" arcsize="21%" stroke="f" fillcolor="#0095f6">
+                            <w:anchorlock/>
+                            <center style="color:#ffffff;font-family:sans-serif;font-size:18px;font-weight:bold;">Reset Password</center>
+                          </v:roundrect>
+                          <![endif]-->
+                          <!--[if !mso]><!-->
+                          <a href="${resetUrl}" style="background-color: #0095f6; border: none; border-radius: 12px; color: #ffffff; display: inline-block; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 18px; font-weight: 700; line-height: 56px; text-align: center; text-decoration: none; width: 280px; -webkit-text-size-adjust: none; mso-hide: all; box-shadow: 0 4px 12px rgba(0, 149, 246, 0.3);">
+                            Reset Password
+                          </a>
+                          <!--<![endif]-->
                         </td>
                       </tr>
                     </table>
                     
-                    <p style="margin: 0 0 20px; color: #8e8e8e; font-size: 14px; line-height: 20px;">
-                      Or copy and paste this link into your browser:
-                    </p>
-                    
-                    <p style="margin: 0 0 20px; color: #0095f6; font-size: 14px; line-height: 20px; word-break: break-all;">
-                      ${resetUrl}
+                    <p style="margin: 20px 0; color: #8e8e8e; font-size: 14px; line-height: 20px; text-align: center;">
+                      Click the button above to reset your password securely.
                     </p>
                     
                     <div style="margin: 30px 0; padding: 16px; background-color: #fff3cd; border-left: 4px solid: #ffc107; border-radius: 4px;">
@@ -162,16 +165,26 @@ export const sendPasswordResetEmail = async (
       </html>
     `,
     text: `
-Reset Your Anufy Password
+🔐 Reset Your Anufy Password
 
 Hi ${username},
 
 We received a request to reset your password for your Anufy account.
 
-Click the link below to create a new password:
+📱 TAP THIS LINK to reset your password:
 ${resetUrl}
 
+💡 Instructions:
+1. Tap the link above on your phone
+2. It will open the Anufy app automatically
+3. Enter your new password
+4. Done!
+
 ⚠️ Important: This link will expire in 1 hour for security reasons.
+
+If the link doesn't work:
+- Copy and paste it into your phone's browser
+- Or open the Anufy app and use the "Forgot Password" option
 
 If you didn't request a password reset, you can safely ignore this email. Your password will remain unchanged.
 
