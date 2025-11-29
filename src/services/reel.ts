@@ -500,7 +500,7 @@ export class ReelService {
   }
 
   // Toggle like reel (like if not liked, unlike if already liked)
-  static async toggleLikeReel(userId: string, reelId: string): Promise<{ liked: boolean }> {
+  static async toggleLikeReel(userId: string, reelId: string): Promise<{ liked: boolean; likes: number }> {
     const db = await getDatabase()
     const reelsCollection = db.collection('reels')
     const likesCollection = db.collection('likes')
@@ -518,14 +518,15 @@ export class ReelService {
       post_id: new ObjectId(reelId)
     })
 
+    let liked: boolean
+
     if (existingLike) {
       // Unlike
       await likesCollection.deleteOne({
         user_id: new ObjectId(userId),
         post_id: new ObjectId(reelId)
       })
-      await cache.del(`reel:${reelId}`)
-      return { liked: false }
+      liked = false
     } else {
       // Like
       await likesCollection.insertOne({
@@ -533,9 +534,15 @@ export class ReelService {
         post_id: new ObjectId(reelId),
         created_at: new Date()
       })
-      await cache.del(`reel:${reelId}`)
-      return { liked: true }
+      liked = true
     }
+
+    // Get updated like count
+    const likeCount = await likesCollection.countDocuments({ post_id: new ObjectId(reelId) })
+
+    await cache.del(`reel:${reelId}`)
+    
+    return { liked, likes: likeCount }
   }
 
   // Increment share count

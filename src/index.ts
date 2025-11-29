@@ -35,6 +35,7 @@ import notesRoutes from './routes/notes'
 import crushListRoutes from './routes/crush-list'
 import secretCrushRoutes from './routes/secret-crush'
 import premiumRoutes from './routes/premium'
+import demoRoutes from './routes/demo'
 
 const app = express()
 const PORT = parseInt(process.env.PORT || '8000')
@@ -140,6 +141,7 @@ app.use('/api/notes', notesRoutes)
 app.use('/api/crush-list', crushListRoutes)
 app.use('/api/secret-crush', secretCrushRoutes)
 app.use('/api/premium', premiumRoutes)
+app.use('/api/demo', demoRoutes)
 
 // Error handling
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

@@ -118,8 +118,9 @@ router.post("/:reelId/like", authenticateToken, async (req, res) => {
 
     res.json({
       success: true,
+      liked: result.liked,
+      likes: result.likes,
       message: result.liked ? "Reel liked successfully" : "Reel unliked successfully",
-      data: { liked: result.liked }
     })
   } catch (error: any) {
     res.status(error.statusCode || 500).json({
