@@ -356,6 +356,101 @@ router.get('/:userId([0-9a-fA-F]{24})', async (req: Request, res: Response) => {
     }
 })
 
+// GET /api/users/:username - Get user by username (catches non-MongoDB ID patterns)
+// This MUST be after the /:userId route to avoid conflicts
+router.get('/:username', async (req: any, res: Response) => {
+    try {
+        const { username } = req.params
+
+        // If it looks like a MongoDB ID, skip this route (let /:userId handle it)
+        if (/^[0-9a-fA-F]{24}$/.test(username)) {
+            return res.status(404).json({ message: 'User not found' })
+        }
+
+        // Try to get current user ID from token (optional)
+        let currentUserId = null;
+        try {
+            const authHeader = req.headers.authorization;
+            const token = authHeader && authHeader.split(' ')[1];
+            if (token) {
+                const decoded = jwt.verify(token, JWT_SECRET) as any;
+                currentUserId = decoded.userId;
+            }
+        } catch (err) {
+            // Token is optional, continue without it
+        }
+
+        const client = await MongoClient.connect(MONGODB_URI)
+        const db = client.db()
+        const user = await db.collection('users').findOne({ username })
+
+        if (!user) {
+            await client.close()
+            return res.status(404).json({ message: 'User not found' })
+        }
+
+        // Check follow status if user is logged in
+        let isFollowing = false;
+        let followsBack = false;
+        let isMutualFollow = false;
+
+        if (currentUserId) {
+            const followRecord = await db.collection('follows').findOne({
+                followerId: new ObjectId(currentUserId),
+                followingId: user._id
+            })
+            isFollowing = !!followRecord;
+
+            const reverseFollow = await db.collection('follows').findOne({
+                followerId: user._id,
+                followingId: new ObjectId(currentUserId)
+            })
+            followsBack = !!reverseFollow;
+            isMutualFollow = isFollowing && followsBack;
+        }
+
+        // Get follower/following counts
+        const followersCount = await db.collection('follows').countDocuments({
+            followingId: user._id
+        })
+        const followingCount = await db.collection('follows').countDocuments({
+            followerId: user._id
+        })
+
+        await client.close()
+
+        return res.json({
+            _id: user._id.toString(),
+            id: user._id.toString(),
+            username: user.username,
+            fullName: user.full_name || user.name || '',
+            full_name: user.full_name || user.name || '',
+            name: user.full_name || user.name || '',
+            bio: user.bio || '',
+            avatar: user.avatar_url || user.avatar || '/placeholder-user.jpg',
+            followers: [],
+            following: [],
+            followersCount,
+            followingCount,
+            followers_count: followersCount,
+            following_count: followingCount,
+            isFollowing,
+            is_following: isFollowing,
+            followsBack,
+            isMutualFollow,
+            verified: user.is_verified || user.verified || false,
+            is_verified: user.is_verified || user.verified || false,
+            badge_type: user.badge_type || user.verification_type || null,
+            posts_count: user.posts_count || 0,
+            isPrivate: user.is_private || false,
+            is_private: user.is_private || false
+        })
+    } catch (error: any) {
+        console.error('Get user by username error:', error)
+        return res.status(500).json({ message: error.message || 'Failed to get user' })
+    }
+})
+
 // PUT /api/users/profile - Update user profile
 router.put('/profile', authenticate, async (req: any, res: Response) => {
     try {
