@@ -65,11 +65,38 @@ mongoose.connect(MONGODB_URI, {
   console.log('⚠️  Server will continue but database operations may fail')
 })
 
+// Security Middleware
+import {
+  rateLimiter,
+  sanitizeInput,
+  xssProtection,
+  validateRequestSignature,
+  csrfProtection,
+  ipFilter,
+  detectSuspiciousActivity,
+  secureSession
+} from './middleware/security'
+
 // Middleware
 app.use(cors({
-  origin: '*', // Allow all origins for now, restrict in production
-  credentials: true
+  origin: process.env.NODE_ENV === 'production' 
+    ? ['https://anufy.com', 'https://www.anufy.com'] 
+    : '*',
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'X-Timestamp', 'X-Signature']
 }))
+
+// Security layers
+app.use(xssProtection)
+app.use(ipFilter)
+app.use(detectSuspiciousActivity)
+app.use(sanitizeInput)
+app.use(rateLimiter(100, 60000)) // 100 requests per minute
+app.use(validateRequestSignature)
+app.use(csrfProtection)
+app.use(secureSession)
+
 app.use(express.json({ limit: '50mb' }))
 app.use(express.urlencoded({ extended: true, limit: '50mb' }))
 app.use(cookieParser())

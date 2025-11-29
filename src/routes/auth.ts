@@ -2,13 +2,20 @@ import { Router, Request, Response } from 'express'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { getDatabase } from '../lib/database'
+import { 
+  bruteForceProtection, 
+  recordFailedAttempt, 
+  clearFailedAttempts,
+  validatePasswordStrength 
+} from '../middleware/security'
+import { generatePasswordResetToken, hash } from '../utils/encryption'
 
 const router = Router()
 
 const JWT_SECRET = process.env.JWT_SECRET || '4d9f1c8c6b27a67e9f3a81d2e5b0f78c72d1e7a64d59c83fb20e5a72a8c4d192'
 
 // POST /api/auth/login
-router.post('/login', async (req: Request, res: Response) => {
+router.post('/login', bruteForceProtection, async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body
 
@@ -41,6 +48,7 @@ router.post('/login', async (req: Request, res: Response) => {
 
     if (!user) {
       console.log('[LOGIN] User not found');
+      recordFailedAttempt(email);
       return res.status(401).json({
         message: "Invalid email or password"
       })
@@ -55,10 +63,14 @@ router.post('/login', async (req: Request, res: Response) => {
 
     if (!isPasswordValid) {
       console.log('[LOGIN] Invalid password');
+      recordFailedAttempt(email);
       return res.status(401).json({
         message: "Invalid email or password"
       })
     }
+    
+    // Clear failed attempts on successful login
+    clearFailedAttempts(email);
 
     // Generate JWT token
     const token = jwt.sign(
@@ -273,5 +285,205 @@ router.post('/logout', (req: Request, res: Response) => {
   res.clearCookie('client-token')
   return res.json({ message: "Logged out successfully" })
 })
+
+// POST /api/auth/forgot-password
+router.post('/forgot-password', async (req: Request, res: Response) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ message: 'Email is required' });
+    }
+
+    const db = await getDatabase();
+    const usersCollection = db.collection('users');
+
+    const user = await usersCollection.findOne({ email });
+
+    // Always return success to prevent email enumeration
+    if (!user) {
+      return res.json({ 
+        message: 'If an account exists with this email, you will receive a password reset link.' 
+      });
+    }
+
+    // Generate secure reset token
+    const { token, hash: tokenHash, expires } = generatePasswordResetToken();
+
+    // Store reset token in database
+    await usersCollection.updateOne(
+      { email },
+      {
+        $set: {
+          resetPasswordToken: tokenHash,
+          resetPasswordExpires: expires,
+          updated_at: new Date()
+        }
+      }
+    );
+
+    // Send password reset email
+    const { sendPasswordResetEmail } = await import('../services/email');
+    const emailSent = await sendPasswordResetEmail(email, token, user.username || user.full_name);
+
+    if (!emailSent) {
+      // Email not configured, log token for development
+      console.log(`[FORGOT PASSWORD] Reset token for ${email}:`, token);
+      console.log(`[FORGOT PASSWORD] Reset link: http://localhost:8081/reset-password?token=${token}`);
+    }
+
+    res.json({ 
+      message: 'If an account exists with this email, you will receive a password reset link.',
+      // Only return token in development when email is not configured
+      devToken: (!emailSent && process.env.NODE_ENV !== 'production') ? token : undefined
+    });
+
+  } catch (error) {
+    console.error('[FORGOT PASSWORD] Error:', error);
+    res.status(500).json({ message: 'Failed to process request' });
+  }
+});
+
+// POST /api/auth/reset-password
+router.post('/reset-password', async (req: Request, res: Response) => {
+  try {
+    const { token, newPassword } = req.body;
+
+    if (!token || !newPassword) {
+      return res.status(400).json({ message: 'Token and new password are required' });
+    }
+
+    // Validate password strength
+    const passwordValidation = validatePasswordStrength(newPassword);
+    if (!passwordValidation.valid) {
+      return res.status(400).json({ 
+        message: 'Password does not meet requirements',
+        errors: passwordValidation.errors 
+      });
+    }
+
+    const db = await getDatabase();
+    const usersCollection = db.collection('users');
+
+    // Hash the token to compare with stored hash
+    const tokenHash = hash(token);
+
+    // Find user with valid reset token
+    const user = await usersCollection.findOne({
+      resetPasswordToken: tokenHash,
+      resetPasswordExpires: { $gt: new Date() }
+    });
+
+    if (!user) {
+      return res.status(400).json({ message: 'Invalid or expired reset token' });
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update password and clear reset token
+    await usersCollection.updateOne(
+      { _id: user._id },
+      {
+        $set: {
+          password: hashedPassword,
+          updated_at: new Date()
+        },
+        $unset: {
+          resetPasswordToken: '',
+          resetPasswordExpires: ''
+        }
+      }
+    );
+
+    console.log(`[RESET PASSWORD] Password reset successful for user: ${user.email}`);
+
+    // Send confirmation email
+    const { sendPasswordChangedEmail } = await import('../services/email');
+    await sendPasswordChangedEmail(user.email, user.username || user.full_name);
+
+    res.json({ message: 'Password reset successful. You can now login with your new password.' });
+
+  } catch (error) {
+    console.error('[RESET PASSWORD] Error:', error);
+    res.status(500).json({ message: 'Failed to reset password' });
+  }
+});
+
+// POST /api/auth/change-password
+router.post('/change-password', async (req: Request, res: Response) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const token = req.headers.authorization?.replace('Bearer ', '');
+
+    if (!token) {
+      return res.status(401).json({ message: 'Authentication required' });
+    }
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ message: 'Current and new password are required' });
+    }
+
+    // Validate new password strength
+    const passwordValidation = validatePasswordStrength(newPassword);
+    if (!passwordValidation.valid) {
+      return res.status(400).json({ 
+        message: 'New password does not meet requirements',
+        errors: passwordValidation.errors 
+      });
+    }
+
+    // Verify JWT token
+    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    
+    const db = await getDatabase();
+    const usersCollection = db.collection('users');
+
+    const user = await usersCollection.findOne({ _id: decoded.userId });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Verify current password
+    const isCurrentPasswordValid = await bcrypt.compare(currentPassword, user.password);
+
+    if (!isCurrentPasswordValid) {
+      return res.status(401).json({ message: 'Current password is incorrect' });
+    }
+
+    // Check if new password is same as current
+    const isSamePassword = await bcrypt.compare(newPassword, user.password);
+    if (isSamePassword) {
+      return res.status(400).json({ message: 'New password must be different from current password' });
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update password
+    await usersCollection.updateOne(
+      { _id: user._id },
+      {
+        $set: {
+          password: hashedPassword,
+          updated_at: new Date()
+        }
+      }
+    );
+
+    console.log(`[CHANGE PASSWORD] Password changed successfully for user: ${user.email}`);
+
+    // Send confirmation email
+    const { sendPasswordChangedEmail } = await import('../services/email');
+    await sendPasswordChangedEmail(user.email, user.username || user.full_name);
+
+    res.json({ message: 'Password changed successfully' });
+
+  } catch (error) {
+    console.error('[CHANGE PASSWORD] Error:', error);
+    res.status(500).json({ message: 'Failed to change password' });
+  }
+});
 
 export default router

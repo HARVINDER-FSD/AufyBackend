@@ -118,6 +118,7 @@ const userSchema = new mongoose.Schema({
   settings: {
     type: mongoose.Schema.Types.Mixed,
     default: {
+      // Privacy Settings
       darkMode: true,
       privateAccount: false,
       showOnlineStatus: true,
@@ -127,6 +128,25 @@ const userSchema = new mongoose.Schema({
       whoCanMessage: 'everyone',
       whoCanSeeStories: 'everyone',
       whoCanSeeFollowers: 'everyone',
+      
+      // Message Privacy
+      groupRequests: true,
+      messageReplies: 'everyone',
+      showActivityStatus: true,
+      readReceipts: true,
+      
+      // Message Requests Filters
+      filterOffensive: true,
+      filterLowQuality: true,
+      filterUnknown: false,
+      
+      // Media Settings
+      saveOriginalPhotos: false,
+      uploadQuality: 'normal',
+      autoPlayVideos: true,
+      useLessData: false,
+      
+      // Notifications
       pushNotifications: true,
       emailNotifications: false,
       likes: true,
@@ -139,7 +159,46 @@ const userSchema = new mongoose.Schema({
       posts: true,
       marketing: false,
       security: true,
+      
+      // Well-being
+      quietModeEnabled: false,
+      quietModeStart: '22:00',
+      quietModeEnd: '07:00',
+      takeBreakEnabled: false,
+      takeBreakInterval: 30,
+      dailyLimitEnabled: false,
+      dailyLimitMinutes: 60,
+      
+      // Limits
+      limitComments: false,
+      limitMessages: false,
+      limitTags: false,
+      
+      // AI & Personalization
+      suggestedReels: true,
+      adsPersonalization: true,
+      dataSharing: false,
+      
+      // Sharing to Other Apps
+      shareToFacebook: false,
+      shareToThreads: false,
+      shareToTwitter: false,
+      shareToTumblr: false,
+      
+      // Device Permissions
+      cameraPermission: true,
+      microphonePermission: true,
+      photosPermission: true,
+      locationPermission: false,
     }
+  },
+  resetPasswordToken: {
+    type: String,
+    default: null
+  },
+  resetPasswordExpires: {
+    type: Date,
+    default: null
   },
   created_at: {
     type: Date,
