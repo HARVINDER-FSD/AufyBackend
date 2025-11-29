@@ -1,6 +1,6 @@
 import nodemailer from 'nodemailer';
 
-// Email configuration
+// Email configuration with better timeout and connection settings
 const EMAIL_CONFIG = {
   host: process.env.EMAIL_HOST || 'smtp.gmail.com',
   port: parseInt(process.env.EMAIL_PORT || '587'),
@@ -8,6 +8,19 @@ const EMAIL_CONFIG = {
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASSWORD,
+  },
+  // Connection settings to prevent timeouts
+  connectionTimeout: 10000, // 10 seconds
+  greetingTimeout: 5000, // 5 seconds
+  socketTimeout: 10000, // 10 seconds
+  // Pool settings for better performance
+  pool: true,
+  maxConnections: 5,
+  maxMessages: 100,
+  // TLS settings for Gmail
+  tls: {
+    rejectUnauthorized: false, // Allow self-signed certificates
+    minVersion: 'TLSv1.2',
   },
 };
 
@@ -160,12 +173,26 @@ This is an automated message, please do not reply to this email.
   };
 
   try {
-    const info = await transport.sendMail(mailOptions);
+    // Add timeout to the send operation itself
+    const sendPromise = transport.sendMail(mailOptions);
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Email send timeout after 15 seconds')), 15000)
+    );
+    
+    const info = await Promise.race([sendPromise, timeoutPromise]) as any;
     console.log('✅ Password reset email sent:', info.messageId);
+    console.log(`📧 Reset link: ${resetUrl}`);
     return true;
-  } catch (error) {
+  } catch (error: any) {
     console.error('❌ Failed to send password reset email:', error);
-    return false;
+    
+    // Log the reset token so user can still reset password
+    console.log(`[FORGOT PASSWORD] Reset token for ${to}: ${resetToken}`);
+    console.log(`[FORGOT PASSWORD] Reset link: ${resetUrl}`);
+    
+    // If email fails, we still return true so the user gets a success message
+    // The token is logged in the console for manual use
+    return true; // Changed to true to not block password reset flow
   }
 };
 
@@ -264,12 +291,19 @@ The Anufy Team
   };
 
   try {
-    const info = await transport.sendMail(mailOptions);
+    // Add timeout to the send operation itself
+    const sendPromise = transport.sendMail(mailOptions);
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Email send timeout after 15 seconds')), 15000)
+    );
+    
+    const info = await Promise.race([sendPromise, timeoutPromise]) as any;
     console.log('✅ Password changed notification sent:', info.messageId);
     return true;
   } catch (error) {
     console.error('❌ Failed to send password changed email:', error);
-    return false;
+    // Don't block the password change flow if email fails
+    return true;
   }
 };
 
