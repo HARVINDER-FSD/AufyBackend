@@ -59,10 +59,10 @@ const userSchema = new mongoose.Schema({
     enum: ['none', 'pending', 'approved', 'rejected'],
     default: 'none'
   },
-  // Premium subscription fields
+  // Premium subscription fields (₹99/month)
   premium_tier: {
     type: String,
-    enum: ['none', 'basic', 'plus', 'pro', 'enterprise'],
+    enum: ['none', 'premium'],
     default: 'none'
   },
   premium_status: {
@@ -105,7 +105,7 @@ const userSchema = new mongoose.Schema({
   },
   maxSecretCrushes: {
     type: Number,
-    default: 5  // 5 for free users, 10 for premium
+    default: 5  // Free: 5 crushes, Premium (₹99/month): 10 crushes
   },
   isPremium: {
     type: Boolean,

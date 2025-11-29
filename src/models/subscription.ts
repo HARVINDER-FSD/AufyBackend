@@ -1,24 +1,31 @@
-import mongoose from 'mongoose'
+import mongoose from 'mongoose';
 
 const subscriptionSchema = new mongoose.Schema({
-  user_id: {
+  userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true,
   },
-  tier: {
+  razorpaySubscriptionId: {
     type: String,
-    enum: ['basic', 'plus', 'pro', 'enterprise'],
+    required: true,
+    unique: true,
+  },
+  razorpayPlanId: {
+    type: String,
     required: true,
   },
   status: {
     type: String,
-    enum: ['active', 'cancelled', 'expired', 'pending'],
-    default: 'pending',
+    enum: ['created', 'active', 'paused', 'cancelled', 'expired'],
+    default: 'created',
   },
-  payment_method: {
-    type: String,
-    enum: ['card', 'upi', 'netbanking', 'wallet', 'paypal'],
+  startDate: {
+    type: Date,
+    required: true,
+  },
+  endDate: {
+    type: Date,
     required: true,
   },
   amount: {
@@ -27,47 +34,22 @@ const subscriptionSchema = new mongoose.Schema({
   },
   currency: {
     type: String,
-    enum: ['INR', 'USD'],
     default: 'INR',
   },
-  billing_cycle: {
-    type: String,
-    enum: ['monthly', 'yearly'],
-    default: 'monthly',
-  },
-  start_date: {
-    type: Date,
-    required: true,
-  },
-  end_date: {
-    type: Date,
-    required: true,
-  },
-  auto_renew: {
+  autoRenew: {
     type: Boolean,
     default: true,
   },
-  payment_id: {
-    type: String,
-    default: null,
-  },
-  invoice_url: {
-    type: String,
-    default: null,
-  },
-  created_at: {
+  createdAt: {
     type: Date,
     default: Date.now,
   },
-  updated_at: {
+  updatedAt: {
     type: Date,
     default: Date.now,
   },
-})
+});
 
-// Indexes
-subscriptionSchema.index({ user_id: 1 })
-subscriptionSchema.index({ status: 1, end_date: 1 })
-subscriptionSchema.index({ tier: 1 })
+const Subscription = mongoose.models.Subscription || mongoose.model('Subscription', subscriptionSchema);
 
-export default mongoose.model('Subscription', subscriptionSchema)
+export default Subscription;
