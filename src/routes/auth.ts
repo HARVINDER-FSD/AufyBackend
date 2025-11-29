@@ -322,8 +322,8 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
       }
     );
 
-    // Send password reset email
-    const { sendPasswordResetEmail } = await import('../services/email');
+    // Send password reset email using Resend
+    const { sendPasswordResetEmail } = await import('../services/email-resend');
     const emailSent = await sendPasswordResetEmail(email, token, user.username || user.full_name);
 
     if (!emailSent) {
