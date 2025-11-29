@@ -151,7 +151,7 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 
 // Start server
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`� Aenufy API Server running on port ${PORT}`)
+  console.log(`🚀 Anufy API Server running on port ${PORT}`)
   console.log(`📍 Health check: http://localhost:${PORT}/health`)
   console.log(`📍 Network access: http://10.55.239.5:${PORT}/health`)
   console.log(`📍 Auth routes: http://localhost:${PORT}/api/auth/*`)
@@ -168,6 +168,26 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`📍 Search routes: http://localhost:${PORT}/api/search/*`)
   console.log(`📍 Analytics routes: http://localhost:${PORT}/api/analytics/*`)
   console.log(`📍 Bookmarks routes: http://localhost:${PORT}/api/bookmarks/*`)
+  
+  // Keep service awake on Render free tier (prevents sleeping after 15 min)
+  if (process.env.NODE_ENV === 'production') {
+    const BACKEND_URL = 'https://aufybackend.onrender.com';
+    
+    console.log('🔄 Self-ping enabled - keeping service awake');
+    
+    setInterval(async () => {
+      try {
+        const response = await fetch(`${BACKEND_URL}/health`);
+        if (response.ok) {
+          console.log('✅ Self-ping successful');
+        } else {
+          console.log('⚠️  Self-ping returned:', response.status);
+        }
+      } catch (error: any) {
+        console.log('⚠️  Self-ping failed:', error.message);
+      }
+    }, 10 * 60 * 1000); // Ping every 10 minutes
+  }
 })
 
 export default app
