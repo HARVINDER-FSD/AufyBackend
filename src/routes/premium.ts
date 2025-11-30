@@ -101,12 +101,20 @@ router.post('/verify-payment', authenticateToken, async (req: AuthRequest, res: 
       {
         $set: {
           isPremium: true,
+          is_premium: true,
           premium_tier: 'premium',
           premium_status: 'active',
           premium_start_date: startDate,
           premium_end_date: endDate,
           premium_auto_renew: true,
           maxSecretCrushes: 10, // Upgrade to 10 crushes
+          // Activate verification badge
+          is_verified: true,
+          verified: true,
+          badge_type: 'blue',
+          verification_type: 'blue',
+          verification_status: 'approved',
+          verification_date: new Date(),
           updated_at: new Date(),
         },
       }
@@ -127,7 +135,7 @@ router.post('/verify-payment', authenticateToken, async (req: AuthRequest, res: 
 
     res.json({
       success: true,
-      message: 'Premium activated successfully!',
+      message: 'Premium activated successfully! You now have a verified badge.',
       premium: {
         tier: 'premium',
         status: 'active',
@@ -136,9 +144,21 @@ router.post('/verify-payment', authenticateToken, async (req: AuthRequest, res: 
         features: {
           secretCrushes: 10,
           verificationBadge: true,
+          badgeType: 'blue',
           adFree: true,
           prioritySupport: true,
+          analytics: true,
+          storyHighlights: true,
+          downloadContent: true,
+          profileViews: true,
+          exclusiveStickers: true,
+          earlyAccess: true,
         },
+      },
+      badge: {
+        type: 'blue',
+        verified: true,
+        status: 'approved',
       },
     });
   } catch (error) {
