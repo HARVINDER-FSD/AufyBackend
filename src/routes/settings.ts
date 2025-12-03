@@ -48,14 +48,21 @@ router.patch('/', authenticateToken, async (req: AuthRequest, res: Response) => 
       ...req.body
     };
     
+    // CRITICAL: Sync is_private field with privateAccount setting
+    const updateFields: any = {
+      settings: updatedSettings,
+      updated_at: new Date()
+    };
+    
+    // If privateAccount is being updated, also update is_private
+    if ('privateAccount' in req.body) {
+      updateFields.is_private = req.body.privateAccount;
+      console.log('[Settings] Syncing is_private =', req.body.privateAccount);
+    }
+    
     await usersCollection.updateOne(
       { _id: user._id },
-      {
-        $set: {
-          settings: updatedSettings,
-          updated_at: new Date()
-        }
-      }
+      { $set: updateFields }
     );
 
     res.json({ 
