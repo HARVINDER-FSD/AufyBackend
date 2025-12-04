@@ -59,12 +59,14 @@ router.get('/me', authenticate, async (req: any, res: Response) => {
             return res.status(404).json({ message: 'User not found' })
         }
 
-        // Get actual follower/following counts from follows collection
+        // Get actual follower/following counts from follows collection (ACCEPTED ONLY)
         const followersCount = await db.collection('follows').countDocuments({
-            followingId: user._id
+            followingId: user._id,
+            status: 'accepted'
         })
         const followingCount = await db.collection('follows').countDocuments({
-            followerId: user._id
+            followerId: user._id,
+            status: 'accepted'
         })
 
         return res.json({
@@ -213,12 +215,14 @@ router.get('/username/:username', async (req: any, res: Response) => {
             }
         }
 
-        // Get follower/following counts
+        // Get follower/following counts (ACCEPTED ONLY)
         const followersCount = await db.collection('follows').countDocuments({
-            followingId: user._id
+            followingId: user._id,
+            status: 'accepted'
         })
         const followingCount = await db.collection('follows').countDocuments({
-            followerId: user._id
+            followerId: user._id,
+            status: 'accepted'
         })
 
         await client.close()
@@ -409,12 +413,14 @@ router.get('/:username', async (req: any, res: Response) => {
             isMutualFollow = isFollowing && followsBack;
         }
 
-        // Get follower/following counts
+        // Get follower/following counts (ACCEPTED ONLY)
         const followersCount = await db.collection('follows').countDocuments({
-            followingId: user._id
+            followingId: user._id,
+            status: 'accepted'
         })
         const followingCount = await db.collection('follows').countDocuments({
-            followerId: user._id
+            followerId: user._id,
+            status: 'accepted'
         })
 
         await client.close()
@@ -758,9 +764,10 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
                 requested_id: new ObjectId(userId)
             })
 
-            // Get updated count
+            // Get updated count (ACCEPTED ONLY)
             const followerCount = await db.collection('follows').countDocuments({
-                followingId: new ObjectId(userId)
+                followingId: new ObjectId(userId),
+                status: 'accepted'
             })
 
             await client.close()
@@ -843,12 +850,14 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
                 await db.collection('follows').insertOne({
                     followerId: new ObjectId(currentUserId),
                     followingId: new ObjectId(userId),
+                    status: 'accepted',
                     createdAt: new Date()
                 })
 
-                // Get updated count
+                // Get updated count (ACCEPTED ONLY)
                 const followerCount = await db.collection('follows').countDocuments({
-                    followingId: new ObjectId(userId)
+                    followingId: new ObjectId(userId),
+                    status: 'accepted'
                 })
 
                 // Check if this creates a mutual follow
@@ -1761,12 +1770,14 @@ router.post('/follow-requests/:requestId/approve', authenticate, async (req: any
         await db.collection('follows').insertOne({
             followerId: request.requester_id,
             followingId: request.requested_id,
+            status: 'accepted',
             createdAt: new Date()
         })
 
-        // Update follower counts
+        // Update follower counts (ACCEPTED ONLY)
         const followerCount = await db.collection('follows').countDocuments({
-            followingId: new ObjectId(currentUserId)
+            followingId: new ObjectId(currentUserId),
+            status: 'accepted'
         })
 
         // Send notification

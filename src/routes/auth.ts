@@ -72,7 +72,7 @@ router.post('/login', bruteForceProtection, async (req: Request, res: Response) 
     // Clear failed attempts on successful login
     clearFailedAttempts(email);
 
-    // Generate JWT token
+    // Generate JWT token (90 days - Instagram-style long session)
     const token = jwt.sign(
       {
         userId: user._id.toString(),
@@ -81,14 +81,14 @@ router.post('/login', bruteForceProtection, async (req: Request, res: Response) 
         name: user.name
       },
       JWT_SECRET,
-      { expiresIn: '7d' }
+      { expiresIn: '90d' }
     )
 
     // Set httpOnly cookie for server-side access
     res.cookie('token', token, {
       httpOnly: true,
       path: '/',
-      maxAge: 60 * 60 * 24 * 7 * 1000, // 7 days in milliseconds
+      maxAge: 60 * 60 * 24 * 90 * 1000, // 90 days in milliseconds
       sameSite: 'lax',
       secure: process.env.NODE_ENV === 'production',
     })
@@ -97,7 +97,7 @@ router.post('/login', bruteForceProtection, async (req: Request, res: Response) 
     res.cookie('client-token', token, {
       httpOnly: false,
       path: '/',
-      maxAge: 60 * 60 * 24 * 7 * 1000, // 7 days in milliseconds
+      maxAge: 60 * 60 * 24 * 90 * 1000, // 7 days in milliseconds
       sameSite: 'lax',
       secure: process.env.NODE_ENV === 'production',
     })
@@ -226,7 +226,7 @@ router.post('/register', async (req: Request, res: Response) => {
       updatedAt: new Date()
     })
 
-    // Generate JWT token
+    // Generate JWT token (90 days - Instagram-style long session)
     const token = jwt.sign(
       {
         userId: result.insertedId.toString(),
@@ -235,14 +235,14 @@ router.post('/register', async (req: Request, res: Response) => {
         name: name || username
       },
       JWT_SECRET,
-      { expiresIn: '7d' }
+      { expiresIn: '90d' }
     )
 
     // Set cookies
     res.cookie('token', token, {
       httpOnly: true,
       path: '/',
-      maxAge: 60 * 60 * 24 * 7 * 1000,
+      maxAge: 60 * 60 * 24 * 90 * 1000, // 90 days
       sameSite: 'lax',
       secure: process.env.NODE_ENV === 'production',
     })
