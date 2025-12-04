@@ -960,7 +960,7 @@ router.delete('/:userId/follow', authenticate, async (req: any, res: Response) =
 })
 
 // GET /api/users/:userId/followers - Get user followers
-router.get('/:userId/followers', async (req: any, res: Response) => {
+router.get('/:userId/followers', authenticate, async (req: any, res: Response) => {
     try {
         const { userId } = req.params
         const currentUserId = req.userId // From auth middleware
@@ -977,7 +977,18 @@ router.get('/:userId/followers', async (req: any, res: Response) => {
         }
 
         const isPrivate = targetUser.is_private || false
-        const isOwnProfile = currentUserId && currentUserId === userId
+        const isOwnProfile = currentUserId && (
+            currentUserId === userId || 
+            currentUserId.toString() === userId.toString() ||
+            new ObjectId(currentUserId).equals(new ObjectId(userId))
+        )
+
+        console.log('[FOLLOWERS] Privacy check:', { 
+            isPrivate, 
+            isOwnProfile, 
+            currentUserId: currentUserId?.toString(), 
+            userId: userId?.toString() 
+        })
 
         // If private account, check if current user is following
         if (isPrivate && !isOwnProfile) {
@@ -988,7 +999,8 @@ router.get('/:userId/followers', async (req: any, res: Response) => {
 
             const isFollowing = await db.collection('follows').findOne({
                 followerId: new ObjectId(currentUserId),
-                followingId: new ObjectId(userId)
+                followingId: new ObjectId(userId),
+                status: 'accepted'
             })
 
             if (!isFollowing) {
@@ -998,7 +1010,8 @@ router.get('/:userId/followers', async (req: any, res: Response) => {
         }
 
         const follows = await db.collection('follows').find({
-            followingId: new ObjectId(userId)
+            followingId: new ObjectId(userId),
+            status: 'accepted'
         }).toArray()
 
         console.log('[FOLLOWERS] Found', follows.length, 'follow records')
@@ -1082,7 +1095,7 @@ router.get('/:userId/followers/debug', async (req: Request, res: Response) => {
 })
 
 // GET /api/users/:userId/following - Get user following
-router.get('/:userId/following', async (req: any, res: Response) => {
+router.get('/:userId/following', authenticate, async (req: any, res: Response) => {
     try {
         const { userId } = req.params
         const currentUserId = req.userId // From auth middleware
@@ -1098,7 +1111,18 @@ router.get('/:userId/following', async (req: any, res: Response) => {
         }
 
         const isPrivate = targetUser.is_private || false
-        const isOwnProfile = currentUserId && currentUserId === userId
+        const isOwnProfile = currentUserId && (
+            currentUserId === userId || 
+            currentUserId.toString() === userId.toString() ||
+            new ObjectId(currentUserId).equals(new ObjectId(userId))
+        )
+
+        console.log('[FOLLOWING] Privacy check:', { 
+            isPrivate, 
+            isOwnProfile, 
+            currentUserId: currentUserId?.toString(), 
+            userId: userId?.toString() 
+        })
 
         // If private account, check if current user is following
         if (isPrivate && !isOwnProfile) {
@@ -1109,7 +1133,8 @@ router.get('/:userId/following', async (req: any, res: Response) => {
 
             const isFollowing = await db.collection('follows').findOne({
                 followerId: new ObjectId(currentUserId),
-                followingId: new ObjectId(userId)
+                followingId: new ObjectId(userId),
+                status: 'accepted'
             })
 
             if (!isFollowing) {
@@ -1119,7 +1144,8 @@ router.get('/:userId/following', async (req: any, res: Response) => {
         }
 
         const follows = await db.collection('follows').find({
-            followerId: new ObjectId(userId)
+            followerId: new ObjectId(userId),
+            status: 'accepted'
         }).toArray()
 
         const followingIds = follows.map(f => f.followingId)

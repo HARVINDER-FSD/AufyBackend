@@ -36,6 +36,7 @@ import crushListRoutes from './routes/crush-list'
 import secretCrushRoutes from './routes/secret-crush'
 import premiumRoutes from './routes/premium'
 import demoRoutes from './routes/demo'
+import aiRoutes from './routes/ai'
 
 const app = express()
 const PORT = parseInt(process.env.PORT || '8000')
@@ -47,25 +48,25 @@ mongoose.connect(MONGODB_URI, {
   serverSelectionTimeoutMS: 15000,
   socketTimeoutMS: 45000,
 })
-.then(async () => {
-  console.log('✅ MongoDB connected successfully')
-  
-  // Create indexes for faster queries
-  try {
-    const db = mongoose.connection.db
-    if (db) {
-      await db.collection('users').createIndex({ email: 1 }, { unique: true })
-      await db.collection('users').createIndex({ username: 1 }, { unique: true })
-      console.log('✅ Database indexes created')
+  .then(async () => {
+    console.log('✅ MongoDB connected successfully')
+
+    // Create indexes for faster queries
+    try {
+      const db = mongoose.connection.db
+      if (db) {
+        await db.collection('users').createIndex({ email: 1 }, { unique: true })
+        await db.collection('users').createIndex({ username: 1 }, { unique: true })
+        console.log('✅ Database indexes created')
+      }
+    } catch (error) {
+      console.log('⚠️  Index creation skipped (may already exist)')
     }
-  } catch (error) {
-    console.log('⚠️  Index creation skipped (may already exist)')
-  }
-})
-.catch((error) => {
-  console.error('❌ MongoDB connection error:', error.message)
-  console.log('⚠️  Server will continue but database operations may fail')
-})
+  })
+  .catch((error) => {
+    console.error('❌ MongoDB connection error:', error.message)
+    console.log('⚠️  Server will continue but database operations may fail')
+  })
 
 // Security Middleware
 import {
@@ -81,9 +82,7 @@ import {
 
 // Middleware
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production' 
-    ? ['https://anufy.com', 'https://www.anufy.com'] 
-    : '*',
+  origin: '*', // Allow all origins for mobile app compatibility
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'X-Timestamp', 'X-Signature']
@@ -142,6 +141,7 @@ app.use('/api/crush-list', crushListRoutes)
 app.use('/api/secret-crush', secretCrushRoutes)
 app.use('/api/premium', premiumRoutes)
 app.use('/api/demo', demoRoutes)
+app.use('/api/ai', aiRoutes)
 
 // Error handling
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -170,13 +170,13 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`📍 Search routes: http://localhost:${PORT}/api/search/*`)
   console.log(`📍 Analytics routes: http://localhost:${PORT}/api/analytics/*`)
   console.log(`📍 Bookmarks routes: http://localhost:${PORT}/api/bookmarks/*`)
-  
+
   // Keep service awake on Render free tier (prevents sleeping after 15 min)
   if (process.env.NODE_ENV === 'production') {
     const BACKEND_URL = 'https://aufybackend.onrender.com';
-    
+
     console.log('🔄 Self-ping enabled - keeping service awake');
-    
+
     setInterval(async () => {
       try {
         const response = await fetch(`${BACKEND_URL}/health`);

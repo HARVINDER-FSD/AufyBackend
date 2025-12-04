@@ -22,6 +22,11 @@ export const authenticateToken = async (req: AuthRequest, res: Response, next: N
       return res.status(401).json({ message: 'Authentication required' });
     }
     
+    // Log token format for debugging (first/last 10 chars only)
+    if (token.length < 20) {
+      console.error('⚠️ Token too short:', token.length, 'chars');
+    }
+    
     // Verify token
     const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
     
@@ -31,9 +36,13 @@ export const authenticateToken = async (req: AuthRequest, res: Response, next: N
     req.userId = decoded.userId;
     
     next();
-  } catch (error) {
-    console.error('Authentication error:', error);
-    return res.status(403).json({ message: 'Invalid or expired token' });
+  } catch (error: any) {
+    console.error('Authentication error:', error.message);
+    console.error('Token format issue - client needs to clear cache and login again');
+    return res.status(403).json({ 
+      message: 'Invalid or expired token',
+      hint: 'Please logout and login again to get a fresh token'
+    });
   }
 };
 
