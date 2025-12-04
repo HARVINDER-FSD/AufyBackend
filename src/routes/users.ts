@@ -817,8 +817,13 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
 
                 // Send notification
                 try {
-                    const { notifyFollowRequest } = require('../lib/notifications');
-                    await notifyFollowRequest(userId, currentUserId);
+                    const { createNotification } = require('../lib/notifications');
+                    await createNotification({
+                        userId: userId,
+                        actorId: currentUserId,
+                        type: 'follow_request',
+                        content: 'requested to follow you'
+                    });
                 } catch (err) {
                     console.error('[FOLLOW] Notification error:', err);
                 }
