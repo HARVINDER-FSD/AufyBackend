@@ -105,15 +105,15 @@ router.post('/add/:userId', authenticateToken, async (req: AuthRequest, res: Res
         await createNotification({
           userId: currentUserId,
           actorId: crushUserId,
-          type: 'follow',
-          content: `💕 Mutual Favorite Match! You and @${crushUser.username} both added each other!`
+          type: 'secret_crush_match',
+          content: `💕 You both are secret crushes! You and @${crushUser.username} both added each other as favorites!`
         });
 
         await createNotification({
           userId: crushUserId,
           actorId: currentUserId,
-          type: 'follow',
-          content: `💕 Mutual Favorite Match! You and @${currentUser.username} both added each other!`
+          type: 'secret_crush_match',
+          content: `💕 You both are secret crushes! You and @${currentUser.username} both added each other as favorites!`
         });
 
         secretCrush.notifiedAt = new Date();
