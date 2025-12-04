@@ -15,42 +15,74 @@ interface AuthRequest extends Request {
   userId?: string
 }
 
-// Get stories feed - optional auth
+// Get stories feed - with privacy filtering
 router.get("/", optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
     await connectToDatabase()
+    
+    const currentUserId = req.userId
+
+    // Get following list if user is authenticated
+    let followingIds: any[] = []
+    if (currentUserId) {
+      const { MongoClient, ObjectId } = require('mongodb')
+      const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/socialmedia'
+      const client = await MongoClient.connect(MONGODB_URI)
+      const db = client.db()
+      
+      const follows = await db.collection('follows').find({
+        followerId: new ObjectId(currentUserId)
+      }).toArray()
+      
+      followingIds = follows.map((f: any) => f.followingId.toString())
+      await client.close()
+    }
 
     // Get active stories (not expired)
     const stories = await Story.find({
       expires_at: { $gt: new Date() },
       is_deleted: false
     })
-      .populate('user_id', 'username full_name avatar_url is_verified')
+      .populate('user_id', 'username full_name avatar_url is_verified is_private')
       .sort({ created_at: -1 })
       .limit(50)
       .lean()
 
-    // Format stories for frontend (filter out stories with deleted users)
-    const formattedStories = stories
-      .filter((story: any) => story.user_id) // Only include stories with valid users
-      .map((story: any) => ({
-        id: story._id.toString(),
-        user_id: story.user_id._id.toString(),
-        username: story.user_id.username,
-        full_name: story.user_id.full_name,
-        avatar_url: story.user_id.avatar_url,
-        is_verified: story.user_id.is_verified,
-        media_url: story.media_url,
-        media_type: story.media_type,
-        caption: story.caption,
-        created_at: story.created_at,
-        expires_at: story.expires_at,
-        texts: story.texts || [],
-        stickers: story.stickers || [],
-        filter: story.filter || 'none',
-        music: story.music || null,
-        views_count: story.views_count || 0
-      }))
+    // Apply privacy filter - STRICT MODE (only following + own)
+    const filteredStories = stories.filter((story: any) => {
+      if (!story.user_id) return false
+      
+      const storyUserId = story.user_id._id.toString()
+      
+      // Always show own stories
+      if (currentUserId && storyUserId === currentUserId) return true
+      
+      // Show ONLY if following the user (Instagram behavior)
+      if (followingIds.includes(storyUserId)) return true
+      
+      // Hide all other stories (including public accounts)
+      return false
+    })
+
+    // Format stories for frontend
+    const formattedStories = filteredStories.map((story: any) => ({
+      id: story._id.toString(),
+      user_id: story.user_id._id.toString(),
+      username: story.user_id.username,
+      full_name: story.user_id.full_name,
+      avatar_url: story.user_id.avatar_url,
+      is_verified: story.user_id.is_verified,
+      media_url: story.media_url,
+      media_type: story.media_type,
+      caption: story.caption,
+      created_at: story.created_at,
+      expires_at: story.expires_at,
+      texts: story.texts || [],
+      stickers: story.stickers || [],
+      filter: story.filter || 'none',
+      music: story.music || null,
+      views_count: story.views_count || 0
+    }))
 
     res.json({
       success: true,

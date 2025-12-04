@@ -24,7 +24,14 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    res.json({ settings: user.settings || {} });
+    // Ensure privateAccount setting is synced with is_private field
+    const settings = user.settings || {};
+    if (user.is_private !== undefined && settings.privateAccount === undefined) {
+      settings.privateAccount = user.is_private;
+      console.log('[Settings] Syncing privateAccount from is_private:', user.is_private);
+    }
+
+    res.json({ settings });
   } catch (error) {
     console.error('Error fetching settings:', error);
     res.status(500).json({ error: 'Failed to fetch settings' });

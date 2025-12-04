@@ -899,10 +899,18 @@ router.get('/:userId/follow-status', authenticate, async (req: any, res: Respons
             followingId: new ObjectId(currentUserId)
         })
 
+        // Check for pending follow request
+        const pendingRequest = await db.collection('followRequests').findOne({
+            requester_id: new ObjectId(currentUserId),
+            requested_id: new ObjectId(userId),
+            status: 'pending'
+        })
+
         await client.close()
 
         return res.json({
             isFollowing: !!isFollowing,
+            isPending: !!pendingRequest,
             followsBack: !!followsBack,
             isMutualFollow: !!isFollowing && !!followsBack
         })
@@ -1003,7 +1011,7 @@ router.get('/:userId/followers', async (req: any, res: Response) => {
             id: user._id.toString(),
             username: user.username,
             full_name: user.name || user.full_name || '',
-            avatar: user.avatar_url || user.avatar || '/placeholder-user.jpg',
+            avatar_url: user.avatar_url || user.avatar || '/placeholder-user.jpg',
             is_verified: user.is_verified || user.verified || false,
             badge_type: user.badge_type || null,
             is_private: user.is_private || false
@@ -1120,7 +1128,7 @@ router.get('/:userId/following', async (req: any, res: Response) => {
             id: user._id.toString(),
             username: user.username,
             full_name: user.name || user.full_name || '',
-            avatar: user.avatar_url || user.avatar || '/placeholder-user.jpg',
+            avatar_url: user.avatar_url || user.avatar || '/placeholder-user.jpg',
             is_verified: user.is_verified || user.verified || false,
             badge_type: user.badge_type || null,
             is_private: user.is_private || false
