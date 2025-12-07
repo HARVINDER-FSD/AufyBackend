@@ -106,6 +106,7 @@ router.post('/add/:userId', authenticateToken, async (req: AuthRequest, res: Res
           userId: currentUserId,
           actorId: crushUserId,
           type: 'secret_crush_match',
+          conversationId: chatId, // Pass chatId for direct navigation to vanish mode chat
           content: `💕 You both are secret crushes! You and @${crushUser.username} both added each other as favorites!`
         });
 
@@ -113,6 +114,7 @@ router.post('/add/:userId', authenticateToken, async (req: AuthRequest, res: Res
           userId: crushUserId,
           actorId: currentUserId,
           type: 'secret_crush_match',
+          conversationId: chatId, // Pass chatId for direct navigation to vanish mode chat
           content: `💕 You both are secret crushes! You and @${currentUser.username} both added each other as favorites!`
         });
 
