@@ -1282,17 +1282,67 @@ router.get('/:userId/posts', async (req: any, res: Response) => {
 
         // Check if userId is an ObjectId or username
         let userObjectId: ObjectId
+        let targetUser: any
         if (ObjectId.isValid(userId) && userId.length === 24) {
             // It's a valid ObjectId
             userObjectId = new ObjectId(userId)
+            targetUser = await db.collection('users').findOne({ _id: userObjectId })
         } else {
             // It's a username, look up the user
-            const user = await db.collection('users').findOne({ username: userId })
-            if (!user) {
+            targetUser = await db.collection('users').findOne({ username: userId })
+            if (!targetUser) {
                 await client.close()
                 return res.status(404).json({ success: false, message: 'User not found' })
             }
-            userObjectId = user._id
+            userObjectId = targetUser._id
+        }
+
+        if (!targetUser) {
+            await client.close()
+            return res.status(404).json({ success: false, message: 'User not found' })
+        }
+
+        // Get current user ID from token (optional)
+        let currentUserId = null
+        try {
+            const authHeader = req.headers.authorization
+            const token = authHeader && authHeader.split(' ')[1]
+            if (token) {
+                const decoded = jwt.verify(token, JWT_SECRET) as any
+                currentUserId = decoded.userId
+            }
+        } catch (err) {
+            // Token is optional
+        }
+
+        // PRIVACY CHECK: If account is private and viewer is not following, return empty
+        const isOwnProfile = currentUserId && currentUserId === userObjectId.toString()
+        const isPrivate = targetUser.is_private || false
+
+        if (isPrivate && !isOwnProfile) {
+            // Check if current user is following
+            const isFollowing = currentUserId ? await db.collection('follows').findOne({
+                followerId: new ObjectId(currentUserId),
+                followingId: userObjectId,
+                status: 'accepted'
+            }) : null
+
+            if (!isFollowing) {
+                // Private account and not following - return empty
+                await client.close()
+                return res.json({
+                    success: true,
+                    data: [],
+                    pagination: {
+                        page,
+                        limit,
+                        total: 0,
+                        totalPages: 0,
+                        hasMore: false
+                    },
+                    message: 'This account is private'
+                })
+            }
         }
 
         // Get total count
