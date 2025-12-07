@@ -134,6 +134,17 @@ router.post("/:postId/like", authenticateToken, async (req, res) => {
         post_id: new ObjectId(postId)
       })
       isLiked = false
+      
+      // Delete like notification
+      try {
+        const { deleteLikeNotification } = require('../lib/notifications');
+        const post = await db.collection('posts').findOne({ _id: new ObjectId(postId) });
+        if (post && post.user_id) {
+          await deleteLikeNotification(post.user_id.toString(), userId, postId);
+        }
+      } catch (err) {
+        console.error('[LIKE] Notification deletion error:', err);
+      }
     } else {
       // Like - insert new like
       await likesCollection.insertOne({
@@ -142,6 +153,17 @@ router.post("/:postId/like", authenticateToken, async (req, res) => {
         created_at: new Date()
       })
       isLiked = true
+      
+      // Create like notification (with deduplication)
+      try {
+        const { notifyLike } = require('../lib/notifications');
+        const post = await db.collection('posts').findOne({ _id: new ObjectId(postId) });
+        if (post && post.user_id && post.user_id.toString() !== userId) {
+          await notifyLike(post.user_id.toString(), userId, postId);
+        }
+      } catch (err) {
+        console.error('[LIKE] Notification creation error:', err);
+      }
     }
     
     // Get updated like count

@@ -244,12 +244,16 @@ export class PostService {
     const likesCollection = db.collection('likes')
     const commentsCollection = db.collection('comments')
 
-    // Get users that current user follows
+    // Get users that current user follows (check both field formats)
     const follows = await followsCollection.find({
-      follower_id: new ObjectId(userId)
+      $or: [
+        { follower_id: new ObjectId(userId) },
+        { followerId: new ObjectId(userId) }
+      ],
+      status: 'accepted' // Only accepted follows
     }).toArray()
 
-    const followingIds = follows.map(f => f.following_id)
+    const followingIds = follows.map(f => f.following_id || f.followingId)
     followingIds.push(new ObjectId(userId)) // Include own posts
 
     const matchQuery = {

@@ -23,7 +23,7 @@ interface CreateNotificationOptions {
   content?: string;
 }
 
-// Create a notification
+// Create a notification with Instagram-style deduplication
 export async function createNotification(options: CreateNotificationOptions): Promise<string | null> {
   try {
     const { userId, actorId, type, postId, commentId, conversationId, content } = options;
@@ -36,6 +36,44 @@ export async function createNotification(options: CreateNotificationOptions): Pr
     const client = await MongoClient.connect(MONGODB_URI);
     const db = client.db();
 
+    // Instagram-style deduplication: Check for existing notification from same actor
+    // For the same type and target (post/comment/conversation)
+    const query: any = {
+      userId: new ObjectId(userId),
+      actorId: new ObjectId(actorId),
+      type
+    };
+
+    // Add context-specific filters
+    if (postId) query.postId = new ObjectId(postId);
+    if (commentId) query.commentId = new ObjectId(commentId);
+    if (conversationId) query.conversationId = conversationId;
+
+    // Check if notification already exists (within last 24 hours to avoid old duplicates)
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const existingNotification = await db.collection('notifications').findOne({
+      ...query,
+      createdAt: { $gte: oneDayAgo }
+    });
+
+    if (existingNotification) {
+      // Update existing notification instead of creating duplicate
+      await db.collection('notifications').updateOne(
+        { _id: existingNotification._id },
+        {
+          $set: {
+            isRead: false, // Mark as unread again
+            updatedAt: new Date(),
+            content: content || existingNotification.content // Update content if provided
+          }
+        }
+      );
+      await client.close();
+      console.log(`♻️ Updated existing notification: ${type} from ${actorId} to ${userId}`);
+      return existingNotification._id.toString();
+    }
+
+    // Create new notification if no duplicate found
     const notification = {
       userId: new ObjectId(userId),
       actorId: new ObjectId(actorId),
@@ -181,5 +219,111 @@ export async function deleteCommentNotifications(commentId: string | ObjectId): 
     console.log(`🗑️ Deleted notifications for comment ${commentId}`);
   } catch (error) {
     console.error('Error deleting comment notifications:', error);
+  }
+}
+
+// Clean up duplicate notifications (run this as maintenance)
+export async function cleanupDuplicateNotifications(): Promise<number> {
+  try {
+    const client = await MongoClient.connect(MONGODB_URI);
+    const db = client.db();
+
+    // Find duplicate notifications (same userId, actorId, type, and target within 24 hours)
+    const duplicates = await db.collection('notifications').aggregate([
+      {
+        $match: {
+          createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            userId: '$userId',
+            actorId: '$actorId',
+            type: '$type',
+            postId: '$postId',
+            commentId: '$commentId',
+            conversationId: '$conversationId'
+          },
+          notifications: { $push: '$$ROOT' },
+          count: { $sum: 1 }
+        }
+      },
+      {
+        $match: { count: { $gt: 1 } }
+      }
+    ]).toArray();
+
+    let deletedCount = 0;
+
+    // For each group of duplicates, keep the most recent one and delete others
+    for (const group of duplicates) {
+      const notifications = group.notifications.sort((a: any, b: any) => 
+        b.createdAt.getTime() - a.createdAt.getTime()
+      );
+      
+      // Keep the first (most recent), delete the rest
+      const toDelete = notifications.slice(1).map((n: any) => n._id);
+      
+      if (toDelete.length > 0) {
+        const result = await db.collection('notifications').deleteMany({
+          _id: { $in: toDelete }
+        });
+        deletedCount += result.deletedCount || 0;
+      }
+    }
+
+    await client.close();
+    console.log(`🧹 Cleaned up ${deletedCount} duplicate notifications`);
+    return deletedCount;
+  } catch (error) {
+    console.error('Error cleaning up duplicate notifications:', error);
+    return 0;
+  }
+}
+
+// Delete follow notification when unfollowed
+export async function deleteFollowNotification(
+  userId: string | ObjectId,
+  actorId: string | ObjectId
+): Promise<void> {
+  try {
+    const client = await MongoClient.connect(MONGODB_URI);
+    const db = client.db();
+
+    await db.collection('notifications').deleteMany({
+      userId: new ObjectId(userId),
+      actorId: new ObjectId(actorId),
+      type: 'follow'
+    });
+
+    await client.close();
+    console.log(`🗑️ Deleted follow notification from ${actorId} to ${userId}`);
+  } catch (error) {
+    console.error('Error deleting follow notification:', error);
+  }
+}
+
+// Delete like notification when unliked
+export async function deleteLikeNotification(
+  postOwnerId: string | ObjectId,
+  actorId: string | ObjectId,
+  postId: string | ObjectId
+): Promise<void> {
+  try {
+    const client = await MongoClient.connect(MONGODB_URI);
+    const db = client.db();
+
+    await db.collection('notifications').deleteMany({
+      userId: new ObjectId(postOwnerId),
+      actorId: new ObjectId(actorId),
+      type: 'like',
+      postId: new ObjectId(postId)
+    });
+
+    await client.close();
+    console.log(`🗑️ Deleted like notification for post ${postId}`);
+  } catch (error) {
+    console.error('Error deleting like notification:', error);
   }
 }

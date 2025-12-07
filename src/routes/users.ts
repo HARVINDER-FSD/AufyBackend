@@ -68,6 +68,12 @@ router.get('/me', authenticate, async (req: any, res: Response) => {
             followerId: user._id,
             status: 'accepted'
         })
+        
+        // Get actual posts count from posts collection
+        const postsCount = await db.collection('posts').countDocuments({
+            user_id: user._id,
+            is_archived: { $ne: true }
+        })
 
         return res.json({
             id: user._id.toString(),
@@ -88,7 +94,7 @@ router.get('/me', authenticate, async (req: any, res: Response) => {
             is_verified: user.is_verified || user.verified || false,
             badge_type: user.badge_type || user.verification_type || null,
             badgeType: user.badge_type || user.verification_type || null,
-            posts_count: user.posts_count || 0
+            posts_count: postsCount
         })
     } catch (error: any) {
         console.error('Get user error:', error)
@@ -224,6 +230,12 @@ router.get('/username/:username', async (req: any, res: Response) => {
             followerId: user._id,
             status: 'accepted'
         })
+        
+        // Get actual posts count from posts collection
+        const postsCount = await db.collection('posts').countDocuments({
+            user_id: user._id,
+            is_archived: { $ne: true }
+        })
 
         await client.close()
 
@@ -252,7 +264,7 @@ router.get('/username/:username', async (req: any, res: Response) => {
             is_verified: user.is_verified || user.verified || false,
             badge_type: user.badge_type || user.verification_type || null,
             badgeType: user.badge_type || user.verification_type || null,
-            posts_count: user.posts_count || 0,
+            posts_count: postsCount,
             isPrivate: user.is_private || false,
             is_private: user.is_private || false
         })
@@ -422,6 +434,12 @@ router.get('/:username', async (req: any, res: Response) => {
             followerId: user._id,
             status: 'accepted'
         })
+        
+        // Get actual posts count from posts collection
+        const postsCount = await db.collection('posts').countDocuments({
+            user_id: user._id,
+            is_archived: { $ne: true }
+        })
 
         await client.close()
 
@@ -447,7 +465,7 @@ router.get('/:username', async (req: any, res: Response) => {
             verified: user.is_verified || user.verified || false,
             is_verified: user.is_verified || user.verified || false,
             badge_type: user.badge_type || user.verification_type || null,
-            posts_count: user.posts_count || 0,
+            posts_count: postsCount,
             isPrivate: user.is_private || false,
             is_private: user.is_private || false
         })
@@ -763,6 +781,14 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
                 requester_id: new ObjectId(currentUserId),
                 requested_id: new ObjectId(userId)
             })
+            
+            // Delete follow notification
+            try {
+                const { deleteFollowNotification } = require('../lib/notifications');
+                await deleteFollowNotification(userId, currentUserId);
+            } catch (err) {
+                console.error('[UNFOLLOW] Notification deletion error:', err);
+            }
 
             // Get updated count (ACCEPTED ONLY)
             const followerCount = await db.collection('follows').countDocuments({
