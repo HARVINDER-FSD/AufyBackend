@@ -2123,3 +2123,86 @@ router.patch('/me', authenticate, async (req: any, res: Response) => {
         return res.status(500).json({ message: error.message || 'Failed to update user' })
     }
 })
+
+// GET /api/users/:username/posts - Get user's posts (ONLY their own posts, not feed)
+router.get('/:username/posts', authenticate, async (req: any, res: Response) => {
+    try {
+        const { username } = req.params
+        const currentUserId = req.userId
+        const db = await getDb()
+
+        // Find user by username
+        const targetUser = await db.collection('users').findOne({ username })
+        if (!targetUser) {
+            return res.status(404).json({ message: 'User not found' })
+        }
+
+        // Check if viewing own profile
+        const isOwnProfile = targetUser._id.toString() === currentUserId
+
+        // Check if account is private
+        const isPrivate = targetUser.is_private || false
+
+        console.log('[PROFILE POSTS] User:', username, 'isPrivate:', isPrivate, 'isOwnProfile:', isOwnProfile)
+
+        // If private account and not own profile, check if following
+        if (isPrivate && !isOwnProfile) {
+            const followRecord = await db.collection('follows').findOne({
+                followerId: new ObjectId(currentUserId),
+                followingId: targetUser._id
+            })
+
+            console.log('[PROFILE POSTS] Follow record found:', !!followRecord)
+
+            if (!followRecord) {
+                // Not following private account - return empty posts
+                console.log('[PROFILE POSTS] Blocking posts - private account, not following')
+                return res.json({
+                    posts: [],
+                    count: 0,
+                    message: 'This account is private'
+                })
+            }
+        }
+
+        console.log('[PROFILE POSTS] Allowing posts access')
+
+        // Fetch ONLY this user's posts (not archived)
+        const posts = await db.collection('posts').find({
+            user_id: targetUser._id,
+            is_archived: { $ne: true }
+        }).sort({ created_at: -1 }).toArray()
+
+        // Transform posts to include user info
+        const transformedPosts = posts.map(post => ({
+            id: post._id.toString(),
+            user: {
+                id: targetUser._id.toString(),
+                username: targetUser.username,
+                avatar: targetUser.avatar_url || targetUser.avatar || '/placeholder-user.jpg',
+                avatar_url: targetUser.avatar_url || targetUser.avatar || '/placeholder-user.jpg',
+                verified: targetUser.is_verified || targetUser.verified || false,
+                is_verified: targetUser.is_verified || targetUser.verified || false,
+                badge_type: targetUser.badge_type || targetUser.verification_type || null
+            },
+            content: post.content || '',
+            caption: post.caption || post.content || '',
+            media_type: post.media_type || 'text',
+            media_urls: post.media_urls || [],
+            likes_count: post.likes_count || 0,
+            comments_count: post.comments_count || 0,
+            shares_count: post.shares_count || 0,
+            created_at: post.created_at,
+            is_liked: false, // Will be checked if needed
+            bookmarked: false
+        }))
+
+        return res.json({
+            posts: transformedPosts,
+            count: transformedPosts.length
+        })
+    } catch (error: any) {
+        console.error('Get user posts error:', error)
+        return res.status(500).json({ message: error.message || 'Failed to fetch user posts' })
+    }
+})
