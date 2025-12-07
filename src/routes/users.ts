@@ -351,8 +351,15 @@ router.get('/:userId([0-9a-fA-F]{24})', async (req: Request, res: Response) => {
             return res.status(404).json({ message: 'User not found' })
         }
 
-        // Use avatar_url or avatar, with fallback
-        const avatarUrl = user.avatar_url || user.avatar || user.profile_picture || user.profileImage || '/placeholder-user.jpg';
+        // Use avatar_url or avatar, with fallback - check all possible field names
+        const avatarUrl = user.avatar_url || 
+                         user.avatar || 
+                         user.profile_picture || 
+                         user.profileImage || 
+                         user.profilePicture ||
+                         `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username || 'User')}&background=0095f6&color=fff&size=128`;
+
+        console.log('👤 Fetching user:', user.username, 'Avatar:', avatarUrl);
 
         return res.json({
             id: user._id.toString(),
@@ -364,6 +371,7 @@ router.get('/:userId([0-9a-fA-F]{24})', async (req: Request, res: Response) => {
             avatar: avatarUrl,
             avatar_url: avatarUrl,
             profileImage: avatarUrl,
+            profilePicture: avatarUrl,
             followers: user.followers || user.followers_count || 0,
             following: user.following || user.following_count || 0,
             verified: user.verified || user.is_verified || false,
