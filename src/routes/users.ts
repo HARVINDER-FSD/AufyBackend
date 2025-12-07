@@ -316,9 +316,9 @@ router.get('/:userId/mutual-followers', authenticate, async (req: any, res: Resp
         const formattedUsers = mutualUsers.map(user => ({
             _id: user._id.toString(),
             username: user.username,
-            fullName: user.full_name || user.fullName,
-            profileImage: user.avatar_url || user.profile_picture,
-            isVerified: user.is_verified || false
+            fullName: user.full_name || user.fullName || user.name || '',
+            profileImage: user.avatar_url || user.avatar || user.profile_picture || user.profileImage || '/placeholder-user.jpg',
+            isVerified: user.is_verified || user.verified || false
         }))
 
         return res.json({
@@ -352,15 +352,18 @@ router.get('/:userId([0-9a-fA-F]{24})', async (req: Request, res: Response) => {
         }
 
         // Use avatar_url or avatar, with fallback
-        const avatarUrl = user.avatar_url || user.avatar || '/placeholder-user.jpg';
+        const avatarUrl = user.avatar_url || user.avatar || user.profile_picture || user.profileImage || '/placeholder-user.jpg';
 
         return res.json({
             id: user._id.toString(),
+            _id: user._id.toString(),
             username: user.username,
             name: user.name || user.full_name || '',
+            fullName: user.name || user.full_name || '',
             bio: user.bio || '',
             avatar: avatarUrl,
             avatar_url: avatarUrl,
+            profileImage: avatarUrl,
             followers: user.followers || user.followers_count || 0,
             following: user.following || user.following_count || 0,
             verified: user.verified || user.is_verified || false,
@@ -443,6 +446,8 @@ router.get('/:username', async (req: any, res: Response) => {
 
         await client.close()
 
+        const avatarUrl = user.avatar_url || user.avatar || user.profile_picture || user.profileImage || '/placeholder-user.jpg';
+        
         return res.json({
             _id: user._id.toString(),
             id: user._id.toString(),
@@ -451,7 +456,10 @@ router.get('/:username', async (req: any, res: Response) => {
             full_name: user.full_name || user.name || '',
             name: user.full_name || user.name || '',
             bio: user.bio || '',
-            avatar: user.avatar_url || user.avatar || '/placeholder-user.jpg',
+            avatar: avatarUrl,
+            avatar_url: avatarUrl,
+            profileImage: avatarUrl,
+            profile_picture: avatarUrl,
             followers: [],
             following: [],
             followersCount,
