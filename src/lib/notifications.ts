@@ -11,7 +11,9 @@ export type NotificationType =
   | 'mention' 
   | 'share'
   | 'follow_request'
-  | 'follow_accept';
+  | 'follow_accept'
+  | 'secret_crush_match'
+  | 'secret_crush_ended';
 
 interface CreateNotificationOptions {
   userId: string | ObjectId; // Recipient
