@@ -1,5 +1,6 @@
 // Notification Helper Functions
 import { MongoClient, ObjectId } from 'mongodb';
+import { sendNotificationToUser } from '../services/firebase-messaging';
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/social-media';
 
@@ -90,9 +91,24 @@ export async function createNotification(options: CreateNotificationOptions): Pr
     };
 
     const result = await db.collection('notifications').insertOne(notification);
+    
+    // Get actor details for push notification
+    const actor = await db.collection('users').findOne({ _id: new ObjectId(actorId) });
+    
     await client.close();
 
     console.log(`📬 Notification created: ${type} for user ${userId}`);
+    
+    // Send FCM push notification (works even when app is closed!)
+    if (actor) {
+      await sendFCMNotification(userId.toString(), type, actor, {
+        postId: postId?.toString(),
+        commentId: commentId?.toString(),
+        conversationId,
+        content
+      });
+    }
+    
     return result.insertedId.toString();
   } catch (error) {
     console.error('Error creating notification:', error);
@@ -327,5 +343,103 @@ export async function deleteLikeNotification(
     console.log(`🗑️ Deleted like notification for post ${postId}`);
   } catch (error) {
     console.error('Error deleting like notification:', error);
+  }
+}
+
+
+// Send FCM Push Notification (works when app is closed!)
+async function sendFCMNotification(
+  userId: string,
+  type: NotificationType,
+  actor: any,
+  data: {
+    postId?: string;
+    commentId?: string;
+    conversationId?: string;
+    content?: string;
+  }
+): Promise<void> {
+  try {
+    const actorName = actor.username || actor.name || 'Someone';
+    
+    let title = '';
+    let body = '';
+    
+    // Create notification text based on type
+    switch (type) {
+      case 'like':
+        title = `${actorName} liked your post`;
+        body = 'Tap to view';
+        break;
+        
+      case 'comment':
+        title = `${actorName} commented`;
+        body = data.content || 'Tap to view comment';
+        break;
+        
+      case 'follow':
+        title = `${actorName} started following you`;
+        body = 'Tap to view profile';
+        break;
+        
+      case 'message':
+        title = actorName;
+        body = data.content || 'Sent you a message';
+        break;
+        
+      case 'mention':
+        title = `${actorName} mentioned you`;
+        body = data.content || 'Tap to view';
+        break;
+        
+      case 'share':
+        title = `${actorName} shared your post`;
+        body = 'Tap to view';
+        break;
+        
+      case 'follow_request':
+        title = `${actorName} wants to follow you`;
+        body = 'Tap to respond';
+        break;
+        
+      case 'follow_accept':
+        title = `${actorName} accepted your follow request`;
+        body = 'Tap to view profile';
+        break;
+        
+      case 'secret_crush_match':
+        title = '💕 You have a Secret Crush match!';
+        body = 'Tap to see who';
+        break;
+        
+      case 'secret_crush_ended':
+        title = 'Secret Crush ended';
+        body = `${actorName} removed you from their list`;
+        break;
+        
+      default:
+        title = 'New notification';
+        body = 'You have a new notification';
+    }
+    
+    // Send FCM notification
+    await sendNotificationToUser(userId, {
+      title,
+      body,
+      type,
+      data: {
+        type,
+        userId: actor._id?.toString() || '',
+        username: actorName,
+        postId: data.postId || '',
+        commentId: data.commentId || '',
+        conversationId: data.conversationId || '',
+      }
+    });
+    
+    console.log(`🔔 FCM notification sent: ${type} to ${userId}`);
+  } catch (error) {
+    console.error('Error sending FCM notification:', error);
+    // Don't throw - notification creation should succeed even if FCM fails
   }
 }

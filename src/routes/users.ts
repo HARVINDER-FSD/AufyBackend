@@ -1976,6 +1976,81 @@ router.get('/:userId/follow-request-status', authenticate, async (req: any, res:
     }
 })
 
+// POST /api/users/fcm-token - Register FCM token for push notifications
+router.post('/fcm-token', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.userId
+        const { fcmToken } = req.body
+
+        if (!fcmToken) {
+            return res.status(400).json({ message: 'FCM token is required' })
+        }
+
+        console.log('[FCM] Registering token for user:', userId)
+
+        const db = await getDb()
+
+        // Update user's FCM token
+        await db.collection('users').updateOne(
+            { _id: new ObjectId(userId) },
+            {
+                $set: {
+                    fcmToken: fcmToken,
+                    fcmTokenUpdatedAt: new Date()
+                }
+            }
+        )
+
+        console.log('[FCM] ✅ Token registered successfully')
+
+        return res.json({
+            success: true,
+            message: 'FCM token registered successfully'
+        })
+    } catch (error: any) {
+        console.error('[FCM] ❌ Error registering token:', error)
+        return res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to register FCM token'
+        })
+    }
+})
+
+// DELETE /api/users/fcm-token - Unregister FCM token
+router.delete('/fcm-token', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.userId
+
+        console.log('[FCM] Unregistering token for user:', userId)
+
+        const db = await getDb()
+
+        // Remove user's FCM token
+        await db.collection('users').updateOne(
+            { _id: new ObjectId(userId) },
+            {
+                $set: {
+                    fcmToken: null,
+                    fcmTokenUpdatedAt: new Date()
+                }
+            }
+        )
+
+        console.log('[FCM] ✅ Token unregistered successfully')
+
+        return res.json({
+            success: true,
+            message: 'FCM token unregistered successfully'
+        })
+    } catch (error: any) {
+        console.error('[FCM] ❌ Error unregistering token:', error)
+        return res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to unregister FCM token'
+        })
+    }
+})
+
 export default router
 
 

@@ -37,9 +37,13 @@ import secretCrushRoutes from './routes/secret-crush'
 import premiumRoutes from './routes/premium'
 import demoRoutes from './routes/demo'
 import aiRoutes from './routes/ai'
+import { initializeFirebase } from './services/firebase-messaging'
 
 const app = express()
 const PORT = parseInt(process.env.PORT || '8000')
+
+// Initialize Firebase for push notifications
+initializeFirebase()
 
 // Connect to MongoDB at startup
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/socialmedia'

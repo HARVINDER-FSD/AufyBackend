@@ -124,6 +124,10 @@ const userSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  fcmToken: {
+    type: String,
+    default: null
+  },
   settings: {
     type: mongoose.Schema.Types.Mixed,
     default: {
