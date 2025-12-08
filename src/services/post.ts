@@ -312,7 +312,8 @@ export class PostService {
           },
           likes_count: likesCount,
           comments_count: commentsCount,
-          is_liked: !!like
+          liked: !!like,  // Changed from is_liked to liked
+          is_liked: !!like  // Keep both for compatibility
         } as Post
       })
     )
