@@ -126,7 +126,18 @@ router.post('/add/:userId', authenticateToken, async (req: AuthRequest, res: Res
       }
     }
 
-    await secretCrush.save();
+    try {
+      await secretCrush.save();
+    } catch (saveError: any) {
+      // Handle duplicate key error (race condition)
+      if (saveError.code === 11000) {
+        return res.status(400).json({
+          success: false,
+          message: 'Already in your secret crush list'
+        });
+      }
+      throw saveError;
+    }
 
     // Update user's crush count
     await (User as any).updateOne(
