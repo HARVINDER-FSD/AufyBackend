@@ -150,13 +150,14 @@ export async function sendNotificationToUser(
     
     const user = await User.findById(userId);
     
-    if (!user?.fcmTokens || user.fcmTokens.length === 0) {
-      console.log('No FCM tokens for user:', userId);
+    // Check for FCM token (singular field)
+    if (!user?.fcmToken) {
+      console.log('No FCM token for user:', userId);
       return;
     }
     
-    // Send to all user's devices
-    const result = await sendMulticastNotification(user.fcmTokens, {
+    // Send to user's device
+    const result = await sendPushNotification(user.fcmToken, {
       title: notification.title,
       body: notification.body,
       data: {
@@ -165,12 +166,12 @@ export async function sendNotificationToUser(
       }
     });
     
-    // Clean up failed tokens
-    if (result?.failedTokens && result.failedTokens.length > 0) {
+    // Clean up invalid token
+    if (result && typeof result === 'object' && result.error === 'invalid_token') {
       await User.findByIdAndUpdate(userId, {
-        $pull: { fcmTokens: { $in: result.failedTokens } }
+        $set: { fcmToken: null }
       });
-      console.log(`Removed ${result.failedTokens.length} invalid tokens`);
+      console.log(`Removed invalid FCM token for user ${userId}`);
     }
     
     return result;
