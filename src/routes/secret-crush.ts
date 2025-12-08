@@ -100,29 +100,31 @@ router.post('/add/:userId', authenticateToken, async (req: AuthRequest, res: Res
       
       await mutualCrush.save();
 
-      // Send notifications to both users
-      try {
-        await createNotification({
-          userId: currentUserId,
-          actorId: crushUserId,
-          type: 'secret_crush_match',
-          conversationId: chatId, // Pass chatId for direct navigation to vanish mode chat
-          content: `💕 You both are secret crushes! You and @${crushUser.username} both added each other as favorites!`
-        });
+      // Send notifications to both users (only if not already notified)
+      if (!mutualCrush.notifiedAt) {
+        try {
+          await createNotification({
+            userId: currentUserId,
+            actorId: crushUserId,
+            type: 'secret_crush_match',
+            conversationId: chatId,
+            content: `💕 You both are secret crushes! You and @${crushUser.username} both added each other as favorites!`
+          });
 
-        await createNotification({
-          userId: crushUserId,
-          actorId: currentUserId,
-          type: 'secret_crush_match',
-          conversationId: chatId, // Pass chatId for direct navigation to vanish mode chat
-          content: `💕 You both are secret crushes! You and @${currentUser.username} both added each other as favorites!`
-        });
+          await createNotification({
+            userId: crushUserId,
+            actorId: currentUserId,
+            type: 'secret_crush_match',
+            conversationId: chatId,
+            content: `💕 You both are secret crushes! You and @${currentUser.username} both added each other as favorites!`
+          });
 
-        secretCrush.notifiedAt = new Date();
-        mutualCrush.notifiedAt = new Date();
-        await mutualCrush.save();
-      } catch (notifError) {
-        console.error('Error sending mutual crush notifications:', notifError);
+          secretCrush.notifiedAt = new Date();
+          mutualCrush.notifiedAt = new Date();
+          await mutualCrush.save();
+        } catch (notifError) {
+          console.error('Error sending mutual crush notifications:', notifError);
+        }
       }
     }
 
