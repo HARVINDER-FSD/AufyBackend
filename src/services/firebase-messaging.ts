@@ -7,18 +7,32 @@ export function initializeFirebase() {
   if (isInitialized) return;
   
   try {
-    // Check if service account file exists
-    const serviceAccount = require('../../firebase-service-account.json');
+    let serviceAccount;
+    
+    // Try to load from environment variable first (for Render/production)
+    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+      try {
+        serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+        console.log('✅ Loaded Firebase credentials from environment variable');
+      } catch (parseError) {
+        console.error('❌ Failed to parse FIREBASE_SERVICE_ACCOUNT env variable');
+        throw parseError;
+      }
+    } else {
+      // Fall back to file (for local development)
+      serviceAccount = require('../../firebase-service-account.json');
+      console.log('✅ Loaded Firebase credentials from file');
+    }
     
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount)
     });
     
     isInitialized = true;
-    console.log('✅ Firebase Admin initialized');
+    console.log('✅ Firebase Admin initialized successfully');
   } catch (error) {
     console.warn('⚠️ Firebase service account not found. Push notifications will not work when app is closed.');
-    console.warn('To enable: Download firebase-service-account.json from Firebase Console');
+    console.warn('To enable: Add FIREBASE_SERVICE_ACCOUNT environment variable or firebase-service-account.json file');
   }
 }
 
