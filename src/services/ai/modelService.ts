@@ -60,6 +60,21 @@ export const modelService = {
             console.error('Error generating text:', error);
             return "I'm having trouble thinking right now.";
         }
+    },
+
+    /**
+     * Generates text in a streaming fashion (Server-Sent Events compatible)
+     * @param prompt User input
+     * @param onChunk Callback for each text chunk
+     */
+    async generateTextStream(prompt: string, onChunk: (chunk: string) => void): Promise<void> {
+        const fullText = mockSmartReply(prompt);
+        const tokens = fullText.split(/(?=[\s\S])/); // Split by character for smooth effect in demo
+
+        for (const token of tokens) {
+            await new Promise(resolve => setTimeout(resolve, 20 + Math.random() * 30)); // Imitate typing delay
+            onChunk(token);
+        }
     }
 };
 
