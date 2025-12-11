@@ -1,15 +1,20 @@
 // Custom AI Service - Multi-Provider Integration
-// Supports: Groq (FREE), OpenAI (PAID)
+// Supports: xAI Grok (PAID), Groq (FREE), OpenAI (PAID)
 
 /**
- * Generate text using FREE AI APIs
- * Priority: Groq (FREE) → Google Gemini (FREE) → OpenAI (PAID) → Mock (fallback)
- * 
- * NOTE: xAI's Grok is NOT publicly available yet - only on X Premium
+ * Generate text using AI APIs
+ * Priority: xAI Grok → Groq (FREE) → Google Gemini (FREE) → OpenAI (PAID) → Mock (fallback)
  */
 export async function generateWithHuggingFace(prompt: string): Promise<string> {
   try {
-    // Try Groq first (FREE and fast - Llama 3.3 70B)
+    // Try xAI Grok first (ACTUAL GROK!)
+    const XAI_API_KEY = process.env.XAI_API_KEY;
+    if (XAI_API_KEY) {
+      console.log('🚀 Using xAI Grok API - The REAL Grok!');
+      return await generateWithGrok(prompt, XAI_API_KEY);
+    }
+    
+    // Try Groq (FREE and fast - Llama 3.3 70B)
     const GROQ_API_KEY = process.env.GROQ_API_KEY;
     if (GROQ_API_KEY) {
       console.log('⚡ Using Groq API - Llama 3.3 70B (FREE)');
@@ -42,8 +47,48 @@ export async function generateWithHuggingFace(prompt: string): Promise<string> {
 }
 
 /**
+ * Generate text using xAI Grok API (PAID - The REAL Grok!)
+ * Sign up: https://console.x.ai
+ * Models: grok-beta, grok-vision-beta
+ */
+async function generateWithGrok(prompt: string, apiKey: string): Promise<string> {
+  const response = await fetch('https://api.x.ai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'grok-beta',
+      messages: [
+        { 
+          role: 'system', 
+          content: `You are Grok, a chatbot inspired by the Hitchhiker's Guide to the Galaxy.` 
+        },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0,
+      stream: false,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`xAI Grok API error: ${response.status} - ${errorText}`);
+  }
+
+  const data = await response.json() as { choices: Array<{ message: { content: string } }> };
+  
+  if (!data.choices?.[0]?.message?.content) {
+    throw new Error('No response from Grok');
+  }
+
+  console.log('✅ Grok response received');
+  return data.choices[0].message.content;
+}
+
+/**
  * Generate text using Groq API (FREE - llama-3.3-70b-versatile)
- * This is the BEST model available on Groq - better than Grok 2!
  * Sign up: https://console.groq.com
  */
 async function generateWithGroq(prompt: string, apiKey: string): Promise<string> {
