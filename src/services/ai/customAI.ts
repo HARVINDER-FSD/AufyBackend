@@ -47,9 +47,10 @@ export async function generateWithHuggingFace(prompt: string): Promise<string> {
 }
 
 /**
- * Generate text using xAI Grok API (PAID - The REAL Grok!)
+ * Generate text using xAI Grok API (FREE TIER AVAILABLE!)
  * Sign up: https://console.x.ai
- * Models: grok-beta, grok-vision-beta
+ * Free Tier: 25 requests/hour, 10,000 tokens/request
+ * Models: grok-2-1212 (latest), grok-2-vision-1212, grok-beta
  */
 async function generateWithGrok(prompt: string, apiKey: string): Promise<string> {
   const response = await fetch('https://api.x.ai/v1/chat/completions', {
@@ -59,7 +60,7 @@ async function generateWithGrok(prompt: string, apiKey: string): Promise<string>
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'grok-beta',
+      model: 'grok-2-1212', // Latest Grok 2 model (Dec 2024)
       messages: [
         { 
           role: 'system', 
@@ -67,7 +68,8 @@ async function generateWithGrok(prompt: string, apiKey: string): Promise<string>
         },
         { role: 'user', content: prompt }
       ],
-      temperature: 0,
+      temperature: 0.7,
+      max_tokens: 250,
       stream: false,
     }),
   });
@@ -83,7 +85,7 @@ async function generateWithGrok(prompt: string, apiKey: string): Promise<string>
     throw new Error('No response from Grok');
   }
 
-  console.log('✅ Grok response received');
+  console.log('✅ Grok 2 response received');
   return data.choices[0].message.content;
 }
 
