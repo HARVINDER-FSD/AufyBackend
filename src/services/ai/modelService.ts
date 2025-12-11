@@ -1,64 +1,38 @@
-import * as ort from 'onnxruntime-node';
-import path from 'path';
-import fs from 'fs';
+// ============================================================================
+// SMART AI SERVICE - Cloud & Mock AI
+// ============================================================================
+// Priority: Groq (FREE) → OpenAI (PAID) → Mock (fallback)
+// ============================================================================
 
-// Path to the ONNX model file
-// Ensure this file exists in your backend deployment
-const MODEL_PATH = path.join(__dirname, '../../../../python-llm/onnx_model/model.onnx');
+import { generateWithHuggingFace, generateWithHuggingFaceStream } from './customAI';
 
-// Simple tokenizer map (fallback if no proper tokenizer is available)
-// In a real scenario, you'd use a proper tokenizer library or load vocab.json
-const VOCAB_PATH = path.join(__dirname, '../../../../python-llm/onnx_model/vocab.json');
+const USE_CLOUD_AI = process.env.NODE_ENV === 'production' || process.env.USE_CLOUD_AI === 'true';
+const HAS_GROQ_KEY = !!process.env.GROQ_API_KEY;
+const HAS_OPENAI_KEY = !!process.env.OPENAI_API_KEY;
 
-let session: ort.InferenceSession | null = null;
-let vocab: Record<string, number> = {};
-let reverseVocab: Record<number, string> = {};
-
-// Initialize the model and vocab
-async function initModel() {
-    try {
-        if (!fs.existsSync(MODEL_PATH)) {
-            console.warn(`⚠️ ONNX Model not found at ${MODEL_PATH}. AI features will use fallback.`);
-            return;
-        }
-
-        console.log('🔄 Loading ONNX model...');
-        session = await ort.InferenceSession.create(MODEL_PATH);
-        console.log('✅ ONNX model loaded successfully');
-
-        // Load vocab if available
-        if (fs.existsSync(VOCAB_PATH)) {
-            const vocabData = JSON.parse(fs.readFileSync(VOCAB_PATH, 'utf-8'));
-            vocab = vocabData;
-            reverseVocab = Object.fromEntries(Object.entries(vocab).map(([k, v]) => [v, k]));
-        }
-    } catch (error) {
-        console.error('❌ Failed to initialize AI model:', error);
-    }
-}
-
-// Start initialization
-initModel();
+const aiProvider = HAS_GROQ_KEY ? 'Groq (FREE)' : HAS_OPENAI_KEY ? 'OpenAI' : 'Smart Mock AI (FREE)';
+console.log(`🤖 AI Provider: ${USE_CLOUD_AI ? aiProvider : 'Smart Mock AI (FREE)'}`);
 
 export const modelService = {
     async generateText(prompt: string): Promise<string> {
         try {
-            // If model isn't loaded (e.g. file missing on Render), return a mock response
-            if (!session) {
-                console.log('⚠️ Model not loaded, returning mock response');
-                return mockSmartReply(prompt);
+            // Try cloud AI if enabled and API key is available
+            if (USE_CLOUD_AI && (HAS_GROQ_KEY || HAS_OPENAI_KEY)) {
+                try {
+                    return await generateWithHuggingFace(prompt);
+                } catch (aiError: any) {
+                    console.warn('⚠️ Cloud AI failed, using mock:', aiError.message);
+                }
             }
-
-            // TODO: Implement actual tokenization and inference here
-            // Running a full LLM inference in Node.js with raw ONNX is complex
-            // For now, we will use the mock response to ensure the API works
-            // while you set up the model files on the server.
-
+            
+            // Fallback to smart mock
+            console.log('💬 Using Smart Mock AI');
             return mockSmartReply(prompt);
-
-        } catch (error) {
-            console.error('Error generating text:', error);
-            return "I'm having trouble thinking right now.";
+            
+        } catch (error: any) {
+            console.error('❌ ModelService error:', error.message);
+            console.log('⚠️ Falling back to mock response');
+            return mockSmartReply(prompt);
         }
     },
 
@@ -68,22 +42,118 @@ export const modelService = {
      * @param onChunk Callback for each text chunk
      */
     async generateTextStream(prompt: string, onChunk: (chunk: string) => void): Promise<void> {
-        const fullText = mockSmartReply(prompt);
-        const tokens = fullText.split(/(?=[\s\S])/); // Split by character for smooth effect in demo
-
-        for (const token of tokens) {
-            await new Promise(resolve => setTimeout(resolve, 20 + Math.random() * 30)); // Imitate typing delay
-            onChunk(token);
+        try {
+            // Try cloud AI if enabled and API key is available
+            if (USE_CLOUD_AI && (HAS_GROQ_KEY || HAS_OPENAI_KEY)) {
+                try {
+                    await generateWithHuggingFaceStream(prompt, onChunk);
+                    return;
+                } catch (aiError: any) {
+                    console.warn('⚠️ Cloud AI failed, using mock:', aiError.message);
+                }
+            }
+            
+            // Fallback to mock streaming
+            console.log('💬 Using Smart Mock AI streaming');
+            const mockResponse = mockSmartReply(prompt);
+            const words = mockResponse.split(' ');
+            for (const word of words) {
+                onChunk(word + ' ');
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+            
+        } catch (error: any) {
+            console.error('❌ ModelService stream error:', error.message);
+            
+            // Final fallback to mock streaming
+            console.log('⚠️ Falling back to mock streaming');
+            const mockResponse = mockSmartReply(prompt);
+            const words = mockResponse.split(' ');
+            for (const word of words) {
+                onChunk(word + ' ');
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
         }
+    },
+
+    /**
+     * Check AI service status
+     */
+    async checkStatus(): Promise<boolean> {
+        return true; // Mock AI is always available
     }
 };
 
-// Simple rule-based fallback for when the model isn't running
+// Smart rule-based AI (FREE, works offline)
 function mockSmartReply(prompt: string): string {
     const p = prompt.toLowerCase();
-    if (p.includes('hello') || p.includes('hi')) return "Hey there! How's it going?";
-    if (p.includes('how are you')) return "I'm doing great, thanks for asking! You?";
-    if (p.includes('bye')) return "See ya later!";
-    if (p.includes('love')) return "Aww, that's sweet!";
-    return "That sounds interesting! Tell me more.";
+    
+    // Greetings
+    if (p.includes('hello') || p.includes('hi') || p.includes('hey')) {
+        const greetings = [
+            "Hey there! How's it going? 😊",
+            "Hi! What's up?",
+            "Hello! Nice to hear from you!",
+            "Hey! How can I help you today?"
+        ];
+        return greetings[Math.floor(Math.random() * greetings.length)];
+    }
+    
+    // How are you
+    if (p.includes('how are you') || p.includes('how r u')) {
+        const responses = [
+            "I'm doing great, thanks for asking! How about you?",
+            "Pretty good! What about you?",
+            "I'm awesome! How are you doing?",
+            "Doing well! What's new with you?"
+        ];
+        return responses[Math.floor(Math.random() * responses.length)];
+    }
+    
+    // Goodbye
+    if (p.includes('bye') || p.includes('goodbye') || p.includes('see you')) {
+        const goodbyes = [
+            "See ya later! 👋",
+            "Bye! Take care!",
+            "Catch you later!",
+            "Goodbye! Have a great day!"
+        ];
+        return goodbyes[Math.floor(Math.random() * goodbyes.length)];
+    }
+    
+    // Love/like
+    if (p.includes('love') || p.includes('like')) {
+        const responses = [
+            "Aww, that's sweet! 💕",
+            "That's really nice!",
+            "Love that! ❤️",
+            "That sounds wonderful!"
+        ];
+        return responses[Math.floor(Math.random() * responses.length)];
+    }
+    
+    // Questions
+    if (p.includes('?')) {
+        const responses = [
+            "That's a great question! Let me think about that.",
+            "Hmm, interesting question!",
+            "Good question! What do you think?",
+            "That's something to think about!"
+        ];
+        return responses[Math.floor(Math.random() * responses.length)];
+    }
+    
+    // Default responses
+    const defaults = [
+        "That sounds interesting! Tell me more.",
+        "I see what you mean!",
+        "That's cool! What else?",
+        "Interesting! Go on...",
+        "I hear you! What happened next?",
+        "That makes sense!",
+        "Oh really? That's neat!",
+        "Nice! Keep going!"
+    ];
+    
+    return defaults[Math.floor(Math.random() * defaults.length)];
 }
