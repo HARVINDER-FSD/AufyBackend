@@ -2,22 +2,31 @@
 // Supports: Groq (FREE), OpenAI (PAID)
 
 /**
- * Generate text using FREE Groq API or OpenAI
- * Priority: Groq (FREE) → OpenAI (PAID) → Mock (fallback)
+ * Generate text using FREE AI APIs
+ * Priority: Groq (FREE) → Google Gemini (FREE) → OpenAI (PAID) → Mock (fallback)
+ * 
+ * NOTE: xAI's Grok is NOT publicly available yet - only on X Premium
  */
 export async function generateWithHuggingFace(prompt: string): Promise<string> {
   try {
-    // Try Groq first (FREE and fast)
+    // Try Groq first (FREE and fast - Llama 3.3 70B)
     const GROQ_API_KEY = process.env.GROQ_API_KEY;
     if (GROQ_API_KEY) {
-      console.log('⚡ Using Groq API (FREE)');
+      console.log('⚡ Using Groq API - Llama 3.3 70B (FREE)');
       return await generateWithGroq(prompt, GROQ_API_KEY);
     }
     
-    // Try OpenAI if available
+    // Try Google Gemini (FREE and powerful)
+    const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+    if (GEMINI_API_KEY) {
+      console.log('🌟 Using Google Gemini API (FREE)');
+      return await generateWithGemini(prompt, GEMINI_API_KEY);
+    }
+    
+    // Try OpenAI if available (PAID)
     const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
     if (OPENAI_API_KEY) {
-      console.log('🤖 Using OpenAI API');
+      console.log('🤖 Using OpenAI API (PAID)');
       return await generateWithOpenAI(prompt, OPENAI_API_KEY);
     }
     
@@ -34,9 +43,12 @@ export async function generateWithHuggingFace(prompt: string): Promise<string> {
 
 /**
  * Generate text using Groq API (FREE - llama-3.3-70b-versatile)
+ * This is the BEST model available on Groq - better than Grok 2!
  * Sign up: https://console.groq.com
  */
 async function generateWithGroq(prompt: string, apiKey: string): Promise<string> {
+  // Use the best model: llama-3.3-70b-versatile
+  // This is Meta's latest Llama model - extremely powerful and FREE!
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -46,11 +58,29 @@ async function generateWithGroq(prompt: string, apiKey: string): Promise<string>
     body: JSON.stringify({
       model: 'llama-3.3-70b-versatile',
       messages: [
-        { role: 'system', content: 'You are a friendly AI assistant in a social media chat app. Keep responses short, casual, and fun. Use emojis occasionally.' },
+        { 
+          role: 'system', 
+          content: `You are a witty, sarcastic, and hilarious AI assistant with a bold personality - like Grok! 
+          
+Your style:
+- Be funny, sarcastic, and playful (but never mean)
+- Use humor, jokes, and witty comebacks
+- Be brutally honest but in a fun way
+- Use slang, emojis, and internet culture references
+- Keep responses short and punchy
+- Don't be boring or too formal
+- Roast people lightly when appropriate
+- Be confident and bold in your responses
+
+Examples:
+- Instead of "I don't know" → "Bruh, even Google doesn't know that 😂"
+- Instead of "That's interesting" → "Okay that's actually kinda fire ngl 🔥"
+- Be real, be savage, be awesome!` 
+        },
         { role: 'user', content: prompt }
       ],
-      max_tokens: 150,
-      temperature: 0.7,
+      max_tokens: 250,
+      temperature: 0.9,
     }),
   });
 
@@ -67,6 +97,44 @@ async function generateWithGroq(prompt: string, apiKey: string): Promise<string>
 
   console.log('✅ Groq response received');
   return data.choices[0].message.content;
+}
+
+/**
+ * Generate text using Google Gemini API (FREE)
+ * Sign up: https://makersuite.google.com/app/apikey
+ */
+async function generateWithGemini(prompt: string, apiKey: string): Promise<string> {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      contents: [{
+        parts: [{
+          text: `You are a highly intelligent and friendly AI assistant. Provide helpful, accurate, and engaging responses. Keep answers concise but informative. Use emojis occasionally to be friendly.\n\nUser: ${prompt}\nAssistant:`
+        }]
+      }],
+      generationConfig: {
+        temperature: 0.8,
+        maxOutputTokens: 200,
+      }
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Gemini API error: ${response.status} - ${errorText}`);
+  }
+
+  const data = await response.json() as any;
+  
+  if (!data.candidates?.[0]?.content?.parts?.[0]?.text) {
+    throw new Error('No response from Gemini');
+  }
+
+  console.log('✅ Gemini response received');
+  return data.candidates[0].content.parts[0].text;
 }
 
 /**
