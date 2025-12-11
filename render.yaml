@@ -9,6 +9,8 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: USE_CLOUD_AI
+        value: true
       - key: MONGODB_URI
         sync: false
       - key: JWT_SECRET
@@ -18,4 +20,6 @@ services:
       - key: CLOUDINARY_API_KEY
         sync: false
       - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: GROQ_API_KEY
         sync: false
