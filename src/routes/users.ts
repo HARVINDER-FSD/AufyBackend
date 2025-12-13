@@ -2330,6 +2330,8 @@ router.get('/:username/posts', authenticate, async (req: any, res: Response) => 
             caption: post.caption || post.content || '',
             media_type: post.media_type || 'text',
             media_urls: post.media_urls || [],
+            image_url: post.media_urls && post.media_urls[0] ? post.media_urls[0] : null, // Add image_url field
+            type: post.type || (post.media_type === 'video' ? 'reel' : 'post'), // Add type field
             likes_count: post.likes_count || 0,
             comments_count: post.comments_count || 0,
             shares_count: post.shares_count || 0,
