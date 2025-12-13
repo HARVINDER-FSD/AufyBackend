@@ -12,6 +12,11 @@ const followSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
+  status: {
+    type: String,
+    enum: ['active', 'pending'],
+    default: 'active'
+  },
   created_at: {
     type: Date,
     default: Date.now
