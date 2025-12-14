@@ -7,42 +7,49 @@
  */
 export async function generateWithHuggingFace(prompt: string): Promise<string> {
   try {
-    // Try xAI Grok first (ACTUAL GROK!)
-    const XAI_API_KEY = process.env.XAI_API_KEY;
-    if (XAI_API_KEY) {
+    // Try Groq FIRST (FREE and fast - Llama 3.3 70B)
+    const GROQ_API_KEY = process.env.GROQ_API_KEY;
+    if (GROQ_API_KEY) {
       try {
-        console.log('🚀 Trying xAI Grok API - The REAL Grok!');
-        return await generateWithGrok(prompt, XAI_API_KEY);
-      } catch (grokError: any) {
-        console.log('⚠️ xAI Grok failed:', grokError.message);
-        console.log('⚡ Falling back to Groq (FREE)...');
-        // Continue to Groq fallback
+        console.log('⚡ Using Groq API - Llama 3.3 70B (FREE)');
+        return await generateWithGroq(prompt, GROQ_API_KEY);
+      } catch (groqError: any) {
+        console.log('⚠️ Groq failed:', groqError.message);
+        console.log('🚀 Falling back to xAI Grok...');
       }
     }
     
-    // Try Groq (FREE and fast - Llama 3.3 70B)
-    const GROQ_API_KEY = process.env.GROQ_API_KEY;
-    if (GROQ_API_KEY) {
-      console.log('⚡ Using Groq API - Llama 3.3 70B (FREE)');
-      return await generateWithGroq(prompt, GROQ_API_KEY);
+    // Try xAI Grok second (has free tier)
+    const XAI_API_KEY = process.env.XAI_API_KEY;
+    if (XAI_API_KEY) {
+      try {
+        console.log('🚀 Using xAI Grok API');
+        return await generateWithGrok(prompt, XAI_API_KEY);
+      } catch (grokError: any) {
+        console.log('⚠️ xAI Grok failed:', grokError.message);
+      }
     }
     
     // Try Google Gemini (FREE and powerful)
     const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
     if (GEMINI_API_KEY) {
-      console.log('🌟 Using Google Gemini API (FREE)');
-      return await generateWithGemini(prompt, GEMINI_API_KEY);
+      try {
+        console.log('🌟 Using Google Gemini API (FREE)');
+        return await generateWithGemini(prompt, GEMINI_API_KEY);
+      } catch (geminiError: any) {
+        console.log('⚠️ Gemini failed:', geminiError.message);
+      }
     }
     
-    // Try OpenAI if available (PAID)
-    const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-    if (OPENAI_API_KEY) {
-      console.log('🤖 Using OpenAI API (PAID)');
-      return await generateWithOpenAI(prompt, OPENAI_API_KEY);
-    }
+    // SKIP OpenAI - no credits available
+    // const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+    // if (OPENAI_API_KEY) {
+    //   console.log('🤖 Using OpenAI API (PAID)');
+    //   return await generateWithOpenAI(prompt, OPENAI_API_KEY);
+    // }
     
-    // Fallback to mock response if no API key
-    console.log('💬 No API key, using smart mock response');
+    // Fallback to mock response if no API key works
+    console.log('💬 All APIs failed or unavailable, using smart mock response');
     return generateSmartMockResponse(prompt);
 
   } catch (error: any) {

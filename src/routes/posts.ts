@@ -258,9 +258,19 @@ router.get("/:postId/comments", optionalAuth, async (req, res) => {
 
     res.json(result)
   } catch (error: any) {
+    console.error('[COMMENTS] Error fetching comments:', error)
     res.status(error.statusCode || 500).json({
       success: false,
-      error: error.message,
+      error: error.message || 'Failed to fetch comments',
+      data: [], // Return empty array as fallback
+      pagination: {
+        page: 1,
+        limit: 20,
+        total: 0,
+        totalPages: 0,
+        hasNext: false,
+        hasPrev: false,
+      }
     })
   }
 })
@@ -282,9 +292,10 @@ router.post("/:postId/comments", authenticateToken, async (req, res) => {
       message: "Comment created successfully",
     })
   } catch (error: any) {
+    console.error('[COMMENT CREATE] Error:', error)
     res.status(error.statusCode || 500).json({
       success: false,
-      error: error.message,
+      error: error.message || 'Failed to create comment',
     })
   }
 })
