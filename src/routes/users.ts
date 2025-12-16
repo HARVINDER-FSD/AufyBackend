@@ -107,34 +107,80 @@ router.get('/list', authenticate, async (req: any, res: Response) => {
     try {
         const db = await getDb()
         const limit = parseInt(req.query.limit as string) || 50
+        const mutual = req.query.mutual === 'true'
         const currentUserId = new ObjectId(req.userId)
-
-        // Get users that current user is following
-        const follows = await db.collection('follows')
-            .find({ follower_id: currentUserId })
-            .limit(limit)
-            .toArray()
 
         let users = []
 
-        if (follows.length === 0) {
-            // If not following anyone, show all users except self
+        if (mutual) {
+            // Get mutual followers (users who follow you AND you follow them)
+            // Step 1: Get users you are following
+            const following = await db.collection('follows')
+                .find({ follower_id: currentUserId })
+                .toArray()
+            
+            const followingIds = following.map(f => f.following_id)
+            
+            if (followingIds.length === 0) {
+                // Not following anyone, no mutual followers
+                return res.json({
+                    success: true,
+                    data: { users: [] }
+                })
+            }
+
+            // Step 2: Get users who follow you back (mutual)
+            const mutualFollows = await db.collection('follows')
+                .find({
+                    follower_id: { $in: followingIds },
+                    following_id: currentUserId
+                })
+                .toArray()
+            
+            const mutualUserIds = mutualFollows.map(f => f.follower_id)
+            
+            if (mutualUserIds.length === 0) {
+                // No mutual followers
+                return res.json({
+                    success: true,
+                    data: { users: [] }
+                })
+            }
+
+            // Step 3: Get user details for mutual followers
             users = await db.collection('users')
                 .find(
-                    { _id: { $ne: currentUserId } },
+                    { _id: { $in: mutualUserIds } },
                     { projection: { password: 0, email: 0 } }
                 )
                 .limit(limit)
                 .toArray()
         } else {
-            // Get user details for all following users
-            const followingUserIds = follows.map(f => f.following_id)
-            users = await db.collection('users')
-                .find(
-                    { _id: { $in: followingUserIds } },
-                    { projection: { password: 0, email: 0 } }
-                )
+            // Original logic: Get users that current user is following
+            const follows = await db.collection('follows')
+                .find({ follower_id: currentUserId })
+                .limit(limit)
                 .toArray()
+
+            if (follows.length === 0) {
+                // If not following anyone, show all users except self
+                users = await db.collection('users')
+                    .find(
+                        { _id: { $ne: currentUserId } },
+                        { projection: { password: 0, email: 0 } }
+                    )
+                    .limit(limit)
+                    .toArray()
+            } else {
+                // Get user details for all following users
+                const followingUserIds = follows.map(f => f.following_id)
+                users = await db.collection('users')
+                    .find(
+                        { _id: { $in: followingUserIds } },
+                        { projection: { password: 0, email: 0 } }
+                    )
+                    .toArray()
+            }
         }
 
         const formattedUsers = users.map(user => ({
