@@ -1074,6 +1074,14 @@ router.get('/:userId/followers', authenticate, async (req: any, res: Response) =
 
         console.log('[FOLLOWERS] Found', followers.length, 'user records')
 
+        // Check which followers the current user is following back
+        const currentUserFollowing = currentUserId ? await db.collection('follows').find({
+            followerId: new ObjectId(currentUserId),
+            status: 'accepted'
+        }).toArray() : []
+
+        const followingIds = new Set(currentUserFollowing.map(f => f.followingId.toString()))
+
         await client.close()
 
         const result = followers.map(user => ({
@@ -1083,7 +1091,8 @@ router.get('/:userId/followers', authenticate, async (req: any, res: Response) =
             avatar_url: user.avatar_url || user.avatar || '/placeholder-user.jpg',
             is_verified: user.is_verified || user.verified || false,
             badge_type: user.badge_type || null,
-            is_private: user.is_private || false
+            is_private: user.is_private || false,
+            isFollowing: followingIds.has(user._id.toString())
         }))
 
         console.log('[FOLLOWERS] Returning', result.length, 'followers')
@@ -1204,6 +1213,8 @@ router.get('/:userId/following', authenticate, async (req: any, res: Response) =
             _id: { $in: followingIds }
         }).toArray()
 
+        // For following list, all users are already being followed (isFollowing = true)
+        // This is because we're showing who the user is following
         await client.close()
 
         const result = following.map(user => ({
@@ -1213,7 +1224,8 @@ router.get('/:userId/following', authenticate, async (req: any, res: Response) =
             avatar_url: user.avatar_url || user.avatar || '/placeholder-user.jpg',
             is_verified: user.is_verified || user.verified || false,
             badge_type: user.badge_type || null,
-            is_private: user.is_private || false
+            is_private: user.is_private || false,
+            isFollowing: true // Always true in following list
         }))
 
         return res.json({ data: result })
