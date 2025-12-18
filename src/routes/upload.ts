@@ -1,8 +1,16 @@
 import { Router } from "express"
 import { authenticateToken } from "../middleware/auth"
 import { v4 as uuidv4 } from "uuid"
+import { v2 as cloudinary } from 'cloudinary'
 
 const router = Router()
+
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+})
 
 // Get Cloudinary configuration for direct upload
 router.post("/", authenticateToken, async (req: any, res) => {
@@ -15,15 +23,16 @@ router.post("/", authenticateToken, async (req: any, res) => {
     const publicId = `${folder}/${userId}/${timestamp}`
     
     // Generate signature for authenticated upload
-    const cloudinary = require('cloudinary').v2
     const signature = cloudinary.utils.api_sign_request(
       {
         timestamp: timestamp,
         folder: folder,
         public_id: publicId
       },
-      process.env.CLOUDINARY_API_SECRET
+      process.env.CLOUDINARY_API_SECRET as string
     )
+    
+    console.log('✅ Cloudinary config generated for user:', userId)
     
     // Return Cloudinary config for direct upload
     res.json({
@@ -35,9 +44,10 @@ router.post("/", authenticateToken, async (req: any, res) => {
       publicId: publicId,
     })
   } catch (error: any) {
-    console.error('Cloudinary config error:', error)
+    console.error('❌ Cloudinary config error:', error)
     res.status(error.statusCode || 500).json({
       success: false,
+      message: error.message || 'Failed to generate upload configuration',
       error: error.message,
     })
   }

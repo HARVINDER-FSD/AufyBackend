@@ -1,10 +1,11 @@
 import express from 'express';
 import { modelService } from '../services/ai/modelService';
+import { generateImage, generateWithPollinations } from '../services/ai/imageAI';
 import { authenticateToken } from '../middleware/auth';
 
 const router = express.Router();
 
-// POST /api/ai/generate
+// POST /api/ai/generate - Text generation
 router.post('/generate', authenticateToken, async (req, res) => {
     try {
         const { prompt } = req.body;
@@ -22,7 +23,7 @@ router.post('/generate', authenticateToken, async (req, res) => {
     }
 });
 
-// POST /api/ai/stream (Server-Sent Events)
+// POST /api/ai/stream - Text generation with streaming (Server-Sent Events)
 router.post('/stream', authenticateToken, async (req, res) => {
     try {
         const { prompt } = req.body;
@@ -55,6 +56,43 @@ router.post('/stream', authenticateToken, async (req, res) => {
         } else {
             res.end();
         }
+    }
+});
+
+// POST /api/ai/generate-image - Image generation
+router.post('/generate-image', authenticateToken, async (req, res) => {
+    try {
+        const { prompt } = req.body;
+
+        if (!prompt) {
+            return res.status(400).json({ error: 'Prompt is required' });
+        }
+
+        console.log('🎨 Generating image for prompt:', prompt);
+
+        // Try Pollinations.ai first (FREE, no API key needed)
+        try {
+            const imageUrl = await generateWithPollinations(prompt);
+            return res.json({ 
+                imageUrl,
+                provider: 'Pollinations.ai (FREE)',
+                prompt 
+            });
+        } catch (pollinationsError) {
+            console.log('⚠️ Pollinations failed, trying other providers...');
+        }
+
+        // Fallback to other providers (Hugging Face, Stability AI)
+        const imageUrl = await generateImage(prompt);
+
+        res.json({ 
+            imageUrl,
+            provider: 'AI Image Generator',
+            prompt 
+        });
+    } catch (error) {
+        console.error('AI image generation error:', error);
+        res.status(500).json({ error: 'Failed to generate image' });
     }
 });
 

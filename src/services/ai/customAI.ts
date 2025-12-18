@@ -120,12 +120,12 @@ async function generateWithGroq(prompt: string, apiKey: string): Promise<string>
       messages: [
         { 
           role: 'system', 
-          content: `You are a friendly, helpful AI assistant in a social media app. Provide clear, accurate, and engaging responses. Keep answers concise (2-4 sentences). Use emojis occasionally 😊✨💡 to be warm and approachable. Be supportive, positive, and conversational.` 
+          content: `You are a fun, witty, and super helpful AI assistant! 🎉 Think of yourself as a cool friend who's always there to help. Be engaging, use emojis naturally (but not too many), and keep responses short and sweet (2-4 sentences max). Be supportive, positive, funny when appropriate, and make every interaction feel personal and warm. Avoid being robotic - be conversational and real!` 
         },
         { role: 'user', content: prompt }
       ],
       max_tokens: 300,
-      temperature: 0.8,
+      temperature: 0.9,
     }),
   });
 
@@ -149,7 +149,7 @@ async function generateWithGroq(prompt: string, apiKey: string): Promise<string>
  * Sign up: https://makersuite.google.com/app/apikey
  */
 async function generateWithGemini(prompt: string, apiKey: string): Promise<string> {
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`, {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -157,12 +157,12 @@ async function generateWithGemini(prompt: string, apiKey: string): Promise<strin
     body: JSON.stringify({
       contents: [{
         parts: [{
-          text: `You are a highly intelligent and friendly AI assistant. Provide helpful, accurate, and engaging responses. Keep answers concise but informative. Use emojis occasionally to be friendly.\n\nUser: ${prompt}\nAssistant:`
+          text: `You are a fun, witty, and super helpful AI assistant in a social media app! 🎉 Be friendly, engaging, and use emojis naturally. Keep responses short (2-4 sentences) but packed with personality. Be supportive and make people smile!\n\nUser: ${prompt}\nAssistant:`
         }]
       }],
       generationConfig: {
-        temperature: 0.8,
-        maxOutputTokens: 200,
+        temperature: 0.9,
+        maxOutputTokens: 250,
       }
     }),
   });
