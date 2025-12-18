@@ -3,11 +3,19 @@
 
 /**
  * Generate image using AI
- * Priority: Hugging Face (FREE) → Stability AI → Mock
+ * Priority: Pollinations.ai (FREE, no API key) → Hugging Face (FREE) → Stability AI (PAID)
  */
 export async function generateImage(prompt: string): Promise<string> {
   try {
-    // Try Hugging Face FIRST (FREE)
+    // Try Pollinations.ai FIRST (FREE, no API key needed!)
+    try {
+      console.log('🎨 Using Pollinations.ai (FREE, no API key needed)');
+      return await generateWithPollinations(prompt);
+    } catch (pollinationsError: any) {
+      console.log('⚠️ Pollinations.ai failed:', pollinationsError.message);
+    }
+    
+    // Try Hugging Face (FREE, requires API key)
     const HF_API_KEY = process.env.HUGGINGFACE_API_KEY;
     if (HF_API_KEY) {
       try {
@@ -45,8 +53,8 @@ export async function generateImage(prompt: string): Promise<string> {
  * Sign up: https://huggingface.co/settings/tokens
  */
 async function generateWithHuggingFace(prompt: string, apiKey: string): Promise<string> {
-  // Using FLUX.1-schnell - fastest free model (1-4 steps)
-  const model = 'black-forest-labs/FLUX.1-schnell';
+  // Using Stable Diffusion 2.1 - reliable and fast
+  const model = 'stabilityai/stable-diffusion-2-1';
   
   const response = await fetch(
     `https://api-inference.huggingface.co/models/${model}`,
@@ -138,19 +146,32 @@ function generatePlaceholderImage(prompt: string): string {
 }
 
 /**
- * Alternative FREE image generation APIs
+ * Pollinations.ai (FREE, no API key needed!)
+ * This is now the PRIMARY method - fast, reliable, and completely free
  */
+async function generateWithPollinations(prompt: string): Promise<string> {
+  const encodedPrompt = encodeURIComponent(prompt);
+  const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&enhance=true`;
+  
+  // Fetch the image to convert to base64
+  const response = await fetch(imageUrl);
+  
+  if (!response.ok) {
+    throw new Error(`Pollinations.ai error: ${response.status}`);
+  }
+  
+  // Convert to base64
+  const arrayBuffer = await response.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  const base64 = buffer.toString('base64');
+  
+  console.log('✅ Pollinations.ai image generated');
+  return `data:image/jpeg;base64,${base64}`;
+}
 
 /**
- * Pollinations.ai (FREE, no API key needed!)
+ * Alternative FREE image generation APIs
  */
-export async function generateWithPollinations(prompt: string): Promise<string> {
-  const encodedPrompt = encodeURIComponent(prompt);
-  const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=512&height=512&nologo=true`;
-  
-  console.log('✅ Pollinations.ai image URL generated');
-  return imageUrl;
-}
 
 /**
  * Craiyon (formerly DALL-E mini) - FREE, no API key
