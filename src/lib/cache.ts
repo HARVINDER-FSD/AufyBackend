@@ -1,127 +1,99 @@
-/**
- * Simple In-Memory Cache
- * For production, replace with Redis
- */
+import Redis from 'ioredis'
 
-interface CacheItem {
-  data: any;
-  expiry: number;
-}
+// Initialize Redis connection (will use Upstash when configured)
+const redis = process.env.REDIS_URL 
+  ? new Redis(process.env.REDIS_URL)
+  : null
 
-class MemoryCache {
-  private cache: Map<string, CacheItem> = new Map();
-  private cleanupInterval: NodeJS.Timeout;
-
-  constructor() {
-    // Clean up expired items every minute
-    this.cleanupInterval = setInterval(() => {
-      this.cleanup();
-    }, 60000);
-  }
-
-  /**
-   * Get item from cache
-   */
-  get(key: string): any | null {
-    const item = this.cache.get(key);
-    
-    if (!item) return null;
-    
-    // Check if expired
-    if (Date.now() > item.expiry) {
-      this.cache.delete(key);
-      return null;
-    }
-    
-    return item.data;
-  }
-
-  /**
-   * Set item in cache with TTL (time to live) in seconds
-   */
-  set(key: string, data: any, ttlSeconds: number = 300): void {
-    const expiry = Date.now() + (ttlSeconds * 1000);
-    this.cache.set(key, { data, expiry });
-  }
-
-  /**
-   * Delete item from cache
-   */
-  delete(key: string): void {
-    this.cache.delete(key);
-  }
-
-  /**
-   * Delete all items matching pattern
-   */
-  deletePattern(pattern: string): void {
-    const regex = new RegExp(pattern);
-    for (const key of this.cache.keys()) {
-      if (regex.test(key)) {
-        this.cache.delete(key);
-      }
-    }
-  }
-
-  /**
-   * Clear all cache
-   */
-  clear(): void {
-    this.cache.clear();
-  }
-
-  /**
-   * Get cache stats
-   */
-  stats(): { size: number; keys: string[] } {
-    return {
-      size: this.cache.size,
-      keys: Array.from(this.cache.keys())
-    };
-  }
-
-  /**
-   * Clean up expired items
-   */
-  private cleanup(): void {
-    const now = Date.now();
-    for (const [key, item] of this.cache.entries()) {
-      if (now > item.expiry) {
-        this.cache.delete(key);
-      }
-    }
-  }
-
-  /**
-   * Destroy cache and cleanup
-   */
-  destroy(): void {
-    clearInterval(this.cleanupInterval);
-    this.cache.clear();
+// Cache wrapper with fallback
+export async function cacheGet<T>(key: string): Promise<T | null> {
+  if (!redis) return null
+  
+  try {
+    const cached = await redis.get(key)
+    return cached ? JSON.parse(cached) : null
+  } catch (error) {
+    console.error('Cache get error:', error)
+    return null
   }
 }
 
-// Export singleton instance
-export const cache = new MemoryCache();
+export async function cacheSet(key: string, value: any, ttlSeconds: number): Promise<void> {
+  if (!redis) return
+  
+  try {
+    await redis.setex(key, ttlSeconds, JSON.stringify(value))
+  } catch (error) {
+    console.error('Cache set error:', error)
+  }
+}
+
+export async function cacheDelete(key: string): Promise<void> {
+  if (!redis) return
+  
+  try {
+    await redis.del(key)
+  } catch (error) {
+    console.error('Cache delete error:', error)
+  }
+}
+
+export async function cacheDeletePattern(pattern: string): Promise<void> {
+  if (!redis) return
+  
+  try {
+    const keys = await redis.keys(pattern)
+    if (keys.length > 0) {
+      await redis.del(...keys)
+    }
+  } catch (error) {
+    console.error('Cache delete pattern error:', error)
+  }
+}
 
 // Cache key generators
-export const CacheKeys = {
-  userProfile: (userId: string) => `user:profile:${userId}`,
-  userFeed: (userId: string, page: number) => `user:feed:${userId}:${page}`,
-  posts: (page: number) => `posts:${page}`,
-  reels: (page: number) => `reels:${page}`,
-  stories: () => `stories:all`,
-  userStories: (userId: string) => `stories:user:${userId}`,
-  trending: (category: string) => `trending:${category}`,
-  search: (query: string) => `search:${query}`,
+export const cacheKeys = {
+  user: (userId: string) => `user:${userId}`,
+  userByUsername: (username: string) => `user:username:${username}`,
+  post: (postId: string) => `post:${postId}`,
+  feed: (userId: string, page: number = 1) => `feed:${userId}:${page}`,
   followers: (userId: string) => `followers:${userId}`,
   following: (userId: string) => `following:${userId}`,
-};
+  stories: (userId: string) => `stories:${userId}`,
+  userPosts: (userId: string, page: number = 1) => `posts:${userId}:${page}`,
+}
 
-// Cache TTL (time to live) in seconds
-export const CacheTTL = {
-  short: 60,        // 1 minute
-  medium: 300,      // 5 minutes
-  long: 900,        // 15 minutes
-  veryLong: 3600,   // 1 hour
-};
+// Cache TTL (Time To Live) in seconds
+export const cacheTTL = {
+  user: 900, // 15 minutes
+  post: 600, // 10 minutes
+  feed: 300, // 5 minutes
+  followers: 600, // 10 minutes
+  following: 600, // 10 minutes
+  stories: 180, // 3 minutes
+  userPosts: 600, // 10 minutes
+}
+
+// Helper function to cache with automatic TTL
+export async function cacheWithTTL<T>(
+  key: string,
+  ttl: number,
+  fetchFn: () => Promise<T>
+): Promise<T> {
+  // Try cache first
+  const cached = await cacheGet<T>(key)
+  if (cached !== null) {
+    return cached
+  }
+  
+  // Cache miss - fetch data
+  const data = await fetchFn()
+  
+  // Cache the result
+  await cacheSet(key, data, ttl)
+  
+  return data
+}
+
+// Export redis instance for advanced usage
+export { redis }

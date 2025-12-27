@@ -72,10 +72,11 @@ export interface Reel {
   is_public: boolean
   created_at: Date
   updated_at: Date
-  user?: User
+  user?: Partial<User> & { id: string; username: string; is_following?: boolean }
   likes_count?: number
   comments_count?: number
   is_liked?: boolean
+  is_following?: boolean
 }
 
 export interface Follow {

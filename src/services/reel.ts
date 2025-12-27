@@ -1,6 +1,6 @@
 import { getDatabase, cache } from "../lib/database"
 import { StorageService } from "../lib/storage"
-import type { Reel, CreateReelRequest, PaginatedResponse } from "../lib/types"
+import type { Reel, CreateReelRequest, PaginatedResponse, User } from "../lib/types"
 import { pagination, errors } from "../lib/utils"
 import { ObjectId } from "mongodb"
 
@@ -66,7 +66,7 @@ export class ReelService {
         full_name: user.full_name,
         avatar_url: user.avatar_url,
         is_verified: user.is_verified || false,
-      },
+      } as Partial<User> & { id: string; username: string },
       likes_count: 0,
       comments_count: 0,
       is_liked: false,
@@ -132,7 +132,7 @@ export class ReelService {
         full_name: user.full_name,
         avatar_url: user.avatar_url,
         is_verified: user.is_verified || false,
-      },
+      } as Partial<User> & { id: string; username: string },
       likes_count: likesCount,
       comments_count: commentsCount,
       is_liked
@@ -382,8 +382,8 @@ export class ReelService {
           // Check if current user is following the reel creator
           const followsCollection = db.collection('follows')
           const follow = await followsCollection.findOne({
-            follower_id: new ObjectId(currentUserId),
-            following_id: reel.user._id
+            followerId: new ObjectId(currentUserId),
+            followingId: reel.user._id
           })
           is_following = !!follow
         }
@@ -412,7 +412,7 @@ export class ReelService {
           comments_count: reel.comments_count,
           is_liked,
           is_following, // Add follow state to reel object
-        } as Reel
+        }
       })
     )
 

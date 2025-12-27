@@ -1,31 +1,87 @@
-import mongoose from 'mongoose';
+// Message Model - MongoDB Schema for WebSocket Chat
+import mongoose, { Schema, Document } from 'mongoose';
 
-const messageSchema = new mongoose.Schema({
-  conversation: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Conversation',
-    required: true
+export interface IMessage extends Document {
+  chatId: string;
+  senderId: mongoose.Types.ObjectId;
+  recipientId: mongoose.Types.ObjectId;
+  content: string;
+  type: 'text' | 'image' | 'video' | 'audio' | 'file' | 'post' | 'reel';
+  mediaUrl?: string;
+  replyTo?: mongoose.Types.ObjectId;
+  status: 'sent' | 'delivered' | 'read';
+  reactions?: Array<{ userId: string; emoji: string }>;
+  deleted: boolean;
+  deletedAt?: Date;
+  readAt?: Date;
+  timestamp: Date;
+}
+
+const MessageSchema = new Schema<IMessage>({
+  chatId: {
+    type: String,
+    required: true,
+    index: true,
   },
-  sender: {
-    type: mongoose.Schema.Types.ObjectId,
+  senderId: {
+    type: Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    required: true,
+    index: true,
+  },
+  recipientId: {
+    type: Schema.Types.ObjectId,
+    ref: 'User',
+    required: true,
+    index: true,
   },
   content: {
     type: String,
-    trim: true
+    required: true,
   },
-  image: {
-    type: String
+  type: {
+    type: String,
+    enum: ['text', 'image', 'video', 'audio', 'file', 'post', 'reel'],
+    default: 'text',
   },
-  read: {
+  mediaUrl: {
+    type: String,
+  },
+  replyTo: {
+    type: Schema.Types.ObjectId,
+    ref: 'Message',
+  },
+  status: {
+    type: String,
+    enum: ['sent', 'delivered', 'read'],
+    default: 'sent',
+  },
+  reactions: [{
+    userId: String,
+    emoji: String,
+  }],
+  deleted: {
     type: Boolean,
-    default: false
-  }
+    default: false,
+  },
+  deletedAt: {
+    type: Date,
+  },
+  readAt: {
+    type: Date,
+  },
+  timestamp: {
+    type: Date,
+    default: Date.now,
+    index: true,
+  },
 }, {
-  timestamps: true
+  timestamps: true,
 });
 
-messageSchema.index({ conversation: 1, createdAt: -1 });
+// Compound indexes for efficient queries
+MessageSchema.index({ chatId: 1, timestamp: -1 });
+MessageSchema.index({ senderId: 1, recipientId: 1, timestamp: -1 });
+MessageSchema.index({ recipientId: 1, status: 1 });
 
-export default mongoose.model('Message', messageSchema);
+export default mongoose.model<IMessage>('Message', MessageSchema);

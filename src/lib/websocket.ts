@@ -1,232 +1,287 @@
-import { Server as SocketIOServer, type Socket } from "socket.io"
-import type { Server as HTTPServer } from "http"
-import { token } from "./utils"
-import { redisPub, redisSub } from "./database"
-import { config } from "./config"
-import type { JWTPayload } from "./types"
+// WebSocket Server - Scalable Real-time Chat with Socket.io
+import { Server as HTTPServer } from 'http';
+import { Server as SocketIOServer, Socket } from 'socket.io';
+import jwt from 'jsonwebtoken';
+import Message from '../models/message';
+import User from '../models/user';
 
-interface AuthenticatedSocket extends Socket {
-  userId?: string
-  username?: string
-}
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 
-export class WebSocketService {
-  private io: SocketIOServer
-  private connectedUsers = new Map<string, Set<string>>() // userId -> Set of socketIds
+// Store active connections
+const activeUsers = new Map<string, string>(); // userId -> socketId
+const userSockets = new Map<string, Socket>(); // userId -> socket
 
-  constructor(server: HTTPServer) {
-    this.io = new SocketIOServer(server, {
-      cors: {
-        origin: "*",
-        methods: ["GET", "POST"],
-      },
-      pingInterval: config.websocket.pingInterval,
-      pingTimeout: config.websocket.pingTimeout,
-    })
+export function initializeWebSocket(httpServer: HTTPServer) {
+  const io = new SocketIOServer(httpServer, {
+    cors: {
+      origin: '*',
+      methods: ['GET', 'POST'],
+      credentials: true,
+    },
+    transports: ['websocket', 'polling'],
+    pingTimeout: 60000,
+    pingInterval: 25000,
+  });
 
-    this.setupMiddleware()
-    this.setupEventHandlers()
-    this.setupRedisSubscription()
-  }
-
-  private setupMiddleware() {
-    // Authentication middleware
-    this.io.use((socket: AuthenticatedSocket, next) => {
-      try {
-        const authToken = socket.handshake.auth.token || socket.handshake.headers.authorization?.split(" ")[1]
-
-        if (!authToken) {
-          return next(new Error("Authentication token required"))
-        }
-
-        const payload = token.verify(authToken) as JWTPayload
-        socket.userId = payload.userId
-        socket.username = payload.username
-
-        next()
-      } catch (error) {
-        next(new Error("Invalid authentication token"))
-      }
-    })
-  }
-
-  private setupEventHandlers() {
-    this.io.on("connection", (socket: AuthenticatedSocket) => {
-      console.log(`User ${socket.username} connected with socket ${socket.id}`)
-
-      // Track connected user
-      if (socket.userId) {
-        if (!this.connectedUsers.has(socket.userId)) {
-          this.connectedUsers.set(socket.userId, new Set())
-        }
-        this.connectedUsers.get(socket.userId)!.add(socket.id)
-
-        // Join user's personal room
-        socket.join(`user:${socket.userId}`)
-
-        // Broadcast user online status
-        this.broadcastUserStatus(socket.userId, "online")
+  // Authentication middleware
+  io.use(async (socket, next) => {
+    try {
+      const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.replace('Bearer ', '');
+      
+      if (!token) {
+        return next(new Error('Authentication error: No token provided'));
       }
 
-      // Handle joining conversation rooms
-      socket.on("join_conversation", (conversationId: string) => {
-        socket.join(`conversation:${conversationId}`)
-        console.log(`User ${socket.username} joined conversation ${conversationId}`)
-      })
-
-      // Handle leaving conversation rooms
-      socket.on("leave_conversation", (conversationId: string) => {
-        socket.leave(`conversation:${conversationId}`)
-        console.log(`User ${socket.username} left conversation ${conversationId}`)
-      })
-
-      // Handle typing indicators
-      socket.on("typing_start", (data: { conversationId: string }) => {
-        socket.to(`conversation:${data.conversationId}`).emit("user_typing", {
-          userId: socket.userId,
-          username: socket.username,
-          conversationId: data.conversationId,
-        })
-      })
-
-      socket.on("typing_stop", (data: { conversationId: string }) => {
-        socket.to(`conversation:${data.conversationId}`).emit("user_stopped_typing", {
-          userId: socket.userId,
-          username: socket.username,
-          conversationId: data.conversationId,
-        })
-      })
-
-      // Handle message read receipts
-      socket.on("mark_messages_read", (data: { conversationId: string; messageIds: string[] }) => {
-        // Broadcast read receipt to other participants
-        socket.to(`conversation:${data.conversationId}`).emit("messages_read", {
-          userId: socket.userId,
-          username: socket.username,
-          conversationId: data.conversationId,
-          messageIds: data.messageIds,
-          readAt: new Date(),
-        })
-      })
-
-      // Handle user status updates
-      socket.on("update_status", (status: "online" | "away" | "busy") => {
-        if (socket.userId) {
-          this.broadcastUserStatus(socket.userId, status)
-        }
-      })
-
-      // Handle disconnection
-      socket.on("disconnect", () => {
-        console.log(`User ${socket.username} disconnected`)
-
-        if (socket.userId) {
-          const userSockets = this.connectedUsers.get(socket.userId)
-          if (userSockets) {
-            userSockets.delete(socket.id)
-            if (userSockets.size === 0) {
-              this.connectedUsers.delete(socket.userId)
-              // Broadcast user offline status after a delay
-              setTimeout(() => {
-                if (!this.connectedUsers.has(socket.userId!)) {
-                  this.broadcastUserStatus(socket.userId!, "offline")
-                }
-              }, 5000) // 5 second delay to handle quick reconnections
-            }
-          }
-        }
-      })
-    })
-  }
-
-  private setupRedisSubscription() {
-    // Subscribe to Redis channels for cross-server communication
-    redisSub.subscribe("chat_message", "notification", "user_status")
-
-    redisSub.on("message", (channel: string, message: string) => {
-      try {
-        const data = JSON.parse(message)
-
-        switch (channel) {
-          case "chat_message":
-            this.handleChatMessage(data)
-            break
-          case "notification":
-            this.handleNotification(data)
-            break
-          case "user_status":
-            this.handleUserStatusUpdate(data)
-            break
-        }
-      } catch (error) {
-        console.error("Error processing Redis message:", error)
-      }
-    })
-  }
-
-  private handleChatMessage(data: any) {
-    // Emit message to conversation participants
-    this.io.to(`conversation:${data.conversationId}`).emit("new_message", data)
-  }
-
-  private handleNotification(data: any) {
-    // Send notification to specific user
-    this.io.to(`user:${data.userId}`).emit("notification", data)
-  }
-
-  private handleUserStatusUpdate(data: any) {
-    // Broadcast user status to all connected clients
-    this.io.emit("user_status_update", data)
-  }
-
-  // Public methods for sending messages
-  public sendMessageToConversation(conversationId: string, message: any) {
-    // Publish to Redis for cross-server support
-    redisPub.publish("chat_message", JSON.stringify({ ...message, conversationId }))
-  }
-
-  public sendNotificationToUser(userId: string, notification: any) {
-    // Publish to Redis for cross-server support
-    redisPub.publish("notification", JSON.stringify({ ...notification, userId }))
-  }
-
-  private broadcastUserStatus(userId: string, status: string) {
-    const statusData = {
-      userId,
-      status,
-      timestamp: new Date(),
+      const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
+      socket.data.userId = decoded.userId;
+      
+      console.log(`✅ User ${decoded.userId} authenticated`);
+      next();
+    } catch (error) {
+      console.error('❌ WebSocket auth error:', error);
+      next(new Error('Authentication error'));
     }
+  });
 
-    // Publish to Redis for cross-server support
-    redisPub.publish("user_status", JSON.stringify(statusData))
-  }
+  // Connection handler
+  io.on('connection', (socket: Socket) => {
+    const userId = socket.data.userId;
+    console.log(`🔌 User connected: ${userId} (${socket.id})`);
 
-  public isUserOnline(userId: string): boolean {
-    return this.connectedUsers.has(userId)
-  }
+    // Store user connection
+    activeUsers.set(userId, socket.id);
+    userSockets.set(userId, socket);
 
-  public getOnlineUsers(): string[] {
-    return Array.from(this.connectedUsers.keys())
-  }
+    // Broadcast user online status
+    socket.broadcast.emit('user:online', { userId });
 
-  public getUserSocketCount(userId: string): number {
-    return this.connectedUsers.get(userId)?.size || 0
-  }
+    // Join user's personal room
+    socket.join(`user:${userId}`);
+
+    // Handle joining chat rooms
+    socket.on('chat:join', async (data: { chatId: string }) => {
+      const { chatId } = data;
+      socket.join(`chat:${chatId}`);
+      console.log(`👥 User ${userId} joined chat ${chatId}`);
+    });
+
+    // Handle leaving chat rooms
+    socket.on('chat:leave', (data: { chatId: string }) => {
+      const { chatId } = data;
+      socket.leave(`chat:${chatId}`);
+      console.log(`👋 User ${userId} left chat ${chatId}`);
+    });
+
+    // Handle sending messages
+    socket.on('message:send', async (data: {
+      chatId: string;
+      recipientId: string;
+      content: string;
+      type?: string;
+      mediaUrl?: string;
+      replyTo?: string;
+    }) => {
+      try {
+        const { chatId, recipientId, content, type = 'text', mediaUrl, replyTo } = data;
+
+        // Save message to database
+        const message = new Message({
+          chatId,
+          senderId: userId,
+          recipientId,
+          content,
+          type,
+          mediaUrl,
+          replyTo,
+          status: 'sent',
+          timestamp: new Date(),
+        });
+
+        await message.save();
+
+        // Populate sender info
+        const populatedMessage = await Message.findById(message._id)
+          .populate('senderId', 'username avatar verified badge_type')
+          .populate('replyTo');
+
+        const messageData = {
+          id: populatedMessage._id.toString(),
+          chatId: populatedMessage.chatId,
+          senderId: populatedMessage.senderId,
+          recipientId: populatedMessage.recipientId,
+          content: populatedMessage.content,
+          type: populatedMessage.type,
+          mediaUrl: populatedMessage.mediaUrl,
+          replyTo: populatedMessage.replyTo,
+          status: 'sent',
+          timestamp: populatedMessage.timestamp,
+          reactions: populatedMessage.reactions || [],
+        };
+
+        // Send to recipient if online
+        io.to(`user:${recipientId}`).emit('message:receive', messageData);
+
+        // Send confirmation to sender
+        socket.emit('message:sent', messageData);
+
+        // Update message status to delivered if recipient is online
+        if (activeUsers.has(recipientId)) {
+          message.status = 'delivered';
+          await message.save();
+          
+          socket.emit('message:delivered', {
+            messageId: message._id.toString(),
+            chatId,
+          });
+        }
+
+        console.log(`📨 Message sent from ${userId} to ${recipientId}`);
+      } catch (error) {
+        console.error('❌ Error sending message:', error);
+        socket.emit('message:error', { error: 'Failed to send message' });
+      }
+    });
+
+    // Handle typing indicators
+    socket.on('typing:start', (data: { chatId: string; recipientId: string }) => {
+      const { chatId, recipientId } = data;
+      io.to(`user:${recipientId}`).emit('typing:start', {
+        chatId,
+        userId,
+      });
+    });
+
+    socket.on('typing:stop', (data: { chatId: string; recipientId: string }) => {
+      const { chatId, recipientId } = data;
+      io.to(`user:${recipientId}`).emit('typing:stop', {
+        chatId,
+        userId,
+      });
+    });
+
+    // Handle message read receipts
+    socket.on('message:read', async (data: { messageId: string; chatId: string }) => {
+      try {
+        const { messageId, chatId } = data;
+        
+        const message = await Message.findById(messageId);
+        if (message) {
+          message.status = 'read';
+          message.readAt = new Date();
+          await message.save();
+
+          // Notify sender
+          io.to(`user:${message.senderId}`).emit('message:read', {
+            messageId,
+            chatId,
+            readBy: userId,
+          });
+        }
+      } catch (error) {
+        console.error('❌ Error marking message as read:', error);
+      }
+    });
+
+    // Handle message reactions
+    socket.on('message:react', async (data: {
+      messageId: string;
+      chatId: string;
+      reaction: string;
+    }) => {
+      try {
+        const { messageId, chatId, reaction } = data;
+        
+        const message = await Message.findById(messageId);
+        if (message) {
+          // Toggle reaction
+          const existingReaction = message.reactions?.find(
+            (r: any) => r.userId === userId && r.emoji === reaction
+          );
+
+          if (existingReaction) {
+            // Remove reaction
+            message.reactions = message.reactions?.filter(
+              (r: any) => !(r.userId === userId && r.emoji === reaction)
+            );
+          } else {
+            // Add reaction
+            if (!message.reactions) message.reactions = [];
+            message.reactions.push({ userId, emoji: reaction });
+          }
+
+          await message.save();
+
+          // Broadcast to both users
+          io.to(`chat:${chatId}`).emit('message:reacted', {
+            messageId,
+            chatId,
+            reactions: message.reactions,
+          });
+        }
+      } catch (error) {
+        console.error('❌ Error reacting to message:', error);
+      }
+    });
+
+    // Handle message deletion
+    socket.on('message:delete', async (data: { messageId: string; chatId: string }) => {
+      try {
+        const { messageId, chatId } = data;
+        
+        const message = await Message.findById(messageId);
+        if (message && message.senderId.toString() === userId) {
+          message.deleted = true;
+          message.deletedAt = new Date();
+          await message.save();
+
+          // Broadcast deletion
+          io.to(`chat:${chatId}`).emit('message:deleted', {
+            messageId,
+            chatId,
+          });
+        }
+      } catch (error) {
+        console.error('❌ Error deleting message:', error);
+      }
+    });
+
+    // Handle disconnection
+    socket.on('disconnect', () => {
+      console.log(`🔌 User disconnected: ${userId} (${socket.id})`);
+      
+      activeUsers.delete(userId);
+      userSockets.delete(userId);
+
+      // Broadcast user offline status
+      socket.broadcast.emit('user:offline', { userId });
+    });
+
+    // Handle errors
+    socket.on('error', (error) => {
+      console.error(`❌ Socket error for user ${userId}:`, error);
+    });
+  });
+
+  console.log('✅ WebSocket server initialized');
+  return io;
 }
 
-// Export singleton instance
-let wsService: WebSocketService
-
-export function initializeWebSocket(server: HTTPServer): WebSocketService {
-  if (!wsService) {
-    wsService = new WebSocketService(server)
-  }
-  return wsService
+// Helper function to check if user is online
+export function isUserOnline(userId: string): boolean {
+  return activeUsers.has(userId);
 }
 
-export function getWebSocketService(): WebSocketService {
-  if (!wsService) {
-    throw new Error("WebSocket service not initialized")
+// Helper function to get online users
+export function getOnlineUsers(): string[] {
+  return Array.from(activeUsers.keys());
+}
+
+// Helper function to send notification to user
+export function sendNotificationToUser(userId: string, notification: any) {
+  const socket = userSockets.get(userId);
+  if (socket) {
+    socket.emit('notification', notification);
+    return true;
   }
-  return wsService
+  return false;
 }

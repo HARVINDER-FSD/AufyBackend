@@ -8,9 +8,11 @@ console.log('MONGODB_URI exists:', !!process.env.MONGODB_URI)
 console.log('MONGODB_URI value:', process.env.MONGODB_URI?.substring(0, 50))
 
 import express from 'express'
+import { createServer } from 'http'
 import cors from 'cors'
 import cookieParser from 'cookie-parser'
 import mongoose from 'mongoose'
+import { initializeWebSocket } from './lib/websocket'
 import authRoutes from './routes/auth'
 import usersRoutes from './routes/users'
 import postsRoutes from './routes/posts'
@@ -40,10 +42,15 @@ import aiRoutes from './routes/ai'
 import { initializeFirebase } from './services/firebase-messaging'
 
 const app = express()
+const httpServer = createServer(app)
 const PORT = parseInt(process.env.PORT || '8000')
 
 // Initialize Firebase for push notifications
 initializeFirebase()
+
+// Initialize WebSocket server
+const io = initializeWebSocket(httpServer)
+console.log('✅ WebSocket server initialized')
 
 // Connect to MongoDB at startup
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/socialmedia'
@@ -155,9 +162,10 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
   })
 })
 
-// Start server
-app.listen(PORT, '0.0.0.0', () => {
+// Start server with WebSocket support
+httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Anufy API Server running on port ${PORT}`)
+  console.log(`🔌 WebSocket server ready for real-time chat`)
   console.log(`📍 Health check: http://localhost:${PORT}/health`)
   console.log(`📍 Network access: http://10.55.239.5:${PORT}/health`)
   console.log(`📍 Auth routes: http://localhost:${PORT}/api/auth/*`)
