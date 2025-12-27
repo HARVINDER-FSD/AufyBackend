@@ -125,8 +125,8 @@ export class CommentService {
       .exec()
 
     const userIds = comments.map((c: any) => c.user_id)
-    const users = await User.find({ _id: { $in: userIds }, is_active: true })
-      .select('id username full_name avatar_url is_verified')
+    const users = await User.find({ _id: { $in: userIds } })
+      .select('id username full_name avatar_url is_verified badge_type')
       .lean()
       .exec()
 
@@ -145,8 +145,8 @@ export class CommentService {
           .exec()
 
         const replyUserIds = replies.map((r: any) => r.user_id)
-        const replyUsers = await User.find({ _id: { $in: replyUserIds }, is_active: true })
-          .select('id username full_name avatar_url is_verified')
+        const replyUsers = await User.find({ _id: { $in: replyUserIds } })
+          .select('id username full_name avatar_url is_verified badge_type')
           .lean()
           .exec()
 
@@ -154,13 +154,17 @@ export class CommentService {
           const replyUser = replyUsers.find((u: any) => u._id.toString() === reply.user_id.toString())
           return {
             ...reply,
-            user: replyUser
+            user: replyUser || null,
+            username: replyUser?.username || 'Unknown',
+            user_avatar: replyUser?.avatar_url || null
           }
         })
 
         return {
           ...comment,
-          user: user,
+          user: user || null,
+          username: user?.username || 'Unknown',
+          user_avatar: user?.avatar_url || null,
           replies: repliesWithUsers
         }
       }),
