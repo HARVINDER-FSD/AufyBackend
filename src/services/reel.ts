@@ -382,8 +382,8 @@ export class ReelService {
           // Check if current user is following the reel creator
           const followsCollection = db.collection('follows')
           const follow = await followsCollection.findOne({
-            followerId: new ObjectId(currentUserId),
-            followingId: reel.user._id
+            follower_id: new ObjectId(currentUserId),
+            following_id: reel.user._id
           })
           is_following = !!follow
         }
