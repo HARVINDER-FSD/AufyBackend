@@ -61,11 +61,11 @@ router.get('/me', authenticate, async (req: any, res: Response) => {
 
         // Get actual follower/following counts from follows collection (ACCEPTED ONLY)
         const followersCount = await db.collection('follows').countDocuments({
-            followingId: user._id,
+            following_id: user._id,
             status: 'accepted'
         })
         const followingCount = await db.collection('follows').countDocuments({
-            followerId: user._id,
+            follower_id: user._id,
             status: 'accepted'
         })
         
@@ -237,15 +237,15 @@ router.get('/username/:username', async (req: any, res: Response) => {
 
         if (currentUserId) {
             const followRecord = await db.collection('follows').findOne({
-                followerId: new ObjectId(currentUserId),
-                followingId: user._id
+                follower_id: new ObjectId(currentUserId),
+                following_id: user._id
             })
             isFollowing = !!followRecord;
 
             // Check if target user follows back
             const reverseFollow = await db.collection('follows').findOne({
-                followerId: user._id,
-                followingId: new ObjectId(currentUserId)
+                follower_id: user._id,
+                following_id: new ObjectId(currentUserId)
             })
             followsBack = !!reverseFollow;
             isMutualFollow = isFollowing && followsBack;
@@ -269,11 +269,11 @@ router.get('/username/:username', async (req: any, res: Response) => {
 
         // Get follower/following counts (ACCEPTED ONLY)
         const followersCount = await db.collection('follows').countDocuments({
-            followingId: user._id,
+            following_id: user._id,
             status: 'accepted'
         })
         const followingCount = await db.collection('follows').countDocuments({
-            followerId: user._id,
+            follower_id: user._id,
             status: 'accepted'
         })
         
@@ -338,15 +338,15 @@ router.get('/:userId/mutual-followers', authenticate, async (req: any, res: Resp
 
         // Get users that this user follows
         const following = await db.collection('follows').find({
-            followerId: new ObjectId(userId)
+            follower_id: new ObjectId(userId)
         }).toArray()
-        const followingIds = following.map(f => f.followingId.toString())
+        const followingIds = following.map(f => f.following_id.toString())
 
         // Get users that follow this user
         const followers = await db.collection('follows').find({
-            followingId: new ObjectId(userId)
+            following_id: new ObjectId(userId)
         }).toArray()
-        const followerIds = followers.map(f => f.followerId.toString())
+        const followerIds = followers.map(f => f.follower_id.toString())
 
         // Find mutual followers (intersection)
         const mutualIds = followingIds.filter(id => followerIds.includes(id))
@@ -469,14 +469,14 @@ router.get('/:username', async (req: any, res: Response) => {
 
         if (currentUserId) {
             const followRecord = await db.collection('follows').findOne({
-                followerId: new ObjectId(currentUserId),
-                followingId: user._id
+                follower_id: new ObjectId(currentUserId),
+                following_id: user._id
             })
             isFollowing = !!followRecord;
 
             const reverseFollow = await db.collection('follows').findOne({
-                followerId: user._id,
-                followingId: new ObjectId(currentUserId)
+                follower_id: user._id,
+                following_id: new ObjectId(currentUserId)
             })
             followsBack = !!reverseFollow;
             isMutualFollow = isFollowing && followsBack;
@@ -484,11 +484,11 @@ router.get('/:username', async (req: any, res: Response) => {
 
         // Get follower/following counts (ACCEPTED ONLY)
         const followersCount = await db.collection('follows').countDocuments({
-            followingId: user._id,
+            following_id: user._id,
             status: 'accepted'
         })
         const followingCount = await db.collection('follows').countDocuments({
-            followerId: user._id,
+            follower_id: user._id,
             status: 'accepted'
         })
         
@@ -1017,14 +1017,14 @@ router.get('/:userId/follow-status', authenticate, async (req: any, res: Respons
 
         // Check if current user follows target user
         const isFollowing = await db.collection('follows').findOne({
-            followerId: new ObjectId(currentUserId),
-            followingId: new ObjectId(userId)
+            follower_id: new ObjectId(currentUserId),
+            following_id: new ObjectId(userId)
         })
 
         // Check if target user follows current user
         const followsBack = await db.collection('follows').findOne({
-            followerId: new ObjectId(userId),
-            followingId: new ObjectId(currentUserId)
+            follower_id: new ObjectId(userId),
+            following_id: new ObjectId(currentUserId)
         })
 
         // Check for pending follow request
@@ -1059,8 +1059,8 @@ router.delete('/:userId/follow', authenticate, async (req: any, res: Response) =
 
         // Remove from following
         await db.collection('follows').deleteOne({
-            followerId: new ObjectId(currentUserId),
-            followingId: new ObjectId(userId)
+            follower_id: new ObjectId(currentUserId),
+            following_id: new ObjectId(userId)
         })
 
         // Update counts
@@ -1121,8 +1121,8 @@ router.get('/:userId/followers', authenticate, async (req: any, res: Response) =
             }
 
             const isFollowing = await db.collection('follows').findOne({
-                followerId: new ObjectId(currentUserId),
-                followingId: new ObjectId(userId),
+                follower_id: new ObjectId(currentUserId),
+                following_id: new ObjectId(userId),
                 status: 'accepted'
             })
 
@@ -1133,13 +1133,13 @@ router.get('/:userId/followers', authenticate, async (req: any, res: Response) =
         }
 
         const follows = await db.collection('follows').find({
-            followingId: new ObjectId(userId),
+            following_id: new ObjectId(userId),
             status: 'accepted'
         }).toArray()
 
         console.log('[FOLLOWERS] Found', follows.length, 'follow records')
 
-        const followerIds = follows.map(f => f.followerId)
+        const followerIds = follows.map(f => f.follower_id)
         const followers = await db.collection('users').find({
             _id: { $in: followerIds }
         }).toArray()
@@ -1148,11 +1148,11 @@ router.get('/:userId/followers', authenticate, async (req: any, res: Response) =
 
         // Check which followers the current user is following back
         const currentUserFollowing = currentUserId ? await db.collection('follows').find({
-            followerId: new ObjectId(currentUserId),
+            follower_id: new ObjectId(currentUserId),
             status: 'accepted'
         }).toArray() : []
 
-        const followingIds = new Set(currentUserFollowing.map(f => f.followingId.toString()))
+        const followingIds = new Set(currentUserFollowing.map(f => f.following_id.toString()))
 
         await client.close()
 
@@ -1184,11 +1184,11 @@ router.get('/:userId/followers/debug', async (req: Request, res: Response) => {
 
         // Get all follow records
         const follows = await db.collection('follows').find({
-            followingId: new ObjectId(userId)
+            following_id: new ObjectId(userId)
         }).toArray()
 
         // Get follower IDs
-        const followerIds = follows.map(f => f.followerId)
+        const followerIds = follows.map(f => f.follower_id)
 
         // Get users
         const users = await db.collection('users').find({
@@ -1206,8 +1206,8 @@ router.get('/:userId/followers/debug', async (req: Request, res: Response) => {
             userId,
             followRecordsCount: follows.length,
             followRecords: follows.map(f => ({
-                followerId: f.followerId.toString(),
-                followingId: f.followingId.toString(),
+                follower_id: f.follower_id.toString(),
+                following_id: f.following_id.toString(),
                 createdAt: f.createdAt
             })),
             followerIdsFound: followerIds.map(id => id.toString()),
@@ -1264,8 +1264,8 @@ router.get('/:userId/following', authenticate, async (req: any, res: Response) =
             }
 
             const isFollowing = await db.collection('follows').findOne({
-                followerId: new ObjectId(currentUserId),
-                followingId: new ObjectId(userId),
+                follower_id: new ObjectId(currentUserId),
+                following_id: new ObjectId(userId),
                 status: 'accepted'
             })
 
@@ -1324,8 +1324,8 @@ router.delete('/delete', authenticate, async (req: any, res: Response) => {
         // Delete user's follows
         await db.collection('follows').deleteMany({
             $or: [
-                { followerId: new ObjectId(userId) },
-                { followingId: new ObjectId(userId) }
+                { follower_id: new ObjectId(userId) },
+                { following_id: new ObjectId(userId) }
             ]
         })
 
@@ -1422,8 +1422,8 @@ router.get('/:userId/posts', async (req: any, res: Response) => {
         if (isPrivate && !isOwnProfile) {
             // Check if current user is following
             const isFollowing = currentUserId ? await db.collection('follows').findOne({
-                followerId: new ObjectId(currentUserId),
-                followingId: userObjectId,
+                follower_id: new ObjectId(currentUserId),
+                following_id: userObjectId,
                 status: 'accepted'
             }) : null
 
@@ -1565,12 +1565,12 @@ router.post('/conversations', authenticate, async (req: any, res: Response) => {
         // Check follow status
         const [userFollowsRecipient, recipientFollowsUser] = await Promise.all([
             db.collection('follows').findOne({
-                followerId: new ObjectId(currentUserId),
-                followingId: new ObjectId(recipientId)
+                follower_id: new ObjectId(currentUserId),
+                following_id: new ObjectId(recipientId)
             }),
             db.collection('follows').findOne({
-                followerId: new ObjectId(recipientId),
-                followingId: new ObjectId(currentUserId)
+                follower_id: new ObjectId(recipientId),
+                following_id: new ObjectId(currentUserId)
             })
         ])
 
@@ -1701,14 +1701,14 @@ router.post('/message-requests/:requestId/accept', authenticate, async (req: any
 
         // Auto follow back
         const existingFollow = await db.collection('follows').findOne({
-            followerId: new ObjectId(userId),
-            followingId: request.senderId
+            follower_id: new ObjectId(userId),
+            following_id: request.senderId
         })
 
         if (!existingFollow) {
             await db.collection('follows').insertOne({
-                followerId: new ObjectId(userId),
-                followingId: request.senderId,
+                follower_id: new ObjectId(userId),
+                following_id: request.senderId,
                 createdAt: new Date()
             })
         }
@@ -1780,8 +1780,8 @@ router.post('/message-requests/:requestId/block', authenticate, async (req: any,
         // Remove any follows
         await db.collection('follows').deleteMany({
             $or: [
-                { followerId: new ObjectId(userId), followingId: request.senderId },
-                { followerId: request.senderId, followingId: new ObjectId(userId) }
+                { follower_id: new ObjectId(userId), following_id: request.senderId },
+                { follower_id: request.senderId, following_id: new ObjectId(userId) }
             ]
         })
 
@@ -1946,15 +1946,15 @@ router.post('/follow-requests/:requestId/approve', authenticate, async (req: any
 
         // Create follow relationship
         await db.collection('follows').insertOne({
-            followerId: request.requester_id,
-            followingId: request.requested_id,
+            follower_id: request.requester_id,
+            following_id: request.requested_id,
             status: 'accepted',
             createdAt: new Date()
         })
 
         // Update follower counts (ACCEPTED ONLY)
         const followerCount = await db.collection('follows').countDocuments({
-            followingId: new ObjectId(currentUserId),
+            following_id: new ObjectId(currentUserId),
             status: 'accepted'
         })
 
@@ -2375,8 +2375,8 @@ router.get('/:username/posts', authenticate, async (req: any, res: Response) => 
         // If private account and not own profile, check if following
         if (isPrivate && !isOwnProfile) {
             const followRecord = await db.collection('follows').findOne({
-                followerId: new ObjectId(currentUserId),
-                followingId: targetUser._id
+                follower_id: new ObjectId(currentUserId),
+                following_id: targetUser._id
             })
 
             console.log('[PROFILE POSTS] Follow record found:', !!followRecord)
