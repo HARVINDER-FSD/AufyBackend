@@ -824,18 +824,18 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
         const isPrivate = targetUser.is_private || false
         console.log('[FOLLOW] Target user is private:', isPrivate);
 
-        // Check if already following
+        // Check if already following (use snake_case)
         const existingFollow = await db.collection('follows').findOne({
-            followerId: new ObjectId(currentUserId),
-            followingId: new ObjectId(userId)
+            follower_id: new ObjectId(currentUserId),
+            following_id: new ObjectId(userId)
         })
 
         if (existingFollow) {
             // UNFOLLOW - same for both private and public accounts
             console.log('[FOLLOW] Unfollowing user');
             await db.collection('follows').deleteOne({
-                followerId: new ObjectId(currentUserId),
-                followingId: new ObjectId(userId)
+                follower_id: new ObjectId(currentUserId),
+                following_id: new ObjectId(userId)
             })
 
             // Remove any pending follow request if exists
@@ -844,17 +844,19 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
                 requested_id: new ObjectId(userId)
             })
             
-            // Delete follow notification
-            try {
-                const { deleteFollowNotification } = require('../lib/notifications');
-                await deleteFollowNotification(userId, currentUserId);
-            } catch (err) {
-                console.error('[UNFOLLOW] Notification deletion error:', err);
-            }
+            // Delete follow notification (non-blocking)
+            setImmediate(async () => {
+                try {
+                    const { deleteFollowNotification } = require('../lib/notifications');
+                    await deleteFollowNotification(userId, currentUserId);
+                } catch (err) {
+                    console.error('[UNFOLLOW] Notification deletion error:', err);
+                }
+            })
 
-            // Get updated count (ACCEPTED ONLY)
+            // Get updated count (ACCEPTED ONLY) - use snake_case
             const followerCount = await db.collection('follows').countDocuments({
-                followingId: new ObjectId(userId),
+                following_id: new ObjectId(userId),
                 status: 'accepted'
             })
 
@@ -910,18 +912,20 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
 
                 await client.close()
 
-                // Send notification
-                try {
-                    const { createNotification } = require('../lib/notifications');
-                    await createNotification({
-                        userId: userId,
-                        actorId: currentUserId,
-                        type: 'follow_request',
-                        content: 'requested to follow you'
-                    });
-                } catch (err) {
-                    console.error('[FOLLOW] Notification error:', err);
-                }
+                // Send notification (non-blocking)
+                setImmediate(async () => {
+                    try {
+                        const { createNotification } = require('../lib/notifications');
+                        await createNotification({
+                            userId: userId,
+                            actorId: currentUserId,
+                            type: 'follow_request',
+                            content: 'requested to follow you'
+                        });
+                    } catch (err) {
+                        console.error('[FOLLOW] Notification error:', err);
+                    }
+                })
 
                 return res.json({
                     message: 'Follow request sent',
@@ -932,37 +936,39 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
                     isMutualFollow: false
                 })
             } else {
-                // PUBLIC ACCOUNT - Instant follow
+                // PUBLIC ACCOUNT - Instant follow (use snake_case)
                 console.log('[FOLLOW] Following public account instantly');
 
                 await db.collection('follows').insertOne({
-                    followerId: new ObjectId(currentUserId),
-                    followingId: new ObjectId(userId),
+                    follower_id: new ObjectId(currentUserId),
+                    following_id: new ObjectId(userId),
                     status: 'accepted',
-                    createdAt: new Date()
+                    created_at: new Date()
                 })
 
-                // Get updated count (ACCEPTED ONLY)
+                // Get updated count (ACCEPTED ONLY) - use snake_case
                 const followerCount = await db.collection('follows').countDocuments({
-                    followingId: new ObjectId(userId),
+                    following_id: new ObjectId(userId),
                     status: 'accepted'
                 })
 
-                // Check if this creates a mutual follow
+                // Check if this creates a mutual follow (use snake_case)
                 const reverseFollow = await db.collection('follows').findOne({
-                    followerId: new ObjectId(userId),
-                    followingId: new ObjectId(currentUserId)
+                    follower_id: new ObjectId(userId),
+                    following_id: new ObjectId(currentUserId)
                 })
 
                 await client.close()
 
-                // Create notification
-                try {
-                    const { notifyFollow } = require('../lib/notifications');
-                    await notifyFollow(userId, currentUserId);
-                } catch (err) {
-                    console.error('[FOLLOW] Notification error:', err);
-                }
+                // Create notification (non-blocking)
+                setImmediate(async () => {
+                    try {
+                        const { notifyFollow } = require('../lib/notifications');
+                        await notifyFollow(userId, currentUserId);
+                    } catch (err) {
+                        console.error('[FOLLOW] Notification error:', err);
+                    }
+                })
 
                 return res.json({
                     message: 'Followed successfully',
