@@ -1,4 +1,4 @@
-import { Router } from "express"
+import { Router, Request, Response } from "express"
 import { ReelService } from "../services/reel"
 import { CommentService } from "../services/comment"
 import { authenticateToken, optionalAuth } from "../middleware/auth"
@@ -6,7 +6,7 @@ import { authenticateToken, optionalAuth } from "../middleware/auth"
 const router = Router()
 
 // Get reels feed (discover)
-router.get("/", optionalAuth, async (req, res) => {
+router.get("/", optionalAuth, async (req: any, res: Response) => {
   try {
     const { page, limit } = req.query
 
@@ -36,7 +36,7 @@ router.get("/", optionalAuth, async (req, res) => {
 })
 
 // Get user's reels
-router.get("/user/:userId", optionalAuth, async (req, res) => {
+router.get("/user/:userId", optionalAuth, async (req: any, res: Response) => {
   try {
     const { userId } = req.params
     const { page, limit } = req.query
@@ -61,7 +61,7 @@ router.get("/user/:userId", optionalAuth, async (req, res) => {
 })
 
 // Create reel
-router.post("/", authenticateToken, async (req, res) => {
+router.post("/", authenticateToken, async (req: any, res: Response) => {
   try {
     const { video_url, thumbnail_url, title, description, duration } = req.body
 
@@ -87,7 +87,7 @@ router.post("/", authenticateToken, async (req, res) => {
 })
 
 // Get reel by ID
-router.get("/:reelId", optionalAuth, async (req, res) => {
+router.get("/:reelId", optionalAuth, async (req: any, res: Response) => {
   try {
     const { reelId } = req.params
     const reel = await ReelService.getReelById(reelId, req.user?.userId)
@@ -105,7 +105,7 @@ router.get("/:reelId", optionalAuth, async (req, res) => {
 })
 
 // Delete reel
-router.delete("/:reelId", authenticateToken, async (req, res) => {
+router.delete("/:reelId", authenticateToken, async (req: any, res: Response) => {
   try {
     const { reelId } = req.params
     await ReelService.deleteReel(reelId, req.userId!)
@@ -123,7 +123,7 @@ router.delete("/:reelId", authenticateToken, async (req, res) => {
 })
 
 // Toggle like reel (like/unlike)
-router.post("/:reelId/like", authenticateToken, async (req, res) => {
+router.post("/:reelId/like", authenticateToken, async (req: any, res: Response) => {
   try {
     const { reelId } = req.params
     // Check if already liked, then toggle
@@ -144,7 +144,7 @@ router.post("/:reelId/like", authenticateToken, async (req, res) => {
 })
 
 // Unlike reel (legacy endpoint)
-router.delete("/:reelId/like", authenticateToken, async (req, res) => {
+router.delete("/:reelId/like", authenticateToken, async (req: any, res: Response) => {
   try {
     const { reelId } = req.params
     await ReelService.unlikeReel(req.userId!, reelId)
@@ -162,7 +162,7 @@ router.delete("/:reelId/like", authenticateToken, async (req, res) => {
 })
 
 // Share reel (track share count)
-router.post("/:reelId/share", authenticateToken, async (req, res) => {
+router.post("/:reelId/share", authenticateToken, async (req: any, res: Response) => {
   try {
     const { reelId } = req.params
     await ReelService.incrementShareCount(reelId)
@@ -180,7 +180,7 @@ router.post("/:reelId/share", authenticateToken, async (req, res) => {
 })
 
 // Get reel likes
-router.get("/:reelId/likes", optionalAuth, async (req, res) => {
+router.get("/:reelId/likes", optionalAuth, async (req: any, res: Response) => {
   try {
     const { reelId } = req.params
     const { page, limit } = req.query
@@ -201,7 +201,7 @@ router.get("/:reelId/likes", optionalAuth, async (req, res) => {
 })
 
 // Get reel comments
-router.get("/:reelId/comments", optionalAuth, async (req, res) => {
+router.get("/:reelId/comments", optionalAuth, async (req: any, res: Response) => {
   try {
     const { reelId } = req.params
     const { page, limit, sort } = req.query
@@ -223,7 +223,7 @@ router.get("/:reelId/comments", optionalAuth, async (req, res) => {
 })
 
 // Create reel comment
-router.post("/:reelId/comments", authenticateToken, async (req, res) => {
+router.post("/:reelId/comments", authenticateToken, async (req: any, res: Response) => {
   try {
     const { reelId } = req.params
     const { content, parent_comment_id } = req.body

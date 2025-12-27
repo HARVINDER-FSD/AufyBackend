@@ -844,6 +844,16 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
                 requested_id: new ObjectId(userId)
             })
             
+            // Update user document counts
+            await db.collection('users').updateOne(
+                { _id: new ObjectId(userId) },
+                { $inc: { followers_count: -1 } }
+            )
+            await db.collection('users').updateOne(
+                { _id: new ObjectId(currentUserId) },
+                { $inc: { following_count: -1 } }
+            )
+            
             // Delete follow notification (non-blocking)
             setImmediate(async () => {
                 try {
@@ -945,6 +955,16 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
                     status: 'accepted',
                     created_at: new Date()
                 })
+
+                // Update user document counts
+                await db.collection('users').updateOne(
+                    { _id: new ObjectId(userId) },
+                    { $inc: { followers_count: 1 } }
+                )
+                await db.collection('users').updateOne(
+                    { _id: new ObjectId(currentUserId) },
+                    { $inc: { following_count: 1 } }
+                )
 
                 // Get updated count (ACCEPTED ONLY) - use snake_case
                 const followerCount = await db.collection('follows').countDocuments({
