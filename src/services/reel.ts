@@ -370,6 +370,7 @@ export class ReelService {
     const transformedReels = await Promise.all(
       reels.map(async (reel) => {
         let is_liked = false
+        let is_following = false
 
         if (currentUserId) {
           const like = await likesCollection.findOne({
@@ -377,6 +378,14 @@ export class ReelService {
             post_id: reel._id
           })
           is_liked = !!like
+
+          // Check if current user is following the reel creator
+          const followsCollection = db.collection('follows')
+          const follow = await followsCollection.findOne({
+            follower_id: new ObjectId(currentUserId),
+            following_id: reel.user._id
+          })
+          is_following = !!follow
         }
 
         return {
@@ -397,10 +406,12 @@ export class ReelService {
             full_name: reel.user.full_name,
             avatar_url: reel.user.avatar_url,
             is_verified: reel.user.is_verified || false,
+            is_following: is_following, // Add follow state to user object
           },
           likes_count: reel.likes_count,
           comments_count: reel.comments_count,
-          is_liked
+          is_liked,
+          is_following, // Add follow state to reel object
         } as Reel
       })
     )
