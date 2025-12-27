@@ -1250,11 +1250,11 @@ router.get('/:userId/following', authenticate, async (req: any, res: Response) =
         }
 
         const follows = await db.collection('follows').find({
-            followerId: new ObjectId(userId),
+            follower_id: new ObjectId(userId),
             status: 'accepted'
         }).toArray()
 
-        const followingIds = follows.map(f => f.followingId)
+        const followingIds = follows.map(f => f.following_id)
         const following = await db.collection('users').find({
             _id: { $in: followingIds }
         }).toArray()
