@@ -10,8 +10,18 @@ router.get("/", optionalAuth, async (req, res) => {
   try {
     const { page, limit } = req.query
 
+    // Use req.userId which is set by optionalAuth middleware
+    const currentUserId = req.userId || req.user?._id?.toString() || req.user?.id
+    
+    console.log('[Reels Route] Auth debug:', {
+      hasToken: !!req.headers.authorization,
+      userId: req.userId,
+      userIdFromUser: req.user?._id?.toString(),
+      finalUserId: currentUserId
+    })
+
     const result = await ReelService.getReelsFeed(
-      req.user?.userId,
+      currentUserId,
       Number.parseInt(page as string) || 1,
       Number.parseInt(limit as string) || 20,
     )
@@ -31,9 +41,12 @@ router.get("/user/:userId", optionalAuth, async (req, res) => {
     const { userId } = req.params
     const { page, limit } = req.query
 
+    // Use req.userId which is set by optionalAuth middleware
+    const currentUserId = req.userId || req.user?._id?.toString() || req.user?.id
+
     const result = await ReelService.getUserReels(
       userId,
-      req.user?.userId,
+      currentUserId,
       Number.parseInt(page as string) || 1,
       Number.parseInt(limit as string) || 20,
     )
