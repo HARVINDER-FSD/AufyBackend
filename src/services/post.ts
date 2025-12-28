@@ -292,6 +292,44 @@ export class PostService {
           post_id: post._id
         })
 
+        // Get reaction summary for this post
+        const reactionSummary = await likesCollection.aggregate([
+          { $match: { post_id: post._id } },
+          {
+            $group: {
+              _id: '$reaction',
+              count: { $sum: 1 }
+            }
+          }
+        ]).toArray()
+        
+        // Convert to object format: { "❤️": 10, "😍": 5, ... }
+        const reactions: { [emoji: string]: number } = {}
+        reactionSummary.forEach((item: any) => {
+          if (item._id) {
+            reactions[item._id] = item.count
+          }
+        })
+
+        // Get users who liked (for "liked by" display)
+        const recentLikes = await likesCollection.aggregate([
+          { $match: { post_id: post._id } },
+          { $sort: { created_at: -1 } },
+          { $limit: 3 },
+          {
+            $lookup: {
+              from: 'users',
+              localField: 'user_id',
+              foreignField: '_id',
+              as: 'user'
+            }
+          },
+          { $unwind: '$user' },
+          { $project: { 'user.username': 1 } }
+        ]).toArray()
+        
+        const likedBy = recentLikes.map((like: any) => like.user.username)
+
         return {
           id: post._id.toString(),
           user_id: post.user_id.toString(),
@@ -313,7 +351,10 @@ export class PostService {
           likes_count: likesCount,
           comments_count: commentsCount,
           liked: !!like,  // Changed from is_liked to liked
-          is_liked: !!like  // Keep both for compatibility
+          is_liked: !!like,  // Keep both for compatibility
+          userReaction: like?.reaction || null, // User's current reaction
+          reactions, // Summary of all reactions
+          likedBy, // Top 3 usernames who liked
         } as Post
       })
     )
