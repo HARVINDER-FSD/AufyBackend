@@ -723,6 +723,7 @@ router.put('/profile', authenticate, async (req: any, res: Response) => {
                 name: user?.name,
                 full_name: user?.full_name,
                 bio: user?.bio,
+                links: user?.links,
                 avatar: user?.avatar?.substring(0, 50),
                 avatar_url: user?.avatar_url?.substring(0, 50),
                 website: user?.website,
@@ -744,6 +745,7 @@ router.put('/profile', authenticate, async (req: any, res: Response) => {
                 email: user?.email,
                 name: user?.name || user?.full_name || '',
                 bio: user?.bio || '',
+                links: user?.links || [],
                 avatar: avatarWithTimestamp,
                 avatar_url: avatarWithTimestamp,
                 website: user?.website || '',
@@ -2402,6 +2404,12 @@ router.get('/:username/posts', authenticate, async (req: any, res: Response) => 
             is_archived: { $ne: true }
         }).sort({ created_at: -1 }).toArray()
 
+        // Fetch ONLY this user's reels (not deleted)
+        const reels = await db.collection('reels').find({
+            user_id: targetUser._id,
+            is_deleted: { $ne: true }
+        }).sort({ created_at: -1 }).toArray()
+
         // Transform posts to include user info
         const transformedPosts = posts.map(post => ({
             id: post._id.toString(),
@@ -2428,9 +2436,40 @@ router.get('/:username/posts', authenticate, async (req: any, res: Response) => 
             bookmarked: false
         }))
 
+        // Transform reels to match post format
+        const transformedReels = reels.map(reel => ({
+            id: reel._id.toString(),
+            user: {
+                id: targetUser._id.toString(),
+                username: targetUser.username,
+                avatar: targetUser.avatar_url || targetUser.avatar || '/placeholder-user.jpg',
+                avatar_url: targetUser.avatar_url || targetUser.avatar || '/placeholder-user.jpg',
+                verified: targetUser.is_verified || targetUser.verified || false,
+                is_verified: targetUser.is_verified || targetUser.verified || false,
+                badge_type: targetUser.badge_type || targetUser.verification_type || null
+            },
+            content: reel.description || '',
+            caption: reel.description || reel.title || '',
+            media_type: 'video',
+            media_urls: [reel.video_url],
+            image_url: reel.thumbnail_url || reel.video_url, // Use thumbnail for grid display
+            type: 'reel', // Explicitly mark as reel
+            likes_count: reel.likes_count || 0,
+            comments_count: reel.comments_count || 0,
+            shares_count: reel.shares_count || 0,
+            created_at: reel.created_at,
+            is_liked: false,
+            bookmarked: false
+        }))
+
+        // Combine and sort by created_at (newest first)
+        const allContent = [...transformedPosts, ...transformedReels].sort((a, b) => {
+            return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        })
+
         return res.json({
-            posts: transformedPosts,
-            count: transformedPosts.length
+            posts: allContent,
+            count: allContent.length
         })
     } catch (error: any) {
         console.error('Get user posts error:', error)

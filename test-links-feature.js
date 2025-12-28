@@ -1,7 +1,7 @@
 // Test script to verify links feature is working
 const axios = require('axios');
 
-const API_URL = process.env.API_URL || 'http://localhost:5000';
+const API_URL = process.env.API_URL || 'https://aufybackend.onrender.com';
 
 async function testLinksFeature() {
   console.log('🧪 Testing Links Feature...\n');
@@ -10,8 +10,8 @@ async function testLinksFeature() {
     // 1. Login to get token
     console.log('1️⃣ Logging in...');
     const loginResponse = await axios.post(`${API_URL}/api/auth/login`, {
-      username: 'monu',
-      password: 'Monu@123'
+      email: 'hs8339952@gmail.com',
+      password: 'abc123'
     });
 
     const token = loginResponse.data.token;
