@@ -63,14 +63,20 @@ router.get("/", async (req, res) => {
     // Check follow status for each user if logged in
     let followStatusMap: { [key: string]: boolean } = {}
     if (currentUserId && users.length > 0) {
+      console.log('[Search] Checking follow status for currentUserId:', currentUserId)
       const userIds = users.map((u: any) => new ObjectId(u._id))
+      console.log('[Search] User IDs to check:', userIds.map(id => id.toString()))
+      
       const follows = await db.collection('follows').find({
-        followerId: new ObjectId(currentUserId),
-        followingId: { $in: userIds }
+        follower_id: new ObjectId(currentUserId),  // Fixed: use follower_id instead of followerId
+        following_id: { $in: userIds }  // Fixed: use following_id instead of followingId
       }).toArray()
 
+      console.log('[Search] Found follows:', follows.length)
       follows.forEach((follow: any) => {
-        followStatusMap[follow.followingId.toString()] = true
+        const followingIdStr = follow.following_id.toString()  // Fixed: use following_id
+        followStatusMap[followingIdStr] = true
+        console.log('[Search] User', followingIdStr, 'is followed')
       })
     }
 
@@ -88,18 +94,23 @@ router.get("/", async (req, res) => {
     // Extract hashtags from query
     const hashtags = q.startsWith('#') ? [{ tag: q, posts: 0 }] : []
 
-    const formattedUsers = users.map((u: any) => ({
-      _id: u._id.toString(),
-      id: u._id.toString(),
-      username: u.username,
-      fullName: u.full_name,
-      name: u.full_name,
-      avatar: u.avatar_url,
-      verified: u.is_verified,
-      followers: u.followers_count || 0,
-      bio: u.bio || '',
-      isFollowing: followStatusMap[u._id.toString()] || false
-    }))
+    const formattedUsers = users.map((u: any) => {
+      const userId = u._id.toString()
+      const isFollowing = followStatusMap[userId] || false
+      console.log('[Search] Formatting user:', u.username, 'ID:', userId, 'isFollowing:', isFollowing)
+      return {
+        _id: userId,
+        id: userId,
+        username: u.username,
+        fullName: u.full_name,
+        name: u.full_name,
+        avatar: u.avatar_url,
+        verified: u.is_verified,
+        followers: u.followers_count || 0,
+        bio: u.bio || '',
+        isFollowing: isFollowing
+      }
+    })
 
     const formattedPosts = posts.map((p: any) => ({
       id: p._id.toString(),
