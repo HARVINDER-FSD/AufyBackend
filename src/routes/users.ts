@@ -82,6 +82,7 @@ router.get('/me', authenticate, async (req: any, res: Response) => {
             name: user.full_name || user.name || '',
             full_name: user.full_name || user.name || '',
             bio: user.bio || '',
+            links: user.links || [],
             avatar: user.avatar_url || user.avatar || '/placeholder-user.jpg',
             avatar_url: user.avatar_url || user.avatar || '/placeholder-user.jpg',
             followers: followersCount,
@@ -569,6 +570,7 @@ router.put('/profile', authenticate, async (req: any, res: Response) => {
         }
         if (website !== undefined) updateData.website = website
         if (location !== undefined) updateData.location = location
+        if (req.body.links !== undefined) updateData.links = req.body.links
 
         console.log('[Backend] Updating with data:', { ...updateData, avatar: updateData.avatar?.substring(0, 50) + '...' });
 

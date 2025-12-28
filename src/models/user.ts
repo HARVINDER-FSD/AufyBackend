@@ -41,6 +41,10 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  links: {
+    type: [String],
+    default: []
+  },
   avatar_url: {
     type: String,
     default: '/placeholder-user.jpg'
