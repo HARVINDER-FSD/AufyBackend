@@ -8,7 +8,43 @@ const router = Router()
 // Get reels feed (discover)
 router.get("/", optionalAuth, async (req: any, res: Response) => {
   try {
-    const { page, limit } = req.query
+    const { page, limit, username } = req.query
+
+    // If username is provided, get that user's reels
+    if (username) {
+      console.log('[Reels Route] Getting reels for username:', username)
+      
+      // First, find the user by username
+      const { MongoClient } = require('mongodb')
+      const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/socialmedia'
+      const client = new MongoClient(MONGODB_URI)
+      await client.connect()
+      const db = client.db()
+      
+      const user = await db.collection('users').findOne({ username })
+      await client.close()
+      
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found'
+        })
+      }
+      
+      console.log('[Reels Route] Found user:', user.username, 'ID:', user._id.toString())
+      
+      // Get reels for this specific user
+      const currentUserId = req.userId || req.user?._id?.toString() || req.user?.id
+      const result = await ReelService.getUserReels(
+        user._id.toString(),
+        currentUserId,
+        Number.parseInt(page as string) || 1,
+        Number.parseInt(limit as string) || 20,
+      )
+      
+      console.log('[Reels Route] Returning', result.data.length, 'reels for user', username)
+      return res.json(result)
+    }
 
     // Use req.userId which is set by optionalAuth middleware
     const currentUserId = req.userId || req.user?._id?.toString() || req.user?.id
