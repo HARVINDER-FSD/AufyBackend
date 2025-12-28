@@ -103,6 +103,8 @@ router.post('/login', bruteForceProtection, async (req: Request, res: Response) 
     })
 
     // Return user data and token
+    const avatarUrl = user.avatar_url || user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username)}&background=0095f6&color=fff&size=128`;
+    
     return res.json({
       user: {
         _id: user._id.toString(),
@@ -112,7 +114,8 @@ router.post('/login', bruteForceProtection, async (req: Request, res: Response) 
         name: user.name || "",
         fullName: user.name || "",
         bio: user.bio || "",
-        avatar: user.avatar || "/placeholder-user.jpg",
+        avatar: avatarUrl,
+        avatar_url: avatarUrl,
         followers: user.followers || 0,
         following: user.following || 0,
         verified: user.verified || false
@@ -211,17 +214,24 @@ router.post('/register', async (req: Request, res: Response) => {
     // Hash password (8 rounds for faster mobile performance)
     const hashedPassword = await bcrypt.hash(password, 8)
 
-    // Create new user
+    // Create new user with proper avatar fields
+    const defaultAvatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(username)}&background=0095f6&color=fff&size=128`;
+    
     const result = await usersCollection.insertOne({
       email,
       password: hashedPassword,
       username,
       name: name || username,
+      full_name: name || username,
       bio: "",
-      avatar: "/placeholder-user.jpg",
+      avatar: defaultAvatar,
+      avatar_url: defaultAvatar,
       followers: 0,
       following: 0,
+      followers_count: 0,
+      following_count: 0,
       verified: false,
+      is_verified: false,
       createdAt: new Date(),
       updatedAt: new Date()
     })
@@ -264,7 +274,8 @@ router.post('/register', async (req: Request, res: Response) => {
         name: name || username,
         fullName: name || username,
         bio: "",
-        avatar: "/placeholder-user.jpg",
+        avatar: defaultAvatar,
+        avatar_url: defaultAvatar,
         followers: 0,
         following: 0,
         verified: false
