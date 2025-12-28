@@ -2410,6 +2410,12 @@ router.get('/:username/posts', authenticate, async (req: any, res: Response) => 
             is_deleted: { $ne: true }
         }).sort({ created_at: -1 }).toArray()
 
+        console.log('[PROFILE POSTS] Posts found:', posts.length)
+        console.log('[PROFILE POSTS] Reels found:', reels.length)
+        if (reels.length > 0) {
+            console.log('[PROFILE POSTS] First reel:', JSON.stringify(reels[0], null, 2))
+        }
+
         // Transform posts to include user info
         const transformedPosts = posts.map(post => ({
             id: post._id.toString(),
