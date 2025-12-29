@@ -9,6 +9,8 @@ export interface ISecretCrush extends Document {
   mutualDetectedAt?: Date;
   notifiedAt?: Date;
   isActive: boolean;
+  removedAt?: Date;
+  mutualBrokenAt?: Date;
 }
 
 const SecretCrushSchema = new Schema<ISecretCrush>({
@@ -49,7 +51,17 @@ const SecretCrushSchema = new Schema<ISecretCrush>({
     type: Boolean,
     default: true,
     index: true
+  },
+  removedAt: {
+    type: Date,
+    default: null
+  },
+  mutualBrokenAt: {
+    type: Date,
+    default: null
   }
+}, {
+  timestamps: true // This adds updatedAt automatically
 });
 
 // Compound unique index to prevent duplicate entries

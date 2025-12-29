@@ -183,6 +183,7 @@ router.delete('/remove/:userId', authenticateToken, async (req: AuthRequest, res
 
     // Mark as inactive
     secretCrush.isActive = false;
+    secretCrush.removedAt = new Date();
     await secretCrush.save();
 
     // Update user's crush count
@@ -200,19 +201,28 @@ router.delete('/remove/:userId', authenticateToken, async (req: AuthRequest, res
       });
 
       if (otherCrush) {
+        // Break the mutual connection
         otherCrush.isMutual = false;
         otherCrush.mutualChatId = null;
+        otherCrush.mutualBrokenAt = new Date();
         await otherCrush.save();
 
-        // Notify other user
+        // Get user details for notification
         try {
           const currentUser = await (User as any).findOne({ _id: currentUserId });
-          await createNotification({
-            userId: crushUserId,
-            actorId: currentUserId,
-            type: 'follow',
-            content: `Your favorites connection with @${currentUser?.username} has ended`
-          });
+          const otherUser = await (User as any).findOne({ _id: crushUserId });
+          
+          if (currentUser && otherUser) {
+            // Notify other user that mutual connection ended
+            await createNotification({
+              userId: crushUserId,
+              actorId: currentUserId,
+              type: 'secret_crush_removed',
+              content: `💔 Your favorites connection with @${currentUser.username} has ended`
+            });
+
+            console.log(`💔 Mutual crush connection broken between ${currentUser.username} and ${otherUser.username}`);
+          }
         } catch (notifError) {
           console.error('Error sending crush ended notification:', notifError);
         }
@@ -222,7 +232,8 @@ router.delete('/remove/:userId', authenticateToken, async (req: AuthRequest, res
     res.json({
       success: true,
       message: 'Removed from secret crush list',
-      wasMutual
+      wasMutual,
+      affectedUsers: wasMutual ? [currentUserId, crushUserId] : [currentUserId]
     });
 
   } catch (error) {
@@ -383,6 +394,50 @@ router.get('/check/:userId', authenticateToken, async (req: AuthRequest, res: Re
   } catch (error) {
     console.error('Error checking secret crush:', error);
     res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Get last update timestamp for real-time polling
+router.get('/last-update', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.userId;
+
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    // Find the most recent update in user's secret crush list
+    const latestUpdate = await SecretCrush.findOne({
+      $or: [
+        { userId, isActive: true },
+        { crushUserId: userId, isActive: true }
+      ]
+    })
+    .sort({ updatedAt: -1 })
+    .select('updatedAt mutualDetectedAt removedAt mutualBrokenAt')
+    .lean();
+
+    const lastUpdateTime = latestUpdate ? (
+      latestUpdate.mutualBrokenAt || 
+      latestUpdate.removedAt || 
+      latestUpdate.mutualDetectedAt || 
+      latestUpdate.updatedAt
+    ) : null;
+
+    res.json({
+      success: true,
+      lastUpdate: lastUpdateTime,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('Error getting last update:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error',
+      lastUpdate: null,
+      timestamp: new Date().toISOString()
+    });
   }
 });
 
