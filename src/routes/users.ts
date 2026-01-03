@@ -2066,6 +2066,47 @@ router.get('/:userId/follow-request-status', authenticate, async (req: any, res:
     }
 })
 
+// POST /api/users/push-token - Register push notification token
+router.post('/push-token', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.userId
+        const { token, platform } = req.body
+
+        if (!token) {
+            return res.status(400).json({ message: 'Push token is required' })
+        }
+
+        console.log('[PUSH TOKEN] Registering token for user:', userId, 'Platform:', platform)
+
+        const db = await getDb()
+
+        // Update user's push token
+        await db.collection('users').updateOne(
+            { _id: new ObjectId(userId) },
+            {
+                $set: {
+                    pushToken: token,
+                    pushTokenPlatform: platform || 'unknown',
+                    pushTokenUpdatedAt: new Date()
+                }
+            }
+        )
+
+        console.log('[PUSH TOKEN] ✅ Token registered successfully')
+
+        return res.json({
+            success: true,
+            message: 'Push token registered successfully'
+        })
+    } catch (error: any) {
+        console.error('[PUSH TOKEN] ❌ Error registering token:', error)
+        return res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to register push token'
+        })
+    }
+})
+
 // POST /api/users/fcm-token - Register FCM token for push notifications
 router.post('/fcm-token', authenticate, async (req: any, res: Response) => {
     try {

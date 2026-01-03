@@ -1,108 +1,137 @@
-// Test Secret Crush Matches - Check if mutual matches are working
 const fetch = require('node-fetch');
 
-const API_URL = process.env.API_URL || 'https://aufybackend.onrender.com';
+const API_BASE = 'https://aufybackend.onrender.com';
+const USER_EMAIL = 'hs8339952@gmail.com';
+const USER_PASSWORD = 'abc123';
 
 async function testSecretCrushMatches() {
-  console.log('🔍 Testing Secret Crush Matches...\n');
-
   try {
-    // Test login first
-    const loginRes = await fetch(`${API_URL}/api/auth/login`, {
+    console.log('🔐 Logging in...');
+    
+    // Login first
+    const loginResponse = await fetch(`${API_BASE}/api/auth/login`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+      },
       body: JSON.stringify({
-        email: 'test@example.com',
-        password: 'password123'
+        email: USER_EMAIL,
+        password: USER_PASSWORD
       })
     });
 
-    if (!loginRes.ok) {
-      console.log('❌ Login failed, using test token');
+    if (!loginResponse.ok) {
+      const errorText = await loginResponse.text();
+      console.error('❌ Login failed:', loginResponse.status, errorText);
       return;
     }
 
-    const loginData = await loginRes.json();
+    const loginData = await loginResponse.json();
     const token = loginData.token;
-    console.log('✅ Login successful');
-
-    // Test 1: Get current crush list
-    console.log('\n📋 Testing: Get My Crush List');
-    const listRes = await fetch(`${API_URL}/api/secret-crush/my-list`, {
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-
-    if (listRes.ok) {
-      const listData = await listRes.json();
-      console.log('✅ Crush list retrieved:');
-      console.log(`   Total crushes: ${listData.count}`);
-      console.log(`   Mutual matches: ${listData.mutualCount}`);
-      console.log(`   Max crushes: ${listData.maxCrushes}`);
-      
-      if (listData.crushes && listData.crushes.length > 0) {
-        console.log('\n   Crushes:');
-        listData.crushes.forEach((crush, index) => {
-          console.log(`   ${index + 1}. @${crush.user.username} - ${crush.user.full_name}`);
-          console.log(`      Mutual: ${crush.isMutual ? '💕 YES' : '❌ NO'}`);
-          console.log(`      Chat ID: ${crush.chatId || 'None'}`);
-          console.log(`      Added: ${new Date(crush.addedAt).toLocaleDateString()}`);
-          if (crush.mutualSince) {
-            console.log(`      Mutual Since: ${new Date(crush.mutualSince).toLocaleDateString()}`);
-          }
-          console.log('');
-        });
-      }
-    } else {
-      console.log('❌ Failed to get crush list');
-    }
-
-    // Test 2: Get only mutual crushes
-    console.log('\n💕 Testing: Get Mutual Crushes Only');
-    const mutualRes = await fetch(`${API_URL}/api/secret-crush/mutual`, {
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-
-    if (mutualRes.ok) {
-      const mutualData = await mutualRes.json();
-      console.log('✅ Mutual crushes retrieved:');
-      console.log(`   Count: ${mutualData.count}`);
-      
-      if (mutualData.mutualCrushes && mutualData.mutualCrushes.length > 0) {
-        console.log('\n   Mutual Matches:');
-        mutualData.mutualCrushes.forEach((crush, index) => {
-          console.log(`   ${index + 1}. @${crush.user.username} - ${crush.user.full_name}`);
-          console.log(`      Chat ID: ${crush.chatId}`);
-          console.log(`      Mutual Since: ${new Date(crush.mutualSince).toLocaleDateString()}`);
-          console.log('');
-        });
-      } else {
-        console.log('   No mutual matches found');
-      }
-    } else {
-      console.log('❌ Failed to get mutual crushes');
-    }
-
-    // Test 3: Check specific user
-    console.log('\n🔍 Testing: Check Specific User');
-    // You can replace this with an actual user ID from your database
-    const testUserId = '60f7b3b3b3b3b3b3b3b3b3b3'; // Replace with real user ID
+    const userId = loginData.user.id || loginData.user._id;
     
-    const checkRes = await fetch(`${API_URL}/api/secret-crush/check/${testUserId}`, {
-      headers: { 'Authorization': `Bearer ${token}` }
+    console.log('✅ Login successful');
+    console.log('👤 User ID:', userId);
+    console.log('👤 Username:', loginData.user.username);
+
+    // Get secret crush list
+    console.log('\n💕 Fetching secret crush list...');
+    const crushResponse = await fetch(`${API_BASE}/api/secret-crush/my-list`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
     });
 
-    if (checkRes.ok) {
-      const checkData = await checkRes.json();
-      console.log('✅ User check result:');
-      console.log(`   In my list: ${checkData.isInMyList ? 'YES' : 'NO'}`);
-      console.log(`   Is mutual: ${checkData.isMutual ? '💕 YES' : 'NO'}`);
-      console.log(`   Chat ID: ${checkData.chatId || 'None'}`);
+    if (!crushResponse.ok) {
+      const errorText = await crushResponse.text();
+      console.error('❌ Failed to fetch secret crush list:', crushResponse.status, errorText);
+      return;
+    }
+
+    const crushData = await crushResponse.json();
+    console.log('📊 Raw API Response:', JSON.stringify(crushData, null, 2));
+
+    const crushes = crushData.crushes || [];
+    const totalCrushes = crushes.length;
+    const mutualMatches = crushes.filter(crush => crush.isMutual);
+    const mutualCount = mutualMatches.length;
+
+    console.log('\n📈 SECRET CRUSH SUMMARY:');
+    console.log('═══════════════════════════');
+    console.log(`📝 Total Secret Crushes: ${totalCrushes}`);
+    console.log(`💕 Mutual Matches: ${mutualCount}`);
+    console.log(`📊 Match Rate: ${totalCrushes > 0 ? Math.round((mutualCount / totalCrushes) * 100) : 0}%`);
+
+    if (totalCrushes > 0) {
+      console.log('\n👥 ALL SECRET CRUSHES:');
+      console.log('─────────────────────────');
+      crushes.forEach((crush, index) => {
+        const user = crush.user;
+        const status = crush.isMutual ? '💕 MUTUAL MATCH' : '⭐ One-sided';
+        console.log(`${index + 1}. @${user.username} (${user.fullName || user.full_name || 'No name'}) - ${status}`);
+        console.log(`   User ID: ${user._id || user.id}`);
+        console.log(`   Added: ${new Date(crush.addedAt).toLocaleDateString()}`);
+        if (crush.isMutual && crush.mutualSince) {
+          console.log(`   Mutual Since: ${new Date(crush.mutualSince).toLocaleDateString()}`);
+        }
+        if (crush.chatId) {
+          console.log(`   Chat ID: ${crush.chatId}`);
+        }
+        console.log('');
+      });
+    }
+
+    if (mutualCount > 0) {
+      console.log('\n💕 MUTUAL MATCHES DETAILS:');
+      console.log('═══════════════════════════');
+      mutualMatches.forEach((match, index) => {
+        const user = match.user;
+        console.log(`${index + 1}. @${user.username}`);
+        console.log(`   Full Name: ${user.fullName || user.full_name || 'Not provided'}`);
+        console.log(`   User ID: ${user._id || user.id}`);
+        console.log(`   Profile Image: ${user.profileImage || user.avatar_url || user.avatar || 'None'}`);
+        console.log(`   Match ID: ${match.id}`);
+        console.log(`   Added: ${new Date(match.addedAt).toLocaleDateString()}`);
+        console.log(`   Mutual Since: ${new Date(match.mutualSince).toLocaleDateString()}`);
+        if (match.chatId) {
+          console.log(`   Chat Available: Yes (${match.chatId})`);
+        } else {
+          console.log(`   Chat Available: No`);
+        }
+        console.log('');
+      });
+
+      console.log('🎉 CONGRATULATIONS! You have mutual matches!');
+      console.log('💬 You can now chat with these users in the Messages app.');
+      console.log('💡 Look for the heart icon in the Messages header to access mutual matches.');
     } else {
-      console.log('❌ Failed to check user');
+      console.log('\n💔 NO MUTUAL MATCHES FOUND');
+      console.log('───────────────────────────');
+      if (totalCrushes > 0) {
+        console.log('😔 Your crushes haven\'t added you back yet.');
+        console.log('💪 Keep being awesome! They might add you soon.');
+      } else {
+        console.log('🤔 You haven\'t added anyone to your secret crush list yet.');
+        console.log('💡 Go to Settings > Favorites Friend to add people you like!');
+      }
+    }
+
+    // Test heart icon visibility logic
+    console.log('\n🔍 HEART ICON VISIBILITY TEST:');
+    console.log('═══════════════════════════════');
+    const shouldShowHeartIcon = mutualCount > 0;
+    console.log(`Heart Icon Should Show: ${shouldShowHeartIcon ? '✅ YES' : '❌ NO'}`);
+    console.log(`Heart Icon Count: ${mutualCount}`);
+    
+    if (shouldShowHeartIcon) {
+      console.log('💡 The heart icon should be visible in Messages header with count:', mutualCount);
+    } else {
+      console.log('💡 The heart icon should be hidden in Messages header');
     }
 
   } catch (error) {
-    console.error('❌ Test failed:', error.message);
+    console.error('❌ Error:', error.message);
   }
 }
 
