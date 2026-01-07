@@ -99,9 +99,9 @@ export async function createNotification(options: CreateNotificationOptions): Pr
 
     console.log(`📬 Notification created: ${type} for user ${userId}`);
     
-    // Send FCM push notification (works even when app is closed!)
+    // Send Push Notification (works even when app is closed!)
     if (actor) {
-      await sendFCMNotification(userId.toString(), type, actor, {
+      await sendPushNotification(userId.toString(), type, actor, {
         postId: postId?.toString(),
         commentId: commentId?.toString(),
         conversationId,
@@ -347,8 +347,8 @@ export async function deleteLikeNotification(
 }
 
 
-// Send FCM Push Notification (works when app is closed!)
-async function sendFCMNotification(
+// Send Push Notification (works when app is closed!)
+async function sendPushNotification(
   userId: string,
   type: NotificationType,
   actor: any,
@@ -361,6 +361,7 @@ async function sendFCMNotification(
 ): Promise<void> {
   try {
     const actorName = actor.username || actor.name || 'Someone';
+    const actorAvatar = actor.avatar_url || actor.profileImage || '/placeholder-user.jpg';
     
     let title = '';
     let body = '';
@@ -422,24 +423,26 @@ async function sendFCMNotification(
         body = 'You have a new notification';
     }
     
-    // Send FCM notification
-    await sendNotificationToUser(userId, {
+    // Send Expo notification
+    await sendExpoNotification({
+      userId,
       title,
       body,
-      type,
+      channelId: getChannelId(type),
       data: {
         type,
         userId: actor._id?.toString() || '',
         username: actorName,
+        avatar: actorAvatar,
         postId: data.postId || '',
         commentId: data.commentId || '',
         conversationId: data.conversationId || '',
       }
     });
     
-    console.log(`🔔 FCM notification sent: ${type} to ${userId}`);
+    console.log(`🔔 Push notification sent: ${type} to ${userId}`);
   } catch (error) {
-    console.error('Error sending FCM notification:', error);
-    // Don't throw - notification creation should succeed even if FCM fails
+    console.error('Error sending push notification:', error);
+    // Don't throw - notification creation should succeed even if push fails
   }
 }

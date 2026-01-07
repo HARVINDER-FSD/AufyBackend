@@ -140,6 +140,16 @@ router.post('/conversations/:conversationId/messages', auth, async (req, res) =>
 
     const populatedMessage = await message.populate('sender', 'username fullName profileImage');
 
+    // Send push notification
+    if (recipientId) {
+      notifyMessage(
+        recipientId,
+        req.user!._id,
+        conversationId,
+        content || (image ? 'Sent an image' : 'Sent a message')
+      ).catch(err => console.error('Error sending message notification:', err));
+    }
+
     res.json(populatedMessage);
   } catch (error) {
     res.status(500).json({ message: 'Server error' });
