@@ -1,6 +1,6 @@
 // Notification Helper Functions
 import { MongoClient, ObjectId } from 'mongodb';
-import { sendNotificationToUser } from '../services/firebase-messaging';
+import { sendPushNotification } from '../services/firebase-messaging';
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/social-media';
 
@@ -101,7 +101,8 @@ export async function createNotification(options: CreateNotificationOptions): Pr
     
     // Send Push Notification (works even when app is closed!)
     if (actor) {
-      await sendPushNotification(userId.toString(), type, actor, {
+      await sendPushNotificationToUser(userId.toString(), type, actor, {
+        notificationId: result.insertedId.toString(),
         postId: postId?.toString(),
         commentId: commentId?.toString(),
         conversationId,
@@ -347,12 +348,13 @@ export async function deleteLikeNotification(
 }
 
 
-// Send Push Notification (works when app is closed!)
-async function sendPushNotification(
+// Send Push Notification to user with avatar and name
+async function sendPushNotificationToUser(
   userId: string,
   type: NotificationType,
   actor: any,
   data: {
+    notificationId: string;
     postId?: string;
     commentId?: string;
     conversationId?: string;
@@ -423,14 +425,24 @@ async function sendPushNotification(
         body = 'You have a new notification';
     }
     
-    // Send Expo notification
-    await sendExpoNotification({
-      userId,
+    // Get user's FCM token
+    const client = await MongoClient.connect(MONGODB_URI);
+    const db = client.db();
+    const user = await db.collection('users').findOne({ _id: new ObjectId(userId) });
+    await client.close();
+    
+    if (!user?.fcmToken) {
+      console.log('⚠️ No FCM token for user:', userId);
+      return;
+    }
+    
+    // Send Firebase push notification with avatar and name
+    await sendPushNotification(user.fcmToken, {
       title,
       body,
-      channelId: getChannelId(type),
       data: {
         type,
+        notificationId: data.notificationId,
         userId: actor._id?.toString() || '',
         username: actorName,
         avatar: actorAvatar,

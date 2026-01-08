@@ -196,4 +196,201 @@ router.delete('/messages/:messageId', auth, async (req, res) => {
   }
 });
 
+// Search messages in conversation
+router.get('/conversations/:conversationId/search', auth, async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const { q } = req.query;
+
+    if (!q || typeof q !== 'string') {
+      return res.status(400).json({ message: 'Search query required' });
+    }
+
+    const messages = await Message.find({
+      conversation: conversationId,
+      content: { $regex: q, $options: 'i' }
+    })
+      .populate('sender', 'username fullName profileImage')
+      .sort({ createdAt: -1 })
+      .limit(50);
+
+    res.json({ messages });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Mute/Unmute conversation notifications
+router.post('/conversations/:conversationId/mute', auth, async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const { mute = true } = req.body;
+
+    const db = mongoose.connection.db;
+    if (!db) {
+      return res.status(500).json({ message: 'Database connection error' });
+    }
+
+    if (mute) {
+      // Add to muted list
+      await db.collection('muted_conversations').updateOne(
+        {
+          userId: new mongoose.Types.ObjectId(req.user!._id),
+          conversationId: new mongoose.Types.ObjectId(conversationId)
+        },
+        {
+          $set: {
+            userId: new mongoose.Types.ObjectId(req.user!._id),
+            conversationId: new mongoose.Types.ObjectId(conversationId),
+            mutedAt: new Date()
+          }
+        },
+        { upsert: true }
+      );
+      res.json({ message: 'Conversation muted', isMuted: true });
+    } else {
+      // Remove from muted list
+      await db.collection('muted_conversations').deleteOne({
+        userId: new mongoose.Types.ObjectId(req.user!._id),
+        conversationId: new mongoose.Types.ObjectId(conversationId)
+      });
+      res.json({ message: 'Conversation unmuted', isMuted: false });
+    }
+  } catch (error: any) {
+    res.status(500).json({ message: error.message || 'Server error' });
+  }
+});
+
+// Block user in conversation
+router.post('/conversations/:conversationId/block', auth, async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const { blockUserId } = req.body;
+
+    if (!blockUserId) {
+      return res.status(400).json({ message: 'blockUserId required' });
+    }
+
+    const db = mongoose.connection.db;
+    if (!db) {
+      return res.status(500).json({ message: 'Database connection error' });
+    }
+
+    // Add to blocked list
+    await db.collection('blocked_users').updateOne(
+      {
+        userId: new mongoose.Types.ObjectId(req.user!._id),
+        blockedUserId: new mongoose.Types.ObjectId(blockUserId)
+      },
+      {
+        $set: {
+          userId: new mongoose.Types.ObjectId(req.user!._id),
+          blockedUserId: new mongoose.Types.ObjectId(blockUserId),
+          conversationId: new mongoose.Types.ObjectId(conversationId),
+          blockedAt: new Date()
+        }
+      },
+      { upsert: true }
+    );
+
+    res.json({ message: 'User blocked', isBlocked: true });
+  } catch (error: any) {
+    res.status(500).json({ message: error.message || 'Server error' });
+  }
+});
+
+// Unblock user
+router.post('/conversations/:conversationId/unblock', auth, async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const { blockUserId } = req.body;
+
+    if (!blockUserId) {
+      return res.status(400).json({ message: 'blockUserId required' });
+    }
+
+    const db = mongoose.connection.db;
+    if (!db) {
+      return res.status(500).json({ message: 'Database connection error' });
+    }
+
+    // Remove from blocked list
+    await db.collection('blocked_users').deleteOne({
+      userId: new mongoose.Types.ObjectId(req.user!._id),
+      blockedUserId: new mongoose.Types.ObjectId(blockUserId)
+    });
+
+    res.json({ message: 'User unblocked', isBlocked: false });
+  } catch (error: any) {
+    res.status(500).json({ message: error.message || 'Server error' });
+  }
+});
+
+// Report user/conversation
+router.post('/conversations/:conversationId/report', auth, async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const { reportedUserId, reason, description } = req.body;
+
+    if (!reportedUserId || !reason) {
+      return res.status(400).json({ message: 'reportedUserId and reason required' });
+    }
+
+    const db = mongoose.connection.db;
+    if (!db) {
+      return res.status(500).json({ message: 'Database connection error' });
+    }
+
+    // Create report
+    const report = {
+      reporterId: new mongoose.Types.ObjectId(req.user!._id),
+      reportedUserId: new mongoose.Types.ObjectId(reportedUserId),
+      conversationId: new mongoose.Types.ObjectId(conversationId),
+      reason,
+      description: description || '',
+      status: 'pending',
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const result = await db.collection('reports').insertOne(report);
+
+    res.json({
+      message: 'Report submitted successfully',
+      reportId: result.insertedId
+    });
+  } catch (error: any) {
+    res.status(500).json({ message: error.message || 'Server error' });
+  }
+});
+
+// Check if conversation is muted
+router.get('/conversations/:conversationId/mute-status', auth, async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+
+    const db = mongoose.connection.db;
+    if (!db) {
+      return res.status(500).json({ message: 'Database connection error' });
+    }
+
+    const muted = await db.collection('muted_conversations').findOne({
+      userId: new mongoose.Types.ObjectId(req.user!._id),
+      conversationId: new mongoose.Types.ObjectId(conversationId)
+    });
+
+    const blocked = await db.collection('blocked_users').findOne({
+      userId: new mongoose.Types.ObjectId(req.user!._id),
+      conversationId: new mongoose.Types.ObjectId(conversationId)
+    });
+
+    res.json({
+      isMuted: !!muted,
+      isBlocked: !!blocked
+    });
+  } catch (error: any) {
+    res.status(500).json({ message: error.message || 'Server error' });
+  }
+});
+
 export default router;
