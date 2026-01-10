@@ -1,5 +1,5 @@
 // Notification Service - Helper functions to create notifications
-import Notification from '../models/notification';
+import Notification from '@/models/notification';
 
 export interface CreateNotificationParams {
   recipientId: string;

@@ -1,4 +1,4 @@
-import { Server as SocketIOServer, Socket } from 'socket.io';
+import { Server as SocketIOServer } from 'socket.io';
 import { Server as HTTPServer } from 'http';
 import jwt from 'jsonwebtoken';
 import { MongoClient, ObjectId } from 'mongodb';
@@ -6,7 +6,7 @@ import { MongoClient, ObjectId } from 'mongodb';
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/socialmedia';
 const JWT_SECRET = process.env.JWT_SECRET || '4d9f1c8c6b27a67e9f3a81d2e5b0f78c72d1e7a64d59c83fb20e5a72a8c4d192';
 
-interface AuthenticatedSocket extends Socket {
+interface AuthenticatedSocket extends SocketIOServer.Socket {
   userId?: string;
   username?: string;
 }
@@ -265,7 +265,7 @@ export class SocketService {
 
     const message = await db.collection('messages').findOne({
       _id: new ObjectId(messageId)
-    }) as any;
+    });
 
     if (!message) {
       throw new Error("Message not found");

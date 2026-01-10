@@ -97,18 +97,3 @@ export async function cacheWithTTL<T>(
 
 // Export redis instance for advanced usage
 export { redis }
-
-export const cache = {
-  get: cacheGet,
-  set: cacheSet,
-  del: cacheDelete,
-  deletePattern: cacheDeletePattern,
-  clear: async () => {
-    if (!redis) return;
-    try {
-      await redis.flushdb();
-    } catch (error) {
-      console.error('Cache clear error:', error);
-    }
-  }
-};

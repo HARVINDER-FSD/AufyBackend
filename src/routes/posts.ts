@@ -302,6 +302,54 @@ router.get("/:postId/likes", optionalAuth, async (req, res) => {
   }
 })
 
+// Share post (track share count)
+router.post("/:postId/share", authenticateToken, async (req, res) => {
+  try {
+    const { postId } = req.params
+    const userId = req.userId!
+
+    const db = await getDatabase()
+    const sharesCollection = db.collection('shares')
+
+    // Check if already shared
+    const existingShare = await sharesCollection.findOne({
+      user_id: new ObjectId(userId),
+      post_id: new ObjectId(postId)
+    })
+
+    if (existingShare) {
+      return res.json({
+        success: true,
+        message: "Post already shared",
+        shared: true
+      })
+    }
+
+    // Record the share
+    await sharesCollection.insertOne({
+      user_id: new ObjectId(userId),
+      post_id: new ObjectId(postId),
+      created_at: new Date()
+    })
+
+    // Get updated share count
+    const shareCount = await sharesCollection.countDocuments({ post_id: new ObjectId(postId) })
+
+    res.json({
+      success: true,
+      message: "Post shared successfully",
+      shared: true,
+      shareCount
+    })
+  } catch (error: any) {
+    console.error('Share error:', error)
+    res.status(error.statusCode || 500).json({
+      success: false,
+      error: error.message,
+    })
+  }
+})
+
 // Get post comments
 router.get("/:postId/comments", optionalAuth, async (req, res) => {
   try {

@@ -177,7 +177,7 @@ router.delete('/messages/:messageId', auth, async (req, res) => {
       return res.status(404).json({ message: 'Message not found' });
     }
 
-    if (message.sender_id.toString() !== req.user!._id.toString()) {
+    if (message.sender.toString() !== req.user!._id.toString()) {
       return res.status(403).json({ message: 'Not authorized' });
     }
 
