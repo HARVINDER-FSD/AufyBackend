@@ -4,6 +4,7 @@ import { CommentService } from "../services/comment"
 import { authenticateToken, optionalAuth } from "../middleware/auth"
 import { getDatabase } from "../lib/database"
 import { ObjectId } from "mongodb"
+import { cacheGet, cacheSet, cacheDel, cacheInvalidate } from "../lib/redis"
 
 const router = Router()
 
@@ -11,12 +12,25 @@ const router = Router()
 router.get("/feed", authenticateToken, async (req, res) => {
   try {
     const { page, limit } = req.query
+    const pageNum = Number.parseInt(page as string) || 1
+    const limitNum = Number.parseInt(limit as string) || 20
+
+    // Try cache first
+    const cacheKey = `feed:${req.userId}:${pageNum}:${limitNum}`
+    const cached = await cacheGet(cacheKey)
+    if (cached) {
+      console.log(`✅ Cache hit for feed page ${pageNum}`)
+      return res.json(cached)
+    }
 
     const result = await PostService.getFeedPosts(
       req.userId!,
-      Number.parseInt(page as string) || 1,
-      Number.parseInt(limit as string) || 20,
+      pageNum,
+      limitNum,
     )
+
+    // Cache for 2 minutes
+    await cacheSet(cacheKey, result, 120)
 
     res.json(result)
   } catch (error: any) {
@@ -39,6 +53,10 @@ router.post("/", authenticateToken, async (req, res) => {
       media_type,
       location,
     })
+
+    // Invalidate all caches when new post is created
+    await cacheInvalidate(`feed:${req.userId}:*`)
+    await cacheInvalidate(`user_posts:${req.userId}:*`)
 
     res.status(201).json({
       success: true,

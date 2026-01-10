@@ -27,6 +27,8 @@ const cors_1 = __importDefault(require("cors"));
 const cookie_parser_1 = __importDefault(require("cookie-parser"));
 const mongoose_1 = __importDefault(require("mongoose"));
 const websocket_1 = require("./lib/websocket");
+const redis_1 = require("./lib/redis");
+const performance_monitor_1 = require("./lib/performance-monitor");
 const auth_1 = __importDefault(require("./routes/auth"));
 const users_1 = __importDefault(require("./routes/users"));
 const posts_1 = __importDefault(require("./routes/posts"));
@@ -59,6 +61,8 @@ const httpServer = (0, http_1.createServer)(app);
 const PORT = parseInt(process.env.PORT || '8000');
 // Initialize Firebase for push notifications
 (0, firebase_messaging_1.initializeFirebase)();
+// Initialize Redis for caching
+(0, redis_1.initRedis)();
 // Initialize WebSocket server
 const io = (0, websocket_1.initializeWebSocket)(httpServer);
 console.log('✅ WebSocket server initialized');
@@ -109,6 +113,16 @@ app.use(security_1.secureSession);
 app.use(express_1.default.json({ limit: '50mb' }));
 app.use(express_1.default.urlencoded({ extended: true, limit: '50mb' }));
 app.use((0, cookie_parser_1.default)());
+// Performance Monitoring Middleware
+app.use((req, res, next) => {
+    const start = Date.now();
+    res.on('finish', () => {
+        const duration = Date.now() - start;
+        const userId = req.userId;
+        (0, performance_monitor_1.recordMetric)(req.path, req.method, duration, res.statusCode, userId);
+    });
+    next();
+});
 // Serve static files (for password reset redirect page)
 app.use(express_1.default.static(path_1.default.join(__dirname, '..', 'public')));
 // Health check
@@ -146,6 +160,13 @@ app.use('/api/secret-crush', secret_crush_1.default);
 app.use('/api/premium', premium_1.default);
 app.use('/api/demo', demo_1.default);
 app.use('/api/ai', ai_1.default);
+// Performance Metrics Endpoint (Admin only)
+app.get('/api/metrics', (_req, res) => {
+    res.json({
+        summary: (0, performance_monitor_1.getPerformanceSummary)(),
+        violations: (0, performance_monitor_1.checkPerformanceTargets)()
+    });
+});
 // Error handling
 app.use((err, _req, res, _next) => {
     console.error('Error:', err);

@@ -15,6 +15,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const mongodb_1 = require("mongodb");
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
+const redis_1 = require("../lib/redis");
 const router = (0, express_1.Router)();
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/socialmedia';
 const JWT_SECRET = process.env.JWT_SECRET || '4d9f1c8c6b27a67e9f3a81d2e5b0f78c72d1e7a64d59c83fb20e5a72a8c4d192';
@@ -201,6 +202,13 @@ router.get('/username/:username', (req, res) => __awaiter(void 0, void 0, void 0
         catch (err) {
             // Token is optional, continue without it
         }
+        // Try cache first
+        const cacheKey = `profile:${username}`;
+        const cached = yield (0, redis_1.cacheGet)(cacheKey);
+        if (cached) {
+            console.log(`✅ Cache hit for profile: ${username}`);
+            return res.json(cached);
+        }
         const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
         const db = client.db();
         const user = yield db.collection('users').findOne({ username });
@@ -258,7 +266,7 @@ router.get('/username/:username', (req, res) => __awaiter(void 0, void 0, void 0
             is_archived: { $ne: true }
         });
         yield client.close();
-        return res.json({
+        const response = {
             _id: user._id.toString(),
             id: user._id.toString(),
             username: user.username,
@@ -285,8 +293,13 @@ router.get('/username/:username', (req, res) => __awaiter(void 0, void 0, void 0
             badgeType: user.badge_type || user.verification_type || null,
             posts_count: postsCount,
             isPrivate: user.is_private || false,
-            is_private: user.is_private || false
-        });
+            is_private: user.is_private || false,
+            isPending,
+            followRequestStatus
+        };
+        // Cache for 5 minutes (300 seconds)
+        yield (0, redis_1.cacheSet)(cacheKey, response, 300);
+        return res.json(response);
     }
     catch (error) {
         console.error('Get user by username error:', error);
@@ -771,6 +784,8 @@ router.post('/:userId/follow', authenticate, (req, res) => __awaiter(void 0, voi
                 status: 'accepted'
             });
             yield client.close();
+            // Invalidate profile cache for both users
+            yield (0, redis_1.cacheInvalidate)(`profile:*`);
             return res.json({
                 message: 'Unfollowed successfully',
                 isFollowing: false,
@@ -794,6 +809,8 @@ router.post('/:userId/follow', authenticate, (req, res) => __awaiter(void 0, voi
                     _id: existingRequest._id
                 });
                 yield client.close();
+                // Invalidate profile cache
+                yield (0, redis_1.cacheInvalidate)(`profile:*`);
                 return res.json({
                     message: 'Follow request canceled',
                     isFollowing: false,
@@ -862,6 +879,8 @@ router.post('/:userId/follow', authenticate, (req, res) => __awaiter(void 0, voi
                     following_id: new mongodb_1.ObjectId(currentUserId)
                 });
                 yield client.close();
+                // Invalidate profile cache
+                yield (0, redis_1.cacheInvalidate)(`profile:*`);
                 // Create notification (non-blocking)
                 setImmediate(() => __awaiter(void 0, void 0, void 0, function* () {
                     try {
@@ -953,6 +972,13 @@ router.get('/:userId/followers', authenticate, (req, res) => __awaiter(void 0, v
         const { userId } = req.params;
         const currentUserId = req.userId; // From auth middleware
         console.log('[FOLLOWERS] Fetching followers for user:', userId);
+        // Try cache first
+        const cacheKey = `followers:${userId}`;
+        const cached = yield (0, redis_1.cacheGet)(cacheKey);
+        if (cached) {
+            console.log(`✅ Cache hit for followers: ${userId}`);
+            return res.json(cached);
+        }
         const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
         const db = client.db();
         // Check if target user is private
@@ -1015,7 +1041,10 @@ router.get('/:userId/followers', authenticate, (req, res) => __awaiter(void 0, v
             isFollowing: followingIds.has(user._id.toString())
         }));
         console.log('[FOLLOWERS] Returning', result.length, 'followers');
-        return res.json({ data: result });
+        const response = { data: result };
+        // Cache for 10 minutes (600 seconds)
+        yield (0, redis_1.cacheSet)(cacheKey, response, 600);
+        return res.json(response);
     }
     catch (error) {
         console.error('Get followers error:', error);
@@ -1192,6 +1221,13 @@ router.get('/:userId/posts', (req, res) => __awaiter(void 0, void 0, void 0, fun
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 20;
         const offset = (page - 1) * limit;
+        // Try cache first
+        const cacheKey = `user_posts:${userId}:${page}:${limit}`;
+        const cached = yield (0, redis_1.cacheGet)(cacheKey);
+        if (cached) {
+            console.log(`✅ Cache hit for user posts: ${userId} page ${page}`);
+            return res.json(cached);
+        }
         const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
         const db = client.db();
         // Check if userId is an ObjectId or username
@@ -1321,7 +1357,7 @@ router.get('/:userId/posts', (req, res) => __awaiter(void 0, void 0, void 0, fun
             };
         })));
         yield client.close();
-        return res.json({
+        const response = {
             success: true,
             data: postsWithCounts,
             pagination: {
@@ -1331,7 +1367,10 @@ router.get('/:userId/posts', (req, res) => __awaiter(void 0, void 0, void 0, fun
                 totalPages: Math.ceil(total / limit),
                 hasMore: page * limit < total
             }
-        });
+        };
+        // Cache for 3 minutes (180 seconds)
+        yield (0, redis_1.cacheSet)(cacheKey, response, 180);
+        return res.json(response);
     }
     catch (error) {
         console.error('Get user posts error:', error);

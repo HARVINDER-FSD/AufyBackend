@@ -4,6 +4,7 @@ import User from "../models/user"
 import Post from "../models/post"
 import jwt from 'jsonwebtoken'
 import { ObjectId } from 'mongodb'
+import { cacheGet, cacheSet } from "../lib/redis"
 
 const router = Router()
 
@@ -36,6 +37,14 @@ router.get("/", async (req, res) => {
     }
 
     console.log('[Search] Query:', q)
+
+    // Try cache first
+    const cacheKey = `search:${q}:${limit}`
+    const cached = await cacheGet(cacheKey)
+    if (cached) {
+      console.log(`✅ Cache hit for search: ${q}`)
+      return res.json(cached)
+    }
 
     const { db } = await connectToDatabase()
     const currentUserId = getCurrentUserId(req)
@@ -137,11 +146,16 @@ router.get("/", async (req, res) => {
     })
 
     // Return in format expected by mobile app
-    res.json({
+    const response = {
       users: formattedUsers,
       posts: formattedPosts,
       hashtags
-    })
+    }
+
+    // Cache for 10 minutes (600 seconds)
+    await cacheSet(cacheKey, response, 600)
+
+    res.json(response)
   } catch (error: any) {
     console.error("❌ Error performing search:", error)
     console.error("Error stack:", error.stack)

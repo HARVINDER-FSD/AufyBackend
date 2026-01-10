@@ -1,6 +1,7 @@
 import { Router } from "express"
 import { PostService } from "../services/post"
 import { authenticateToken } from "../middleware/auth"
+import { cacheGet, cacheSet, cacheDel } from "../lib/redis"
 
 const router = Router()
 
@@ -8,12 +9,25 @@ const router = Router()
 router.get("/", authenticateToken, async (req, res) => {
   try {
     const { page, limit } = req.query
+    const pageNum = Number.parseInt(page as string) || 1
+    const limitNum = Number.parseInt(limit as string) || 20
+
+    // Try cache first
+    const cacheKey = `feed:${req.userId}:${pageNum}:${limitNum}`
+    const cached = await cacheGet(cacheKey)
+    if (cached) {
+      console.log(`✅ Cache hit for feed page ${pageNum}`)
+      return res.json(cached)
+    }
 
     const result = await PostService.getFeedPosts(
       req.userId!,
-      Number.parseInt(page as string) || 1,
-      Number.parseInt(limit as string) || 20,
+      pageNum,
+      limitNum,
     )
+
+    // Cache for 2 minutes (120 seconds)
+    await cacheSet(cacheKey, result, 120)
 
     res.json(result)
   } catch (error: any) {

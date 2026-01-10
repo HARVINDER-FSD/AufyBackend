@@ -1,229 +1,141 @@
-import { Redis } from '@upstash/redis';
-import IORedis from 'ioredis';
+import Redis from 'ioredis';
 
-// Initialize Redis client
-const redis = process.env.UPSTASH_REDIS_REST_URL ? new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL!,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-}) : null;
+let redis: Redis | null = null;
 
-// Fallback to local Redis if Upstash is not configured
-const localRedis = process.env.REDIS_URL ? new IORedis(process.env.REDIS_URL) : null;
+export const initRedis = () => {
+  if (redis) return redis;
 
-const client: any = redis || localRedis;
+  try {
+    // Check if using Upstash Redis (REST API)
+    const upstashUrl = process.env.UPSTASH_REDIS_REST_URL;
+    const upstashToken = process.env.UPSTASH_REDIS_REST_TOKEN;
 
-export class CacheService {
-  private static instance: CacheService;
-  private redis: any;
+    if (upstashUrl && upstashToken) {
+      // Parse Upstash URL to get host and port
+      // Format: https://host:port
+      const url = new URL(upstashUrl);
+      const host = url.hostname;
+      const port = url.port || 6379;
+      
+      // Extract password from token (Upstash uses token as password)
+      const password = upstashToken;
 
-  private constructor() {
-    this.redis = client!;
-  }
+      console.log(`🔗 Connecting to Upstash Redis: ${host}:${port}`);
 
-  public static getInstance(): CacheService {
-    if (!CacheService.instance) {
-      CacheService.instance = new CacheService();
+      redis = new Redis({
+        host,
+        port: parseInt(port.toString()),
+        password,
+        retryStrategy: (times) => {
+          if (times > 3) {
+            console.warn('⚠️  Redis connection failed, continuing without cache');
+            return null; // Stop retrying
+          }
+          const delay = Math.min(times * 50, 2000);
+          return delay;
+        },
+        maxRetriesPerRequest: null,
+        tls: {}, // Enable TLS for Upstash
+        connectTimeout: 5000,
+        lazyConnect: true
+      });
+    } else {
+      // Fallback to local Redis
+      console.log('🔗 Connecting to local Redis');
+      
+      redis = new Redis({
+        host: process.env.REDIS_HOST || 'localhost',
+        port: parseInt(process.env.REDIS_PORT || '6379'),
+        password: process.env.REDIS_PASSWORD,
+        retryStrategy: (times) => {
+          if (times > 3) {
+            console.warn('⚠️  Redis connection failed, continuing without cache');
+            return null;
+          }
+          const delay = Math.min(times * 50, 2000);
+          return delay;
+        },
+        maxRetriesPerRequest: null,
+        connectTimeout: 5000,
+        lazyConnect: true
+      });
     }
-    return CacheService.instance;
-  }
 
-  // Session management
-  async setSession(sessionId: string, userId: string, expiresIn: number = 3600): Promise<void> {
-    try {
-      await this.redis.setex(`session:${sessionId}`, expiresIn, userId);
-    } catch (error) {
-      console.error('Redis session set error:', error);
+    redis.on('connect', () => {
+      console.log('✅ Redis connected successfully');
+    });
+
+    redis.on('error', (err) => {
+      console.warn('⚠️  Redis error (continuing without cache):', err.message);
+    });
+
+    // Try to connect but don't block if it fails
+    redis.connect().catch(() => {
+      console.warn('⚠️  Redis unavailable, app will work without caching');
+    });
+
+    return redis;
+  } catch (error) {
+    console.warn('⚠️  Failed to initialize Redis:', error);
+    return null;
+  }
+};
+
+export const getRedis = () => {
+  if (!redis) {
+    return initRedis();
+  }
+  return redis;
+};
+
+// Cache helpers
+export const cacheGet = async (key: string) => {
+  try {
+    const redis = getRedis();
+    if (!redis) return null;
+    const data = await redis.get(key);
+    return data ? JSON.parse(data) : null;
+  } catch (error) {
+    console.error('Cache get error:', error);
+    return null;
+  }
+};
+
+export const cacheSet = async (key: string, value: any, ttl: number = 3600) => {
+  try {
+    const redis = getRedis();
+    if (!redis) return false;
+    await redis.setex(key, ttl, JSON.stringify(value));
+    return true;
+  } catch (error) {
+    console.error('Cache set error:', error);
+    return false;
+  }
+};
+
+export const cacheDel = async (key: string) => {
+  try {
+    const redis = getRedis();
+    if (!redis) return false;
+    await redis.del(key);
+    return true;
+  } catch (error) {
+    console.error('Cache delete error:', error);
+    return false;
+  }
+};
+
+export const cacheInvalidate = async (pattern: string) => {
+  try {
+    const redis = getRedis();
+    if (!redis) return false;
+    const keys = await redis.keys(pattern);
+    if (keys.length > 0) {
+      await redis.del(...keys);
     }
+    return true;
+  } catch (error) {
+    console.error('Cache invalidate error:', error);
+    return false;
   }
-
-  async getSession(sessionId: string): Promise<string | null> {
-    try {
-      return await this.redis.get(`session:${sessionId}`);
-    } catch (error) {
-      console.error('Redis session get error:', error);
-      return null;
-    }
-  }
-
-  async deleteSession(sessionId: string): Promise<void> {
-    try {
-      await this.redis.del(`session:${sessionId}`);
-    } catch (error) {
-      console.error('Redis session delete error:', error);
-    }
-  }
-
-  // Feed caching
-  async setFeed(userId: string, feed: any[], expiresIn: number = 300): Promise<void> {
-    try {
-      await this.redis.setex(`feed:${userId}`, expiresIn, JSON.stringify(feed));
-    } catch (error) {
-      console.error('Redis feed set error:', error);
-    }
-  }
-
-  async getFeed(userId: string): Promise<any[] | null> {
-    try {
-      const feed = await this.redis.get(`feed:${userId}`);
-      return feed ? JSON.parse(feed) : null;
-    } catch (error) {
-      console.error('Redis feed get error:', error);
-      return null;
-    }
-  }
-
-  async invalidateFeed(userId: string): Promise<void> {
-    try {
-      await this.redis.del(`feed:${userId}`);
-    } catch (error) {
-      console.error('Redis feed invalidate error:', error);
-    }
-  }
-
-  // Profile visitor counts
-  async incrementVisitorCount(profileId: string): Promise<number> {
-    try {
-      return await this.redis.incr(`visitors:${profileId}`);
-    } catch (error) {
-      console.error('Redis visitor count increment error:', error);
-      return 0;
-    }
-  }
-
-  async getVisitorCount(profileId: string): Promise<number> {
-    try {
-      const count = await this.redis.get(`visitors:${profileId}`);
-      return count ? parseInt(count) : 0;
-    } catch (error) {
-      console.error('Redis visitor count get error:', error);
-      return 0;
-    }
-  }
-
-  async setVisitorCount(profileId: string, count: number): Promise<void> {
-    try {
-      await this.redis.set(`visitors:${profileId}`, count);
-    } catch (error) {
-      console.error('Redis visitor count set error:', error);
-    }
-  }
-
-  // Post likes/comments caching
-  async setPostStats(postId: string, stats: { likes: number; comments: number }): Promise<void> {
-    try {
-      await this.redis.setex(`post:${postId}:stats`, 1800, JSON.stringify(stats));
-    } catch (error) {
-      console.error('Redis post stats set error:', error);
-    }
-  }
-
-  async getPostStats(postId: string): Promise<{ likes: number; comments: number } | null> {
-    try {
-      const stats = await this.redis.get(`post:${postId}:stats`);
-      return stats ? JSON.parse(stats) : null;
-    } catch (error) {
-      console.error('Redis post stats get error:', error);
-      return null;
-    }
-  }
-
-  async incrementPostLikes(postId: string): Promise<number> {
-    try {
-      return await this.redis.incr(`post:${postId}:likes`);
-    } catch (error) {
-      console.error('Redis post likes increment error:', error);
-      return 0;
-    }
-  }
-
-  async decrementPostLikes(postId: string): Promise<number> {
-    try {
-      return await this.redis.decr(`post:${postId}:likes`);
-    } catch (error) {
-      console.error('Redis post likes decrement error:', error);
-      return 0;
-    }
-  }
-
-  // User online status
-  async setUserOnline(userId: string, expiresIn: number = 300): Promise<void> {
-    try {
-      await this.redis.setex(`online:${userId}`, expiresIn, 'true');
-    } catch (error) {
-      console.error('Redis user online set error:', error);
-    }
-  }
-
-  async isUserOnline(userId: string): Promise<boolean> {
-    try {
-      const status = await this.redis.get(`online:${userId}`);
-      return status === 'true';
-    } catch (error) {
-      console.error('Redis user online get error:', error);
-      return false;
-    }
-  }
-
-  async setUserOffline(userId: string): Promise<void> {
-    try {
-      await this.redis.del(`online:${userId}`);
-    } catch (error) {
-      console.error('Redis user offline set error:', error);
-    }
-  }
-
-  // Generic cache methods
-  async set(key: string, value: any, expiresIn?: number): Promise<void> {
-    try {
-      if (expiresIn) {
-        await this.redis.setex(key, expiresIn, JSON.stringify(value));
-      } else {
-        await this.redis.set(key, JSON.stringify(value));
-      }
-    } catch (error) {
-      console.error('Redis set error:', error);
-    }
-  }
-
-  async get(key: string): Promise<any> {
-    try {
-      const value = await this.redis.get(key);
-      return value ? JSON.parse(value) : null;
-    } catch (error) {
-      console.error('Redis get error:', error);
-      return null;
-    }
-  }
-
-  async del(key: string): Promise<void> {
-    try {
-      await this.redis.del(key);
-    } catch (error) {
-      console.error('Redis delete error:', error);
-    }
-  }
-
-  async exists(key: string): Promise<boolean> {
-    try {
-      const result = await this.redis.exists(key);
-      return result === 1;
-    } catch (error) {
-      console.error('Redis exists error:', error);
-      return false;
-    }
-  }
-
-  // Cache warming for popular content
-  async warmCache(): Promise<void> {
-    try {
-      // This would be called periodically to pre-populate cache with popular content
-      console.log('Cache warming initiated...');
-      // Implementation would depend on specific caching strategy
-    } catch (error) {
-      console.error('Cache warming error:', error);
-    }
-  }
-}
-
-export const cacheService = CacheService.getInstance();
-export default cacheService;
+};

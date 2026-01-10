@@ -12,12 +12,24 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const post_1 = require("../services/post");
 const auth_1 = require("../middleware/auth");
+const redis_1 = require("../lib/redis");
 const router = (0, express_1.Router)();
 // Get user's personalized feed
 router.get("/", auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { page, limit } = req.query;
-        const result = yield post_1.PostService.getFeedPosts(req.userId, Number.parseInt(page) || 1, Number.parseInt(limit) || 20);
+        const pageNum = Number.parseInt(page) || 1;
+        const limitNum = Number.parseInt(limit) || 20;
+        // Try cache first
+        const cacheKey = `feed:${req.userId}:${pageNum}:${limitNum}`;
+        const cached = yield (0, redis_1.cacheGet)(cacheKey);
+        if (cached) {
+            console.log(`✅ Cache hit for feed page ${pageNum}`);
+            return res.json(cached);
+        }
+        const result = yield post_1.PostService.getFeedPosts(req.userId, pageNum, limitNum);
+        // Cache for 2 minutes (120 seconds)
+        yield (0, redis_1.cacheSet)(cacheKey, result, 120);
         res.json(result);
     }
     catch (error) {

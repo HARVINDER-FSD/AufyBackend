@@ -15,12 +15,24 @@ const comment_1 = require("../services/comment");
 const auth_1 = require("../middleware/auth");
 const database_1 = require("../lib/database");
 const mongodb_1 = require("mongodb");
+const redis_1 = require("../lib/redis");
 const router = (0, express_1.Router)();
 // Get user feed
 router.get("/feed", auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { page, limit } = req.query;
-        const result = yield post_1.PostService.getFeedPosts(req.userId, Number.parseInt(page) || 1, Number.parseInt(limit) || 20);
+        const pageNum = Number.parseInt(page) || 1;
+        const limitNum = Number.parseInt(limit) || 20;
+        // Try cache first
+        const cacheKey = `feed:${req.userId}:${pageNum}:${limitNum}`;
+        const cached = yield (0, redis_1.cacheGet)(cacheKey);
+        if (cached) {
+            console.log(`✅ Cache hit for feed page ${pageNum}`);
+            return res.json(cached);
+        }
+        const result = yield post_1.PostService.getFeedPosts(req.userId, pageNum, limitNum);
+        // Cache for 2 minutes
+        yield (0, redis_1.cacheSet)(cacheKey, result, 120);
         res.json(result);
     }
     catch (error) {
@@ -41,6 +53,9 @@ router.post("/", auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 
             media_type,
             location,
         });
+        // Invalidate all caches when new post is created
+        yield (0, redis_1.cacheInvalidate)(`feed:${req.userId}:*`);
+        yield (0, redis_1.cacheInvalidate)(`user_posts:${req.userId}:*`);
         res.status(201).json({
             success: true,
             data: { post },

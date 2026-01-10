@@ -12,268 +12,129 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.cacheService = exports.CacheService = void 0;
-const redis_1 = require("@upstash/redis");
+exports.cacheInvalidate = exports.cacheDel = exports.cacheSet = exports.cacheGet = exports.getRedis = exports.initRedis = void 0;
 const ioredis_1 = __importDefault(require("ioredis"));
-// Initialize Redis client
-const redis = process.env.UPSTASH_REDIS_REST_URL ? new redis_1.Redis({
-    url: process.env.UPSTASH_REDIS_REST_URL,
-    token: process.env.UPSTASH_REDIS_REST_TOKEN,
-}) : null;
-// Fallback to local Redis if Upstash is not configured
-const localRedis = process.env.REDIS_URL ? new ioredis_1.default(process.env.REDIS_URL) : null;
-const client = redis || localRedis;
-class CacheService {
-    constructor() {
-        this.redis = client;
-    }
-    static getInstance() {
-        if (!CacheService.instance) {
-            CacheService.instance = new CacheService();
+let redis = null;
+const initRedis = () => {
+    if (redis)
+        return redis;
+    try {
+        // Check if using Upstash Redis (REST API)
+        const upstashUrl = process.env.UPSTASH_REDIS_REST_URL;
+        const upstashToken = process.env.UPSTASH_REDIS_REST_TOKEN;
+        if (upstashUrl && upstashToken) {
+            // Parse Upstash URL to get host and port
+            // Format: https://host:port
+            const url = new URL(upstashUrl);
+            const host = url.hostname;
+            const port = url.port || 6379;
+            // Extract password from token (Upstash uses token as password)
+            const password = upstashToken;
+            console.log(`🔗 Connecting to Upstash Redis: ${host}:${port}`);
+            redis = new ioredis_1.default({
+                host,
+                port: parseInt(port.toString()),
+                password,
+                retryStrategy: (times) => {
+                    const delay = Math.min(times * 50, 2000);
+                    return delay;
+                },
+                maxRetriesPerRequest: null,
+                tls: {}, // Enable TLS for Upstash
+            });
         }
-        return CacheService.instance;
-    }
-    // Session management
-    setSession(sessionId_1, userId_1) {
-        return __awaiter(this, arguments, void 0, function* (sessionId, userId, expiresIn = 3600) {
-            try {
-                yield this.redis.setex(`session:${sessionId}`, expiresIn, userId);
-            }
-            catch (error) {
-                console.error('Redis session set error:', error);
-            }
+        else {
+            // Fallback to local Redis
+            console.log('🔗 Connecting to local Redis');
+            redis = new ioredis_1.default({
+                host: process.env.REDIS_HOST || 'localhost',
+                port: parseInt(process.env.REDIS_PORT || '6379'),
+                password: process.env.REDIS_PASSWORD,
+                retryStrategy: (times) => {
+                    const delay = Math.min(times * 50, 2000);
+                    return delay;
+                },
+                maxRetriesPerRequest: null,
+            });
+        }
+        redis.on('connect', () => {
+            console.log('✅ Redis connected successfully');
         });
-    }
-    getSession(sessionId) {
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                return yield this.redis.get(`session:${sessionId}`);
-            }
-            catch (error) {
-                console.error('Redis session get error:', error);
-                return null;
-            }
+        redis.on('error', (err) => {
+            console.error('❌ Redis error:', err);
         });
+        return redis;
     }
-    deleteSession(sessionId) {
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                yield this.redis.del(`session:${sessionId}`);
-            }
-            catch (error) {
-                console.error('Redis session delete error:', error);
-            }
-        });
+    catch (error) {
+        console.error('Failed to initialize Redis:', error);
+        return null;
     }
-    // Feed caching
-    setFeed(userId_1, feed_1) {
-        return __awaiter(this, arguments, void 0, function* (userId, feed, expiresIn = 300) {
-            try {
-                yield this.redis.setex(`feed:${userId}`, expiresIn, JSON.stringify(feed));
-            }
-            catch (error) {
-                console.error('Redis feed set error:', error);
-            }
-        });
+};
+exports.initRedis = initRedis;
+const getRedis = () => {
+    if (!redis) {
+        return (0, exports.initRedis)();
     }
-    getFeed(userId) {
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                const feed = yield this.redis.get(`feed:${userId}`);
-                return feed ? JSON.parse(feed) : null;
-            }
-            catch (error) {
-                console.error('Redis feed get error:', error);
-                return null;
-            }
-        });
+    return redis;
+};
+exports.getRedis = getRedis;
+// Cache helpers
+const cacheGet = (key) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const redis = (0, exports.getRedis)();
+        if (!redis)
+            return null;
+        const data = yield redis.get(key);
+        return data ? JSON.parse(data) : null;
     }
-    invalidateFeed(userId) {
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                yield this.redis.del(`feed:${userId}`);
-            }
-            catch (error) {
-                console.error('Redis feed invalidate error:', error);
-            }
-        });
+    catch (error) {
+        console.error('Cache get error:', error);
+        return null;
     }
-    // Profile visitor counts
-    incrementVisitorCount(profileId) {
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                return yield this.redis.incr(`visitors:${profileId}`);
-            }
-            catch (error) {
-                console.error('Redis visitor count increment error:', error);
-                return 0;
-            }
-        });
+});
+exports.cacheGet = cacheGet;
+const cacheSet = (key_1, value_1, ...args_1) => __awaiter(void 0, [key_1, value_1, ...args_1], void 0, function* (key, value, ttl = 3600) {
+    try {
+        const redis = (0, exports.getRedis)();
+        if (!redis)
+            return false;
+        yield redis.setex(key, ttl, JSON.stringify(value));
+        return true;
     }
-    getVisitorCount(profileId) {
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                const count = yield this.redis.get(`visitors:${profileId}`);
-                return count ? parseInt(count) : 0;
-            }
-            catch (error) {
-                console.error('Redis visitor count get error:', error);
-                return 0;
-            }
-        });
+    catch (error) {
+        console.error('Cache set error:', error);
+        return false;
     }
-    setVisitorCount(profileId, count) {
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                yield this.redis.set(`visitors:${profileId}`, count);
-            }
-            catch (error) {
-                console.error('Redis visitor count set error:', error);
-            }
-        });
+});
+exports.cacheSet = cacheSet;
+const cacheDel = (key) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const redis = (0, exports.getRedis)();
+        if (!redis)
+            return false;
+        yield redis.del(key);
+        return true;
     }
-    // Post likes/comments caching
-    setPostStats(postId, stats) {
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                yield this.redis.setex(`post:${postId}:stats`, 1800, JSON.stringify(stats));
-            }
-            catch (error) {
-                console.error('Redis post stats set error:', error);
-            }
-        });
+    catch (error) {
+        console.error('Cache delete error:', error);
+        return false;
     }
-    getPostStats(postId) {
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                const stats = yield this.redis.get(`post:${postId}:stats`);
-                return stats ? JSON.parse(stats) : null;
-            }
-            catch (error) {
-                console.error('Redis post stats get error:', error);
-                return null;
-            }
-        });
+});
+exports.cacheDel = cacheDel;
+const cacheInvalidate = (pattern) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const redis = (0, exports.getRedis)();
+        if (!redis)
+            return false;
+        const keys = yield redis.keys(pattern);
+        if (keys.length > 0) {
+            yield redis.del(...keys);
+        }
+        return true;
     }
-    incrementPostLikes(postId) {
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                return yield this.redis.incr(`post:${postId}:likes`);
-            }
-            catch (error) {
-                console.error('Redis post likes increment error:', error);
-                return 0;
-            }
-        });
+    catch (error) {
+        console.error('Cache invalidate error:', error);
+        return false;
     }
-    decrementPostLikes(postId) {
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                return yield this.redis.decr(`post:${postId}:likes`);
-            }
-            catch (error) {
-                console.error('Redis post likes decrement error:', error);
-                return 0;
-            }
-        });
-    }
-    // User online status
-    setUserOnline(userId_1) {
-        return __awaiter(this, arguments, void 0, function* (userId, expiresIn = 300) {
-            try {
-                yield this.redis.setex(`online:${userId}`, expiresIn, 'true');
-            }
-            catch (error) {
-                console.error('Redis user online set error:', error);
-            }
-        });
-    }
-    isUserOnline(userId) {
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                const status = yield this.redis.get(`online:${userId}`);
-                return status === 'true';
-            }
-            catch (error) {
-                console.error('Redis user online get error:', error);
-                return false;
-            }
-        });
-    }
-    setUserOffline(userId) {
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                yield this.redis.del(`online:${userId}`);
-            }
-            catch (error) {
-                console.error('Redis user offline set error:', error);
-            }
-        });
-    }
-    // Generic cache methods
-    set(key, value, expiresIn) {
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                if (expiresIn) {
-                    yield this.redis.setex(key, expiresIn, JSON.stringify(value));
-                }
-                else {
-                    yield this.redis.set(key, JSON.stringify(value));
-                }
-            }
-            catch (error) {
-                console.error('Redis set error:', error);
-            }
-        });
-    }
-    get(key) {
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                const value = yield this.redis.get(key);
-                return value ? JSON.parse(value) : null;
-            }
-            catch (error) {
-                console.error('Redis get error:', error);
-                return null;
-            }
-        });
-    }
-    del(key) {
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                yield this.redis.del(key);
-            }
-            catch (error) {
-                console.error('Redis delete error:', error);
-            }
-        });
-    }
-    exists(key) {
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                const result = yield this.redis.exists(key);
-                return result === 1;
-            }
-            catch (error) {
-                console.error('Redis exists error:', error);
-                return false;
-            }
-        });
-    }
-    // Cache warming for popular content
-    warmCache() {
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                // This would be called periodically to pre-populate cache with popular content
-                console.log('Cache warming initiated...');
-                // Implementation would depend on specific caching strategy
-            }
-            catch (error) {
-                console.error('Cache warming error:', error);
-            }
-        });
-    }
-}
-exports.CacheService = CacheService;
-exports.cacheService = CacheService.getInstance();
-exports.default = exports.cacheService;
+});
+exports.cacheInvalidate = cacheInvalidate;

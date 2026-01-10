@@ -1,11 +1,15 @@
 // Load environment variables FIRST before any other imports
 import dotenv from 'dotenv'
 import path from 'path'
-// When running with tsx, __dirname is api-server/src, so go up one level to api-server
-dotenv.config({ path: path.resolve(__dirname, '..', '.env') })
-console.log('Loaded .env from:', path.resolve(__dirname, '..', '.env'))
-console.log('MONGODB_URI exists:', !!process.env.MONGODB_URI)
-console.log('MONGODB_URI value:', process.env.MONGODB_URI?.substring(0, 50))
+
+// Load .env from api-server directory
+const envPath = path.resolve(process.cwd(), '.env')
+const result = dotenv.config({ path: envPath })
+
+// Manually set MONGODB_URI from parsed result if dotenv didn't set it correctly
+if (result.parsed?.MONGODB_URI && !process.env.MONGODB_URI?.includes('mongodb+srv')) {
+  process.env.MONGODB_URI = result.parsed.MONGODB_URI
+}
 
 import express from 'express'
 import { createServer } from 'http'
@@ -13,6 +17,8 @@ import cors from 'cors'
 import cookieParser from 'cookie-parser'
 import mongoose from 'mongoose'
 import { initializeWebSocket } from './lib/websocket'
+import { initRedis } from './lib/redis'
+import { recordMetric, getPerformanceSummary, checkPerformanceTargets } from './lib/performance-monitor'
 import authRoutes from './routes/auth'
 import usersRoutes from './routes/users'
 import postsRoutes from './routes/posts'
@@ -47,6 +53,9 @@ const PORT = parseInt(process.env.PORT || '8000')
 
 // Initialize Firebase for push notifications
 initializeFirebase()
+
+// Initialize Redis for caching
+initRedis()
 
 // Initialize WebSocket server
 const io = initializeWebSocket(httpServer)
@@ -113,6 +122,19 @@ app.use(express.json({ limit: '50mb' }))
 app.use(express.urlencoded({ extended: true, limit: '50mb' }))
 app.use(cookieParser())
 
+// Performance Monitoring Middleware
+app.use((req, res, next) => {
+  const start = Date.now();
+  
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    const userId = (req as any).userId;
+    recordMetric(req.path, req.method, duration, res.statusCode, userId);
+  });
+  
+  next();
+});
+
 // Serve static files (for password reset redirect page)
 app.use(express.static(path.join(__dirname, '..', 'public')))
 
@@ -153,6 +175,14 @@ app.use('/api/secret-crush', secretCrushRoutes)
 app.use('/api/premium', premiumRoutes)
 app.use('/api/demo', demoRoutes)
 app.use('/api/ai', aiRoutes)
+
+// Performance Metrics Endpoint (Admin only)
+app.get('/api/metrics', (_req, res) => {
+  res.json({
+    summary: getPerformanceSummary(),
+    violations: checkPerformanceTargets()
+  });
+});
 
 // Error handling
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express'
 import { MongoClient, ObjectId, Db } from 'mongodb'
 import jwt from 'jsonwebtoken'
+import { cacheGet, cacheSet, cacheDel, cacheInvalidate } from '../lib/redis'
 
 const router = Router()
 
@@ -220,6 +221,14 @@ router.get('/username/:username', async (req: any, res: Response) => {
             // Token is optional, continue without it
         }
 
+        // Try cache first
+        const cacheKey = `profile:${username}`;
+        const cached = await cacheGet(cacheKey);
+        if (cached) {
+            console.log(`✅ Cache hit for profile: ${username}`);
+            return res.json(cached);
+        }
+
         const client = await MongoClient.connect(MONGODB_URI)
         const db = client.db()
         const user = await db.collection('users').findOne({ username })
@@ -286,7 +295,7 @@ router.get('/username/:username', async (req: any, res: Response) => {
 
         await client.close()
 
-        return res.json({
+        const response = {
             _id: user._id.toString(),
             id: user._id.toString(),
             username: user.username,
@@ -313,8 +322,15 @@ router.get('/username/:username', async (req: any, res: Response) => {
             badgeType: user.badge_type || user.verification_type || null,
             posts_count: postsCount,
             isPrivate: user.is_private || false,
-            is_private: user.is_private || false
-        })
+            is_private: user.is_private || false,
+            isPending,
+            followRequestStatus
+        }
+
+        // Cache for 5 minutes (300 seconds)
+        await cacheSet(cacheKey, response, 300)
+
+        return res.json(response)
     } catch (error: any) {
         console.error('Get user by username error:', error)
         return res.status(500).json({ message: error.message || 'Failed to get user' })
@@ -876,6 +892,9 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
 
             await client.close()
 
+            // Invalidate profile cache for both users
+            await cacheInvalidate(`profile:*`)
+
             return res.json({
                 message: 'Unfollowed successfully',
                 isFollowing: false,
@@ -900,6 +919,9 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
                 })
 
                 await client.close()
+
+                // Invalidate profile cache
+                await cacheInvalidate(`profile:*`)
 
                 return res.json({
                     message: 'Follow request canceled',
@@ -983,6 +1005,9 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
                 })
 
                 await client.close()
+
+                // Invalidate profile cache
+                await cacheInvalidate(`profile:*`)
 
                 // Create notification (non-blocking)
                 setImmediate(async () => {
@@ -1093,6 +1118,14 @@ router.get('/:userId/followers', authenticate, async (req: any, res: Response) =
         const currentUserId = req.userId // From auth middleware
         console.log('[FOLLOWERS] Fetching followers for user:', userId)
 
+        // Try cache first
+        const cacheKey = `followers:${userId}`
+        const cached = await cacheGet(cacheKey)
+        if (cached) {
+            console.log(`✅ Cache hit for followers: ${userId}`)
+            return res.json(cached)
+        }
+
         const client = await MongoClient.connect(MONGODB_URI)
         const db = client.db()
 
@@ -1172,7 +1205,13 @@ router.get('/:userId/followers', authenticate, async (req: any, res: Response) =
         }))
 
         console.log('[FOLLOWERS] Returning', result.length, 'followers')
-        return res.json({ data: result })
+        
+        const response = { data: result }
+        
+        // Cache for 10 minutes (600 seconds)
+        await cacheSet(cacheKey, response, 600)
+        
+        return res.json(response)
     } catch (error: any) {
         console.error('Get followers error:', error)
         return res.status(500).json({ message: error.message || 'Failed to get followers' })
@@ -1381,6 +1420,14 @@ router.get('/:userId/posts', async (req: any, res: Response) => {
         const limit = parseInt(req.query.limit as string) || 20
         const offset = (page - 1) * limit
 
+        // Try cache first
+        const cacheKey = `user_posts:${userId}:${page}:${limit}`
+        const cached = await cacheGet(cacheKey)
+        if (cached) {
+            console.log(`✅ Cache hit for user posts: ${userId} page ${page}`)
+            return res.json(cached)
+        }
+
         const client = await MongoClient.connect(MONGODB_URI)
         const db = client.db()
 
@@ -1523,7 +1570,7 @@ router.get('/:userId/posts', async (req: any, res: Response) => {
 
         await client.close()
 
-        return res.json({
+        const response = {
             success: true,
             data: postsWithCounts,
             pagination: {
@@ -1533,7 +1580,12 @@ router.get('/:userId/posts', async (req: any, res: Response) => {
                 totalPages: Math.ceil(total / limit),
                 hasMore: page * limit < total
             }
-        })
+        }
+
+        // Cache for 3 minutes (180 seconds)
+        await cacheSet(cacheKey, response, 180)
+
+        return res.json(response)
     } catch (error: any) {
         console.error('Get user posts error:', error)
         return res.status(500).json({ message: error.message || 'Failed to get user posts' })

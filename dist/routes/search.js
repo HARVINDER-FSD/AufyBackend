@@ -18,6 +18,7 @@ const user_1 = __importDefault(require("../models/user"));
 const post_1 = __importDefault(require("../models/post"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const mongodb_1 = require("mongodb");
+const redis_1 = require("../lib/redis");
 const router = (0, express_1.Router)();
 const JWT_SECRET = process.env.JWT_SECRET || '4d9f1c8c6b27a67e9f3a81d2e5b0f78c72d1e7a64d59c83fb20e5a72a8c4d192';
 // Helper to get current user ID from token (optional)
@@ -45,6 +46,13 @@ router.get("/", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
             });
         }
         console.log('[Search] Query:', q);
+        // Try cache first
+        const cacheKey = `search:${q}:${limit}`;
+        const cached = yield (0, redis_1.cacheGet)(cacheKey);
+        if (cached) {
+            console.log(`✅ Cache hit for search: ${q}`);
+            return res.json(cached);
+        }
         const { db } = yield (0, database_1.connectToDatabase)();
         const currentUserId = getCurrentUserId(req);
         // First, check total users in database
@@ -136,11 +144,14 @@ router.get("/", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
             hashtags: hashtags.length
         });
         // Return in format expected by mobile app
-        res.json({
+        const response = {
             users: formattedUsers,
             posts: formattedPosts,
             hashtags
-        });
+        };
+        // Cache for 10 minutes (600 seconds)
+        yield (0, redis_1.cacheSet)(cacheKey, response, 600);
+        res.json(response);
     }
     catch (error) {
         console.error("❌ Error performing search:", error);

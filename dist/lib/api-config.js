@@ -11,18 +11,12 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.isNativeApp = exports.API_BASE_URL = exports.getAPIBaseURL = void 0;
 exports.apiFetch = apiFetch;
-// API Configuration for Capacitor
-const core_1 = require("@capacitor/core");
+// API Configuration
 // Your Vercel API URL
 const VERCEL_API_URL = 'https://anu-f0czhuo0j-hs8339952-1745s-projects.vercel.app';
 // Determine API base URL
 const getAPIBaseURL = () => {
-    // In Capacitor native app, ALWAYS use Vercel for API
-    if (core_1.Capacitor.isNativePlatform()) {
-        console.log('📱 Running in Capacitor, using Vercel API:', VERCEL_API_URL);
-        return VERCEL_API_URL;
-    }
-    // In browser, use relative URLs (same origin)
+    // Always return empty string for relative URLs in browser/server environment
     return '';
 };
 exports.getAPIBaseURL = getAPIBaseURL;
@@ -47,6 +41,6 @@ function apiFetch(endpoint, options) {
 }
 // Export for use in components
 exports.API_BASE_URL = (0, exports.getAPIBaseURL)();
-// Helper to check if we're in native app
-const isNativeApp = () => core_1.Capacitor.isNativePlatform();
+// Helper to check if we're in native app (always false now)
+const isNativeApp = () => false;
 exports.isNativeApp = isNativeApp;
