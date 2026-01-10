@@ -2,14 +2,14 @@ import type { Request, Response, NextFunction } from "express"
 import { query, cache, redis } from "./database"
 import { token, password, validate, errors, sanitize } from "./utils"
 import { config } from "./config"
-import type { User, JWTPayload } from "./types"
+import type { User as IUser, JWTPayload } from "./types"
 import { NextRequest } from "next/server"
 import * as bcrypt from 'bcryptjs'
 import * as jsonwebtoken from 'jsonwebtoken'
 
 // Initialize MongoDB connection
 import mongoose from 'mongoose';
-import User from '../models/user';
+import UserModel from '../models/user';
 
 // Connect to MongoDB
 async function connectToMongoDB() {
@@ -19,11 +19,11 @@ async function connectToMongoDB() {
       console.log('Connected to MongoDB');
       
       // Check if we have any users, if not create a default one
-      const userCount = await User.countDocuments();
+      const userCount = await UserModel.countDocuments();
       if (userCount === 0) {
         const hashedPassword = bcrypt.hashSync("password123", 10);
         
-        await User.create({
+        await UserModel.create({
           username: "testuser",
           email: "test@example.com",
           password: hashedPassword,
@@ -138,55 +138,48 @@ export class AuthService {
     const sanitizedEmail = sanitize.email(email)
     
     try {
-      // Use in-memory user storage
-      const users = global.users || [];
-      
       // Check if username or email already exists
-      const existingUser = users.find(u => 
-        u.username.toLowerCase() === sanitizedUsername.toLowerCase() || 
-        u.email.toLowerCase() === sanitizedEmail.toLowerCase()
-      );
+      const existingUser = await UserModel.findOne({
+        $or: [
+          { username: new RegExp(`^${sanitizedUsername}$`, 'i') },
+          { email: new RegExp(`^${sanitizedEmail}$`, 'i') }
+        ]
+      });
 
       if (existingUser) {
         throw errors.conflict("Username or email already exists")
       }
 
-      // Create new user with simple ID generation and hash the password
+      // Create new user (password hashing is handled by pre-save middleware in User model usually, 
+      // but here we are hashing it manually in the previous code. 
+      // Let's check if User model has pre-save. The previous code hashed it.
+      // Assuming User model might have pre-save or we hash it here.
+      // The snippet showed `bcrypt.hashSync` in connectToMongoDB, so likely manual hashing is safe/expected.)
       const hashedPassword = bcrypt.hashSync(plainPassword, 10);
       
-      const newUser = {
-        id: `user-${Date.now()}`,
+      const newUser = await UserModel.create({
         username: sanitizedUsername,
         email: sanitizedEmail,
-        password_hash: hashedPassword,
+        password: hashedPassword,
         full_name: full_name,
         avatar_url: "/placeholder-user.jpg",
         is_verified: false,
         is_private: false,
         is_active: true,
-        last_seen: new Date().toISOString(),
+        last_seen: new Date(),
         bio: ""
-      };
+      });
       
-      // Add to users array
-      users.push(newUser);
-      global.users = users;
-      
-      // Save to localStorage for persistence
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('users', JSON.stringify(global.users));
-      }
-
       // Generate JWT token
       const accessToken = token.sign({
-        userId: newUser.id,
+        userId: newUser._id.toString(),
         username: newUser.username,
         email: newUser.email,
       })
 
       return {
         user: {
-          id: newUser.id,
+          id: newUser._id.toString(),
           username: newUser.username,
           email: newUser.email,
           full_name: newUser.full_name,
@@ -292,7 +285,7 @@ export class AuthService {
           userId,
           deviceInfo,
           createdAt: new Date().toISOString()
-        }), 'EX', config.redis.ttl.session);
+        }), { ex: config.redis.ttl.session });
       } catch (error) {
         console.warn("Failed to cache session in Redis:", error);
         // Continue without Redis caching

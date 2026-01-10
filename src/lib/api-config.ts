@@ -1,18 +1,10 @@
-// API Configuration for Capacitor
-import { Capacitor } from '@capacitor/core'
-
+// API Configuration
 // Your Vercel API URL
 const VERCEL_API_URL = 'https://anu-f0czhuo0j-hs8339952-1745s-projects.vercel.app'
 
 // Determine API base URL
 export const getAPIBaseURL = () => {
-  // In Capacitor native app, ALWAYS use Vercel for API
-  if (Capacitor.isNativePlatform()) {
-    console.log('📱 Running in Capacitor, using Vercel API:', VERCEL_API_URL)
-    return VERCEL_API_URL
-  }
-  
-  // In browser, use relative URLs (same origin)
+  // Always return empty string for relative URLs in browser/server environment
   return ''
 }
 
@@ -46,5 +38,5 @@ export async function apiFetch(endpoint: string, options?: RequestInit) {
 // Export for use in components
 export const API_BASE_URL = getAPIBaseURL()
 
-// Helper to check if we're in native app
-export const isNativeApp = () => Capacitor.isNativePlatform()
+// Helper to check if we're in native app (always false now)
+export const isNativeApp = () => false

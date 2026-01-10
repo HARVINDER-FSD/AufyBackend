@@ -33,6 +33,7 @@ exports.serverConfig = {
             session: 604800, // 7 days
             post: 1800, // 30 minutes
             feed: 300, // 5 minutes
+            story: 3600, // 1 hour
         },
     },
     pagination: {

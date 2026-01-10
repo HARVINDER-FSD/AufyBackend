@@ -11,6 +11,7 @@ export interface ISecretCrush extends Document {
   isActive: boolean;
   removedAt?: Date;
   mutualBrokenAt?: Date;
+  updatedAt?: Date;
 }
 
 const SecretCrushSchema = new Schema<ISecretCrush>({

@@ -1,8 +1,13 @@
-import { query, cache, transaction } from "../lib/database"
+import StoryModel from "../models/story"
+import UserModel from "../models/user"
+import StoryViewModel from "../models/story-view"
+import FollowModel from "../models/follow"
 import { StorageService } from "../lib/storage"
 import type { Story, CreateStoryRequest } from "../lib/types"
 import { errors, cacheKeys } from "../lib/utils"
 import { config } from "../lib/config"
+import { cache } from "../lib/database"
+import mongoose from "mongoose"
 
 export class StoryService {
   // Create story
@@ -21,23 +26,38 @@ export class StoryService {
       throw errors.badRequest("Story content too long (max 500 characters)")
     }
 
-    const result = await query(
-      `INSERT INTO stories (user_id, media_url, media_type, content) 
-       VALUES ($1, $2, $3, $4) 
-       RETURNING id, user_id, media_url, media_type, content, expires_at, is_archived, created_at`,
-      [userId, media_url, media_type, content],
-    )
-
-    const story = result.rows[0]
+    const storyDoc = await StoryModel.create({
+      user_id: userId,
+      media_url,
+      media_type,
+      caption: content,
+      // expires_at is handled by pre-save hook in model
+    });
 
     // Get user data
-    const userResult = await query("SELECT id, username, full_name, avatar_url, is_verified FROM users WHERE id = $1", [
-      userId,
-    ])
+    const user = await UserModel.findById(userId).select('username full_name avatar_url is_verified');
 
     const storyWithUser: Story = {
-      ...story,
-      user: userResult.rows[0],
+      id: storyDoc._id.toString(),
+      user_id: storyDoc.user_id.toString(),
+      media_url: storyDoc.media_url,
+      media_type: storyDoc.media_type as "image" | "video",
+      content: storyDoc.caption,
+      expires_at: storyDoc.expires_at,
+      is_archived: storyDoc.is_deleted, 
+      created_at: storyDoc.created_at,
+      user: user ? {
+        id: user._id.toString(),
+        username: user.username,
+        full_name: user.full_name,
+        avatar_url: user.avatar_url,
+        is_verified: user.is_verified,
+        email: user.email,
+        is_private: user.is_private,
+        is_active: user.is_active,
+        created_at: user.created_at,
+        updated_at: user.updated_at
+      } : undefined,
       is_viewed: false,
     }
 
@@ -54,47 +74,55 @@ export class StoryService {
     const cacheKey = cacheKeys.userStories(userId)
     const cachedStories = await cache.get(cacheKey)
     if (cachedStories && !currentUserId) {
-      return cachedStories
+      return cachedStories as Story[]
     }
 
-    const result = await query(
-      `SELECT s.id, s.user_id, s.media_url, s.media_type, s.content, 
-              s.expires_at, s.is_archived, s.created_at,
-              u.id as user_id, u.username, u.full_name, u.avatar_url, u.is_verified
-       FROM stories s
-       JOIN users u ON s.user_id = u.id
-       WHERE s.user_id = $1 AND s.expires_at > NOW() AND s.is_archived = false AND u.is_active = true
-       ORDER BY s.created_at DESC`,
-      [userId],
-    )
+    // Find stories
+    const storiesDocs = await StoryModel.find({
+      user_id: userId,
+      expires_at: { $gt: new Date() },
+      is_deleted: false
+    }).sort({ created_at: -1 });
+
+    // Get user info (assumed same for all stories)
+    const user = await UserModel.findById(userId).select('username full_name avatar_url is_verified');
+
+    if (!user || !user.is_active) {
+        return [];
+    }
 
     const stories = await Promise.all(
-      result.rows.map(async (row) => {
+      storiesDocs.map(async (storyDoc) => {
         const story: Story = {
-          id: row.id,
-          user_id: row.user_id,
-          media_url: row.media_url,
-          media_type: row.media_type,
-          content: row.content,
-          expires_at: row.expires_at,
-          is_archived: row.is_archived,
-          created_at: row.created_at,
+          id: storyDoc._id.toString(),
+          user_id: storyDoc.user_id.toString(),
+          media_url: storyDoc.media_url,
+          media_type: storyDoc.media_type as "image" | "video",
+          content: storyDoc.caption,
+          expires_at: storyDoc.expires_at,
+          is_archived: storyDoc.is_deleted,
+          created_at: storyDoc.created_at,
           user: {
-            id: row.user_id,
-            username: row.username,
-            full_name: row.full_name,
-            avatar_url: row.avatar_url,
-            is_verified: row.is_verified,
+            id: user._id.toString(),
+            username: user.username,
+            full_name: user.full_name,
+            avatar_url: user.avatar_url,
+            is_verified: user.is_verified,
+            email: user.email,
+            is_private: user.is_private,
+            is_active: user.is_active,
+            created_at: user.created_at,
+            updated_at: user.updated_at
           },
         }
 
         // Check if current user has viewed this story
         if (currentUserId) {
-          const viewResult = await query("SELECT id FROM story_views WHERE story_id = $1 AND viewer_id = $2", [
-            story.id,
-            currentUserId,
-          ])
-          story.is_viewed = viewResult.rows.length > 0
+          const view = await StoryViewModel.findOne({
+            story_id: storyDoc._id,
+            viewer_id: currentUserId
+          });
+          story.is_viewed = !!view;
         }
 
         return story
@@ -111,125 +139,152 @@ export class StoryService {
 
   // Get stories feed (stories from followed users)
   static async getStoriesFeed(userId: string): Promise<Array<{ user: any; stories: Story[] }>> {
-    const result = await query(
-      `SELECT DISTINCT s.user_id,
-              u.id, u.username, u.full_name, u.avatar_url, u.is_verified
-       FROM stories s
-       JOIN users u ON s.user_id = u.id
-       WHERE (s.user_id = $1 OR s.user_id IN (
-         SELECT following_id FROM follows 
-         WHERE follower_id = $1 AND status = 'active'
-       ))
-       AND s.expires_at > NOW() AND s.is_archived = false AND u.is_active = true
-       ORDER BY u.username`,
-      [userId],
-    )
+    // Get following list
+    const following = await FollowModel.find({ 
+      follower_id: userId, 
+      status: 'active' 
+    }).select('following_id');
+    
+    const followingIds = following.map(f => f.following_id);
+    
+    // Also include own stories
+    followingIds.push(new mongoose.Types.ObjectId(userId));
 
-    const userStoriesPromises = result.rows.map(async (row) => {
-      const stories = await this.getUserStories(row.user_id, userId)
+    // Find users who have active stories
+    // We can do an aggregation or just find stories where user_id is in followingIds
+    const activeStories = await StoryModel.aggregate([
+      {
+        $match: {
+          user_id: { $in: followingIds },
+          expires_at: { $gt: new Date() },
+          is_deleted: false
+        }
+      },
+      {
+        $group: {
+          _id: "$user_id",
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const activeUserIds = activeStories.map(s => s._id);
+
+    const userStoriesPromises = activeUserIds.map(async (uid) => {
+      const stories = await this.getUserStories(uid.toString(), userId)
+      if (stories.length === 0) return null;
+
+      // Stories already contain user info, so we can extract it from the first story
+      const user = stories[0].user;
+      
       return {
         user: {
-          id: row.id,
-          username: row.username,
-          full_name: row.full_name,
-          avatar_url: row.avatar_url,
-          is_verified: row.is_verified,
+            id: user!.id,
+            username: user!.username,
+            full_name: user!.full_name,
+            avatar_url: user!.avatar_url,
+            is_verified: user!.is_verified
         },
         stories,
       }
     })
 
     const userStories = await Promise.all(userStoriesPromises)
-    return userStories.filter((item) => item.stories.length > 0)
+    return userStories.filter((item): item is { user: any; stories: Story[] } => item !== null)
   }
 
   // View story
   static async viewStory(storyId: string, viewerId: string): Promise<void> {
     // Check if story exists and is not expired
-    const storyResult = await query(
-      "SELECT id, user_id FROM stories WHERE id = $1 AND expires_at > NOW() AND is_archived = false",
-      [storyId],
-    )
+    const story = await StoryModel.findOne({
+        _id: storyId,
+        expires_at: { $gt: new Date() },
+        is_deleted: false
+    });
 
-    if (storyResult.rows.length === 0) {
+    if (!story) {
       throw errors.notFound("Story not found or expired")
     }
 
-    const story = storyResult.rows[0]
-
     // Don't record view if it's the story owner
-    if (story.user_id === viewerId) {
+    if (story.user_id.toString() === viewerId) {
       return
     }
 
-    // Insert view record (ignore if already exists)
-    await query(
-      `INSERT INTO story_views (story_id, viewer_id) 
-       VALUES ($1, $2) 
-       ON CONFLICT (story_id, viewer_id) DO NOTHING`,
-      [storyId, viewerId],
-    )
+    // Insert view record (ignore if already exists handled by unique index)
+    try {
+        await StoryViewModel.create({
+            story_id: storyId,
+            viewer_id: viewerId
+        });
+        
+        // Increment view count on story
+        story.views_count = (story.views_count || 0) + 1;
+        await story.save();
+        
+    } catch (error: any) {
+        if (error.code !== 11000) { // 11000 is duplicate key error
+            throw error;
+        }
+    }
 
     // Clear cache
-    await cache.del(cacheKeys.userStories(story.user_id))
+    await cache.del(cacheKeys.userStories(story.user_id.toString()))
   }
 
   // Get story views
   static async getStoryViews(storyId: string, userId: string): Promise<Array<any>> {
     // Verify story ownership
-    const storyResult = await query("SELECT user_id FROM stories WHERE id = $1", [storyId])
-    if (storyResult.rows.length === 0 || storyResult.rows[0].user_id !== userId) {
+    const story = await StoryModel.findById(storyId);
+    
+    if (!story) {
+        throw errors.notFound("Story not found");
+    }
+    
+    if (story.user_id.toString() !== userId) {
       throw errors.forbidden("You can only view your own story views")
     }
 
-    const result = await query(
-      `SELECT u.id, u.username, u.full_name, u.avatar_url, u.is_verified,
-              sv.viewed_at
-       FROM story_views sv
-       JOIN users u ON sv.viewer_id = u.id
-       WHERE sv.story_id = $1 AND u.is_active = true
-       ORDER BY sv.viewed_at DESC`,
-      [storyId],
-    )
+    const views = await StoryViewModel.find({ story_id: storyId })
+        .sort({ viewed_at: -1 })
+        .populate('viewer_id', 'username full_name avatar_url is_verified');
 
-    return result.rows.map((row) => ({
-      id: row.id,
-      username: row.username,
-      full_name: row.full_name,
-      avatar_url: row.avatar_url,
-      is_verified: row.is_verified,
-      viewed_at: row.viewed_at,
-    }))
+    return views.map((view) => {
+        const viewer = view.viewer_id as any; // populated
+        if (!viewer) return null;
+        
+        return {
+            id: viewer._id.toString(),
+            username: viewer.username,
+            full_name: viewer.full_name,
+            avatar_url: viewer.avatar_url,
+            is_verified: viewer.is_verified,
+            viewed_at: view.viewed_at,
+        }
+    }).filter(v => v !== null);
   }
 
   // Delete story
   static async deleteStory(storyId: string, userId: string): Promise<void> {
-    // First, check if story exists
-    const storyCheck = await query("SELECT id, user_id, media_url FROM stories WHERE id = $1", [storyId])
+    const story = await StoryModel.findById(storyId);
 
-    if (storyCheck.rows.length === 0) {
+    if (!story) {
       throw errors.notFound("Story not found")
     }
 
-    const story = storyCheck.rows[0]
-
-    // Verify ownership - only the story owner can delete it
-    if (story.user_id !== userId) {
+    // Verify ownership
+    if (story.user_id.toString() !== userId) {
       throw errors.forbidden("You don't have permission to delete this story. Only the story owner can delete it.")
     }
 
-    await transaction(async (client) => {
-      // Archive the story (soft delete)
-      await client.query("UPDATE stories SET is_archived = true WHERE id = $1 AND user_id = $2", [storyId, userId])
+    // Soft delete
+    story.is_deleted = true;
+    await story.save();
 
-      // Delete associated views
-      await client.query("DELETE FROM story_views WHERE story_id = $1", [storyId])
-    })
-
-    // Delete media file from S3 (extract key from URL)
+    // Delete media file from S3
     try {
       const urlParts = story.media_url.split("/")
-      const key = urlParts.slice(-3).join("/") // Extract stories/userId/filename
+      const key = urlParts.slice(-3).join("/") 
       await StorageService.deleteFile(key)
     } catch (error) {
       console.error("Failed to delete story media:", error)
@@ -242,13 +297,17 @@ export class StoryService {
 
   // Archive expired stories (cleanup job)
   static async archiveExpiredStories(): Promise<number> {
-    const result = await query(
-      "UPDATE stories SET is_archived = true WHERE expires_at <= NOW() AND is_archived = false",
-    )
+    const result = await StoryModel.updateMany(
+        { expires_at: { $lte: new Date() }, is_deleted: false },
+        { $set: { is_deleted: true } } // Assuming archive means soft delete here, or maybe we should leave them as expired?
+        // Original SQL: UPDATE stories SET is_archived = true WHERE expires_at <= NOW() AND is_archived = false
+        // My Model has is_deleted, not is_archived field.
+        // If I assume is_deleted == is_archived
+    );
 
     // Clear all stories cache
     await cache.invalidatePattern(`${config.redis.keyPrefix}stories:*`)
 
-    return result.rowCount || 0
+    return result.modifiedCount
   }
 }

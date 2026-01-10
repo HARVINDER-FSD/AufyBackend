@@ -75,7 +75,7 @@ export class ElasticsearchService {
             },
           },
         },
-      })
+      }) as any
 
       return {
         hits: response.body.hits.hits.map((hit: any) => ({
@@ -106,7 +106,7 @@ export class ElasticsearchService {
   async createIndex(index: string, mapping: Record<string, any>): Promise<void> {
     try {
       const exists = await client.indices.exists({ index })
-      if (!exists.body) {
+      if (!exists) {
         await client.indices.create({
           index,
           body: {

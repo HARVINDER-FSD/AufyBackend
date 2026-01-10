@@ -1,4 +1,13 @@
 "use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CDNOptimizer = void 0;
 const cloudinary_1 = require("cloudinary");
@@ -35,11 +44,7 @@ class CDNOptimizer {
             size: size.suffix,
             width: size.width,
             height: size.height,
-            url: this.getOptimizedImageUrl(publicId, {
-                ...baseOptions,
-                width: size.width,
-                height: size.height
-            })
+            url: this.getOptimizedImageUrl(publicId, Object.assign(Object.assign({}, baseOptions), { width: size.width, height: size.height }))
         }));
     }
     // Generate video thumbnail
@@ -70,82 +75,88 @@ class CDNOptimizer {
         });
     }
     // Upload image with automatic optimization
-    static async uploadImage(file, options = {}) {
-        const { folder = 'social-media', publicId, tags = [], transformation = {
-            width: 1200,
-            height: 1200,
-            crop: 'fill',
-            gravity: 'auto',
-            quality: 'auto',
-            format: 'auto'
-        } } = options;
-        try {
-            const result = await cloudinary_1.v2.uploader.upload(file, {
-                folder,
-                public_id: publicId,
-                tags,
-                transformation,
-                resource_type: 'auto'
-            });
-            return {
-                publicId: result.public_id,
-                url: result.secure_url,
-                width: result.width,
-                height: result.height,
-                format: result.format,
-                size: result.bytes
-            };
-        }
-        catch (error) {
-            console.error('Error uploading image to Cloudinary:', error);
-            throw error;
-        }
+    static uploadImage(file_1) {
+        return __awaiter(this, arguments, void 0, function* (file, options = {}) {
+            const { folder = 'social-media', publicId, tags = [], transformation = {
+                width: 1200,
+                height: 1200,
+                crop: 'fill',
+                gravity: 'auto',
+                quality: 'auto',
+                format: 'auto'
+            } } = options;
+            try {
+                const result = yield cloudinary_1.v2.uploader.upload(file, {
+                    folder,
+                    public_id: publicId,
+                    tags,
+                    transformation,
+                    resource_type: 'auto'
+                });
+                return {
+                    publicId: result.public_id,
+                    url: result.secure_url,
+                    width: result.width,
+                    height: result.height,
+                    format: result.format,
+                    size: result.bytes
+                };
+            }
+            catch (error) {
+                console.error('Error uploading image to Cloudinary:', error);
+                throw error;
+            }
+        });
     }
     // Upload video with automatic optimization
-    static async uploadVideo(file, options = {}) {
-        const { folder = 'social-media/videos', publicId, tags = [], transformation = {
-            width: 1280,
-            height: 720,
-            crop: 'fill',
-            gravity: 'auto',
-            quality: 'auto',
-            format: 'auto'
-        } } = options;
-        try {
-            const result = await cloudinary_1.v2.uploader.upload(file, {
-                folder,
-                public_id: publicId,
-                tags,
-                transformation,
-                resource_type: 'video'
-            });
-            return {
-                publicId: result.public_id,
-                url: result.secure_url,
-                width: result.width,
-                height: result.height,
-                format: result.format,
-                size: result.bytes,
-                duration: result.duration
-            };
-        }
-        catch (error) {
-            console.error('Error uploading video to Cloudinary:', error);
-            throw error;
-        }
+    static uploadVideo(file_1) {
+        return __awaiter(this, arguments, void 0, function* (file, options = {}) {
+            const { folder = 'social-media/videos', publicId, tags = [], transformation = {
+                width: 1280,
+                height: 720,
+                crop: 'fill',
+                gravity: 'auto',
+                quality: 'auto',
+                format: 'auto'
+            } } = options;
+            try {
+                const result = yield cloudinary_1.v2.uploader.upload(file, {
+                    folder,
+                    public_id: publicId,
+                    tags,
+                    transformation,
+                    resource_type: 'video'
+                });
+                return {
+                    publicId: result.public_id,
+                    url: result.secure_url,
+                    width: result.width,
+                    height: result.height,
+                    format: result.format,
+                    size: result.bytes,
+                    duration: result.duration
+                };
+            }
+            catch (error) {
+                console.error('Error uploading video to Cloudinary:', error);
+                throw error;
+            }
+        });
     }
     // Delete media from CDN
-    static async deleteMedia(publicId, resourceType = 'image') {
-        try {
-            const result = await cloudinary_1.v2.uploader.destroy(publicId, {
-                resource_type: resourceType
-            });
-            return result;
-        }
-        catch (error) {
-            console.error('Error deleting media from Cloudinary:', error);
-            throw error;
-        }
+    static deleteMedia(publicId_1) {
+        return __awaiter(this, arguments, void 0, function* (publicId, resourceType = 'image') {
+            try {
+                const result = yield cloudinary_1.v2.uploader.destroy(publicId, {
+                    resource_type: resourceType
+                });
+                return result;
+            }
+            catch (error) {
+                console.error('Error deleting media from Cloudinary:', error);
+                throw error;
+            }
+        });
     }
     // Generate image with text overlay (for stories, posts)
     static getImageWithText(publicId, text, options = {}) {
@@ -173,7 +184,6 @@ class CDNOptimizer {
             width,
             height,
             crop: 'fill',
-            gravity: 'auto',
             overlay: watermarkPublicId,
             opacity,
             gravity: position,
@@ -181,25 +191,27 @@ class CDNOptimizer {
         });
     }
     // Get media analytics
-    static async getMediaAnalytics(publicId) {
-        try {
-            const result = await cloudinary_1.v2.api.resource(publicId, {
-                resource_type: 'auto'
-            });
-            return {
-                publicId: result.public_id,
-                format: result.format,
-                width: result.width,
-                height: result.height,
-                size: result.bytes,
-                createdAt: result.created_at,
-                url: result.secure_url
-            };
-        }
-        catch (error) {
-            console.error('Error getting media analytics:', error);
-            throw error;
-        }
+    static getMediaAnalytics(publicId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            try {
+                const result = yield cloudinary_1.v2.api.resource(publicId, {
+                    resource_type: 'auto'
+                });
+                return {
+                    publicId: result.public_id,
+                    format: result.format,
+                    width: result.width,
+                    height: result.height,
+                    size: result.bytes,
+                    createdAt: result.created_at,
+                    url: result.secure_url
+                };
+            }
+            catch (error) {
+                console.error('Error getting media analytics:', error);
+                throw error;
+            }
+        });
     }
     // Generate multiple format URLs for progressive loading
     static getProgressiveImageUrls(publicId) {

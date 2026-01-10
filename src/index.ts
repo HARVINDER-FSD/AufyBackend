@@ -2,7 +2,7 @@
 import dotenv from 'dotenv'
 import path from 'path'
 // When running with tsx, __dirname is api-server/src, so go up one level to api-server
-dotenv.config({ path: path.resolve(__dirname, '..', '.env'), override: true })
+dotenv.config({ path: path.resolve(__dirname, '..', '.env') })
 console.log('Loaded .env from:', path.resolve(__dirname, '..', '.env'))
 console.log('MONGODB_URI exists:', !!process.env.MONGODB_URI)
 console.log('MONGODB_URI value:', process.env.MONGODB_URI?.substring(0, 50))

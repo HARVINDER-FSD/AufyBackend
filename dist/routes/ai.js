@@ -1,0 +1,100 @@
+"use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = __importDefault(require("express"));
+const modelService_1 = require("../services/ai/modelService");
+const imageAI_1 = require("../services/ai/imageAI");
+const auth_1 = require("../middleware/auth");
+const router = express_1.default.Router();
+// POST /api/ai/generate - Text generation
+router.post('/generate', auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { prompt } = req.body;
+        if (!prompt) {
+            return res.status(400).json({ error: 'Prompt is required' });
+        }
+        const reply = yield modelService_1.modelService.generateText(prompt);
+        res.json({ reply });
+    }
+    catch (error) {
+        console.error('AI route error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+}));
+// POST /api/ai/stream - Text generation with streaming (Server-Sent Events)
+router.post('/stream', auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { prompt } = req.body;
+        if (!prompt) {
+            return res.status(400).json({ error: 'Prompt is required' });
+        }
+        // Set headers for SSE
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        yield modelService_1.modelService.generateTextStream(prompt, (chunk) => {
+            // OpenAI style format: data: {"choices":[{"delta":{"content":"..."}}]}
+            const payload = JSON.stringify({
+                choices: [{ delta: { content: chunk } }]
+            });
+            res.write(`data: ${payload}\n\n`);
+        });
+        res.write('data: [DONE]\n\n');
+        res.end();
+    }
+    catch (error) {
+        console.error('AI stream error:', error);
+        // Can't send JSON error if headers already sent
+        if (!res.headersSent) {
+            res.status(500).json({ error: 'Internal server error' });
+        }
+        else {
+            res.end();
+        }
+    }
+}));
+// POST /api/ai/generate-image - Image generation
+router.post('/generate-image', auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { prompt } = req.body;
+        if (!prompt) {
+            return res.status(400).json({ error: 'Prompt is required' });
+        }
+        console.log('🎨 Generating image for prompt:', prompt);
+        // Try Pollinations.ai first (FREE, no API key needed)
+        try {
+            const imageUrl = yield (0, imageAI_1.generateWithPollinations)(prompt);
+            return res.json({
+                imageUrl,
+                provider: 'Pollinations.ai (FREE)',
+                prompt
+            });
+        }
+        catch (pollinationsError) {
+            console.log('⚠️ Pollinations failed, trying other providers...');
+        }
+        // Fallback to other providers (Hugging Face, Stability AI)
+        const imageUrl = yield (0, imageAI_1.generateImage)(prompt);
+        res.json({
+            imageUrl,
+            provider: 'AI Image Generator',
+            prompt
+        });
+    }
+    catch (error) {
+        console.error('AI image generation error:', error);
+        res.status(500).json({ error: 'Failed to generate image' });
+    }
+}));
+exports.default = router;

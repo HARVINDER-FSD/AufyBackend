@@ -1,35 +1,14 @@
 // Message Model - MongoDB Schema for WebSocket Chat
-import mongoose, { Schema, Document } from 'mongoose';
+import mongoose, { Schema, Document, Model } from 'mongoose';
 
-export interface IMessage extends Document {
-  chatId: string;
-  senderId: mongoose.Types.ObjectId;
-  recipientId: mongoose.Types.ObjectId;
-  content: string;
-  type: 'text' | 'image' | 'video' | 'audio' | 'file' | 'post' | 'reel';
-  mediaUrl?: string;
-  replyTo?: mongoose.Types.ObjectId;
-  status: 'sent' | 'delivered' | 'read';
-  reactions?: Array<{ userId: string; emoji: string }>;
-  deleted: boolean;
-  deletedAt?: Date;
-  readAt?: Date;
-  timestamp: Date;
-}
-
-const MessageSchema = new Schema<IMessage>({
-  chatId: {
-    type: String,
-    required: true,
-    index: true,
-  },
-  senderId: {
+const MessageSchema = new Schema({
+  conversation_id: {
     type: Schema.Types.ObjectId,
-    ref: 'User',
+    ref: 'Conversation',
     required: true,
     index: true,
   },
-  recipientId: {
+  sender_id: {
     type: Schema.Types.ObjectId,
     ref: 'User',
     required: true,
@@ -37,17 +16,20 @@ const MessageSchema = new Schema<IMessage>({
   },
   content: {
     type: String,
-    required: true,
+    required: false, // Can be empty if it's media only
   },
-  type: {
+  message_type: { // Renamed from type to avoid conflict
     type: String,
     enum: ['text', 'image', 'video', 'audio', 'file', 'post', 'reel'],
     default: 'text',
   },
-  mediaUrl: {
+  media_url: {
     type: String,
   },
-  replyTo: {
+  media_type: {
+      type: String // image, video etc.
+  },
+  reply_to_id: {
     type: Schema.Types.ObjectId,
     ref: 'Message',
   },
@@ -60,28 +42,44 @@ const MessageSchema = new Schema<IMessage>({
     userId: String,
     emoji: String,
   }],
-  deleted: {
+  read_by: [{
+    user_id: { type: Schema.Types.ObjectId, ref: 'User' },
+    read_at: { type: Date, default: Date.now }
+  }],
+  is_deleted: {
     type: Boolean,
     default: false,
   },
-  deletedAt: {
+  deleted_at: {
     type: Date,
-  },
-  readAt: {
-    type: Date,
-  },
-  timestamp: {
-    type: Date,
-    default: Date.now,
-    index: true,
   },
 }, {
-  timestamps: true,
+  timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },
 });
 
-// Compound indexes for efficient queries
-MessageSchema.index({ chatId: 1, timestamp: -1 });
-MessageSchema.index({ senderId: 1, recipientId: 1, timestamp: -1 });
-MessageSchema.index({ recipientId: 1, status: 1 });
+// Indexes
+MessageSchema.index({ conversation_id: 1, created_at: -1 });
+MessageSchema.index({ sender_id: 1, created_at: -1 });
 
-export default mongoose.model<IMessage>('Message', MessageSchema);
+export interface IMessage extends Document {
+  conversation_id: mongoose.Types.ObjectId;
+  sender_id: mongoose.Types.ObjectId;
+  content?: string;
+  message_type: 'text' | 'image' | 'video' | 'audio' | 'file' | 'post' | 'reel';
+  media_url?: string;
+  media_type?: string;
+  reply_to_id?: mongoose.Types.ObjectId;
+  status: 'sent' | 'delivered' | 'read';
+  reactions: Array<{ userId: string; emoji: string }>;
+  read_by: Array<{ user_id: mongoose.Types.ObjectId; read_at: Date }>;
+  is_deleted: boolean;
+  deleted_at?: Date;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface IMessageModel extends Model<IMessage> {}
+
+const Message = (mongoose.models.Message as IMessageModel) || mongoose.model<IMessage, IMessageModel>('Message', MessageSchema);
+
+export default Message;

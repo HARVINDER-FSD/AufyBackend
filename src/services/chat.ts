@@ -1,8 +1,12 @@
-import { query, cache, transaction } from "../lib/database"
+import { cache } from "../lib/database"
 import { getWebSocketService } from "../lib/websocket"
 import type { Conversation, Message, SendMessageRequest, PaginatedResponse } from "../lib/types"
 import { pagination, errors, cacheKeys } from "../lib/utils"
 import { config } from "../lib/config"
+import ConversationModel from "../models/conversation"
+import MessageModel from "../models/message"
+import UserModel from "../models/user"
+import mongoose from "mongoose"
 
 export class ChatService {
   // Create or get direct conversation
@@ -12,45 +16,30 @@ export class ChatService {
     }
 
     // Check if conversation already exists
-    const existingConversation = await query(
-      `SELECT c.id, c.type, c.name, c.created_by, c.created_at, c.updated_at
-       FROM conversations c
-       JOIN conversation_participants cp1 ON c.id = cp1.conversation_id
-       JOIN conversation_participants cp2 ON c.id = cp2.conversation_id
-       WHERE c.type = 'direct' 
-         AND cp1.user_id = $1 AND cp1.left_at IS NULL
-         AND cp2.user_id = $2 AND cp2.left_at IS NULL`,
-      [userId1, userId2],
-    )
+    // We want a direct conversation where BOTH users are participants
+    const existingConversation = await ConversationModel.findOne({
+        type: 'direct',
+        $and: [
+            { 'participants.user': userId1 },
+            { 'participants.user': userId2 }
+        ]
+    });
 
-    if (existingConversation.rows.length > 0) {
-      const conversation = existingConversation.rows[0]
-      return await this.getConversationWithParticipants(conversation.id, userId1)
+    if (existingConversation) {
+      return await this.getConversationWithParticipants(existingConversation._id.toString(), userId1)
     }
 
     // Create new conversation
-    const result = await transaction(async (client) => {
-      // Create conversation
-      const conversationResult = await client.query(
-        `INSERT INTO conversations (type, created_by) 
-         VALUES ('direct', $1) 
-         RETURNING id, type, name, created_by, created_at, updated_at`,
-        [userId1],
-      )
+    const newConversation = await ConversationModel.create({
+        type: 'direct',
+        created_by: userId1,
+        participants: [
+            { user: userId1, role: 'member', joined_at: new Date() },
+            { user: userId2, role: 'member', joined_at: new Date() }
+        ]
+    });
 
-      const conversation = conversationResult.rows[0]
-
-      // Add participants
-      await client.query(
-        `INSERT INTO conversation_participants (conversation_id, user_id) 
-         VALUES ($1, $2), ($1, $3)`,
-        [conversation.id, userId1, userId2],
-      )
-
-      return conversation
-    })
-
-    return await this.getConversationWithParticipants(result.id, userId1)
+    return await this.getConversationWithParticipants(newConversation._id.toString(), userId1)
   }
 
   // Create group conversation
@@ -74,35 +63,20 @@ export class ChatService {
     // Remove duplicates and ensure creator is included
     const uniqueParticipants = Array.from(new Set([creatorId, ...participantIds]))
 
-    const result = await transaction(async (client) => {
-      // Create conversation
-      const conversationResult = await client.query(
-        `INSERT INTO conversations (type, name, created_by) 
-         VALUES ('group', $1, $2) 
-         RETURNING id, type, name, created_by, created_at, updated_at`,
-        [name.trim(), creatorId],
-      )
+    const participants = uniqueParticipants.map(userId => ({
+        user: userId,
+        role: userId === creatorId ? 'admin' : 'member',
+        joined_at: new Date()
+    }));
 
-      const conversation = conversationResult.rows[0]
+    const newConversation = await ConversationModel.create({
+        type: 'group',
+        name: name.trim(),
+        created_by: creatorId,
+        participants
+    });
 
-      // Add participants
-      const participantValues = uniqueParticipants
-        .map((userId, index) => {
-          const role = userId === creatorId ? "admin" : "member"
-          return `($1, $${index + 2}, '${role}')`
-        })
-        .join(", ")
-
-      await client.query(
-        `INSERT INTO conversation_participants (conversation_id, user_id, role) 
-         VALUES ${participantValues}`,
-        [conversation.id, ...uniqueParticipants],
-      )
-
-      return conversation
-    })
-
-    return await this.getConversationWithParticipants(result.id, creatorId)
+    return await this.getConversationWithParticipants(newConversation._id.toString(), creatorId)
   }
 
   // Get conversation with participants
@@ -111,73 +85,81 @@ export class ChatService {
     const cacheKey = cacheKeys.conversation(conversationId)
     const cachedConversation = await cache.get(cacheKey)
     if (cachedConversation) {
-      return cachedConversation
-    }
-
-    // Verify user is participant
-    const participantCheck = await query(
-      "SELECT id FROM conversation_participants WHERE conversation_id = $1 AND user_id = $2 AND left_at IS NULL",
-      [conversationId, userId],
-    )
-
-    if (participantCheck.rows.length === 0) {
-      throw errors.forbidden("You are not a participant in this conversation")
+      return cachedConversation as Conversation
     }
 
     // Get conversation details
-    const conversationResult = await query(
-      "SELECT id, type, name, created_by, created_at, updated_at FROM conversations WHERE id = $1",
-      [conversationId],
-    )
+    const conversation = await ConversationModel.findById(conversationId)
+        .populate('participants.user', 'username full_name avatar_url is_verified')
+        .populate({
+            path: 'last_message',
+            populate: { path: 'sender_id', select: 'username full_name' }
+        });
 
-    if (conversationResult.rows.length === 0) {
+    if (!conversation) {
       throw errors.notFound("Conversation not found")
     }
 
-    const conversation = conversationResult.rows[0]
-
-    // Get participants
-    const participantsResult = await query(
-      `SELECT u.id, u.username, u.full_name, u.avatar_url, u.is_verified,
-              cp.role, cp.joined_at
-       FROM conversation_participants cp
-       JOIN users u ON cp.user_id = u.id
-       WHERE cp.conversation_id = $1 AND cp.left_at IS NULL AND u.is_active = true
-       ORDER BY cp.joined_at ASC`,
-      [conversationId],
-    )
-
-    // Get last message
-    const lastMessageResult = await query(
-      `SELECT m.id, m.content, m.media_url, m.message_type, m.created_at,
-              u.username, u.full_name
-       FROM messages m
-       JOIN users u ON m.sender_id = u.id
-       WHERE m.conversation_id = $1 AND m.is_deleted = false
-       ORDER BY m.created_at DESC
-       LIMIT 1`,
-      [conversationId],
-    )
+    // Verify user is participant
+    const participant = conversation.participants.find(p => p.user && (p.user as any)._id.toString() === userId && !p.left_at);
+    if (!participant) {
+      throw errors.forbidden("You are not a participant in this conversation")
+    }
 
     // Get unread count for current user
-    const unreadResult = await query(
-      `SELECT COUNT(*) as unread_count
-       FROM messages m
-       WHERE m.conversation_id = $1 
-         AND m.sender_id != $2 
-         AND m.is_deleted = false
-         AND NOT EXISTS (
-           SELECT 1 FROM message_reads mr 
-           WHERE mr.message_id = m.id AND mr.user_id = $2
-         )`,
-      [conversationId, userId],
-    )
+    const unreadCount = await MessageModel.countDocuments({
+      conversation_id: conversationId,
+      sender_id: { $ne: userId },
+      is_deleted: false,
+      'read_by.user_id': { $ne: userId }
+    });
+
+    // Format response
+    // Map Mongoose document to Conversation interface
+    // Note: The interface in types.ts expects `last_message` as Message type.
+    // My Mongoose model has `last_message` as ObjectId or populated doc.
+    
+    let lastMessage: any = null;
+    if (conversation.last_message) {
+        const lm = conversation.last_message as any;
+        lastMessage = {
+            id: lm._id.toString(),
+            content: lm.content,
+            media_url: lm.media_url,
+            message_type: lm.message_type,
+            created_at: lm.created_at,
+            sender: lm.sender_id ? {
+                username: lm.sender_id.username,
+                full_name: lm.sender_id.full_name
+            } : null
+        };
+    }
+
+    const participants = conversation.participants
+        .filter(p => !p.left_at)
+        .map(p => {
+            const u = p.user as any;
+            return {
+                id: u._id.toString(),
+                username: u.username,
+                full_name: u.full_name,
+                avatar_url: u.avatar_url,
+                is_verified: u.is_verified,
+                role: p.role,
+                joined_at: p.joined_at
+            };
+        });
 
     const conversationWithDetails: Conversation = {
-      ...conversation,
-      participants: participantsResult.rows,
-      last_message: lastMessageResult.rows[0] || null,
-      unread_count: Number.parseInt(unreadResult.rows[0].unread_count),
+      id: conversation._id.toString(),
+      type: conversation.type as "direct" | "group",
+      name: conversation.name,
+      created_by: conversation.created_by.toString(),
+      created_at: (conversation as any).created_at, // timestamps
+      updated_at: (conversation as any).updated_at,
+      participants: participants as any, // Cast to avoid strict type issues with User interface
+      last_message: lastMessage,
+      unread_count: unreadCount,
     }
 
     // Cache the conversation
@@ -189,26 +171,30 @@ export class ChatService {
   // Get user conversations
   static async getUserConversations(userId: string, page = 1, limit = 20): Promise<PaginatedResponse<Conversation>> {
     const { page: validPage, limit: validLimit } = pagination.validateParams(page.toString(), limit.toString())
-    const offset = pagination.getOffset(validPage, validLimit)
+    const skip = (validPage - 1) * validLimit;
 
-    const result = await query(
-      `SELECT c.id, c.type, c.name, c.created_by, c.created_at, c.updated_at,
-              COUNT(*) OVER() as total_count
-       FROM conversations c
-       JOIN conversation_participants cp ON c.id = cp.conversation_id
-       WHERE cp.user_id = $1 AND cp.left_at IS NULL
-       ORDER BY c.updated_at DESC
-       LIMIT $2 OFFSET $3`,
-      [userId, validLimit, offset],
-    )
+    // Find conversations where user is a participant and hasn't left
+    const query = {
+        'participants': {
+            $elemMatch: {
+                user: userId,
+                left_at: null
+            }
+        }
+    };
+
+    const total = await ConversationModel.countDocuments(query);
+    const conversationsDocs = await ConversationModel.find(query)
+        .sort({ updated_at: -1 }) // or updatedAt
+        .skip(skip)
+        .limit(validLimit);
 
     const conversations = await Promise.all(
-      result.rows.map(async (row) => {
-        return await this.getConversationWithParticipants(row.id, userId)
+      conversationsDocs.map(async (doc) => {
+        return await this.getConversationWithParticipants(doc._id.toString(), userId)
       }),
     )
 
-    const total = result.rows.length > 0 ? Number.parseInt(result.rows[0].total_count) : 0
     const paginationMeta = pagination.getMetadata(validPage, validLimit, total)
 
     return {
@@ -235,69 +221,90 @@ export class ChatService {
       throw errors.badRequest("Message content too long (max 4000 characters)")
     }
 
-    // Verify sender is participant
-    const participantCheck = await query(
-      "SELECT id FROM conversation_participants WHERE conversation_id = $1 AND user_id = $2 AND left_at IS NULL",
-      [conversationId, senderId],
-    )
+    // Verify conversation exists and user is participant
+    const conversation = await ConversationModel.findById(conversationId);
+    if (!conversation) {
+        throw errors.notFound("Conversation not found");
+    }
 
-    if (participantCheck.rows.length === 0) {
+    const isParticipant = conversation.participants.some(p => 
+        p.user.toString() === senderId && !p.left_at
+    );
+
+    if (!isParticipant) {
       throw errors.forbidden("You are not a participant in this conversation")
     }
 
     // Verify reply-to message exists (if provided)
     if (reply_to_id) {
-      const replyToCheck = await query(
-        "SELECT id FROM messages WHERE id = $1 AND conversation_id = $2 AND is_deleted = false",
-        [reply_to_id, conversationId],
-      )
+      const replyTo = await MessageModel.findOne({
+          _id: reply_to_id,
+          conversation_id: conversationId,
+          is_deleted: false
+      });
 
-      if (replyToCheck.rows.length === 0) {
+      if (!replyTo) {
         throw errors.notFound("Reply-to message not found")
       }
     }
 
-    const result = await transaction(async (client) => {
-      // Insert message
-      const messageResult = await client.query(
-        `INSERT INTO messages (conversation_id, sender_id, content, media_url, media_type, message_type, reply_to_id) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7) 
-         RETURNING id, conversation_id, sender_id, content, media_url, media_type, message_type, 
-                   reply_to_id, is_deleted, created_at, updated_at`,
-        [conversationId, senderId, content, media_url, media_type, message_type, reply_to_id],
-      )
+    // Create message
+    const newMessage = await MessageModel.create({
+        conversation_id: conversationId,
+        sender_id: senderId,
+        content,
+        media_url,
+        media_type,
+        message_type: message_type || 'text',
+        reply_to_id
+    });
 
-      const message = messageResult.rows[0]
-
-      // Update conversation timestamp
-      await client.query("UPDATE conversations SET updated_at = NOW() WHERE id = $1", [conversationId])
-
-      return message
-    })
+    // Update conversation timestamp and last message
+    conversation.last_message = newMessage._id as any;
+    // Mongoose handles updatedAt automatically on save
+    await conversation.save();
 
     // Get sender info
-    const senderResult = await query(
-      "SELECT id, username, full_name, avatar_url, is_verified FROM users WHERE id = $1",
-      [senderId],
-    )
+    const sender = await UserModel.findById(senderId).select('username full_name avatar_url is_verified');
 
-    // Get reply-to message if exists
-    let replyToMessage = null
+    // Get reply-to message details if exists
+    let replyToMessage = null;
     if (reply_to_id) {
-      const replyResult = await query(
-        `SELECT m.id, m.content, m.media_url, m.message_type, m.created_at,
-                u.username, u.full_name
-         FROM messages m
-         JOIN users u ON m.sender_id = u.id
-         WHERE m.id = $1`,
-        [reply_to_id],
-      )
-      replyToMessage = replyResult.rows[0] || null
+        const rt = await MessageModel.findById(reply_to_id).populate('sender_id', 'username full_name');
+        if (rt) {
+             replyToMessage = {
+                id: rt._id.toString(),
+                content: rt.content,
+                media_url: rt.media_url,
+                message_type: rt.message_type,
+                created_at: rt.created_at,
+                sender: rt.sender_id ? {
+                    username: (rt.sender_id as any).username,
+                    full_name: (rt.sender_id as any).full_name
+                } : null
+            };
+        }
     }
 
     const messageWithDetails: Message = {
-      ...result,
-      sender: senderResult.rows[0],
+      id: newMessage._id.toString(),
+      conversation_id: conversationId,
+      sender_id: senderId,
+      content: newMessage.content,
+      media_url: newMessage.media_url,
+      media_type: newMessage.media_type as any,
+      message_type: newMessage.message_type as any,
+      reply_to_id: newMessage.reply_to_id ? newMessage.reply_to_id.toString() : undefined,
+      is_deleted: newMessage.is_deleted,
+      created_at: newMessage.created_at,
+      updated_at: newMessage.updated_at,
+      sender: sender ? {
+          id: sender._id.toString(),
+          username: sender.username,
+          full_name: sender.full_name,
+          avatar_url: sender.avatar_url,
+          is_verified: sender.is_verified
+      } : undefined,
       reply_to: replyToMessage,
       is_read: false,
     }
@@ -319,80 +326,88 @@ export class ChatService {
     page = 1,
     limit = 50,
   ): Promise<PaginatedResponse<Message>> {
-    // Verify user is participant
-    const participantCheck = await query(
-      "SELECT id FROM conversation_participants WHERE conversation_id = $1 AND user_id = $2 AND left_at IS NULL",
-      [conversationId, userId],
-    )
+    // Verify conversation and participation
+    const conversation = await ConversationModel.findOne({
+        _id: conversationId,
+        'participants': { $elemMatch: { user: userId, left_at: null } }
+    });
 
-    if (participantCheck.rows.length === 0) {
-      throw errors.forbidden("You are not a participant in this conversation")
+    if (!conversation) {
+      throw errors.forbidden("You are not a participant in this conversation or it doesn't exist")
     }
 
     const { page: validPage, limit: validLimit } = pagination.validateParams(page.toString(), limit.toString())
-    const offset = pagination.getOffset(validPage, validLimit)
+    const skip = (validPage - 1) * validLimit;
 
-    const result = await query(
-      `SELECT m.id, m.conversation_id, m.sender_id, m.content, m.media_url, m.media_type, 
-              m.message_type, m.reply_to_id, m.is_deleted, m.created_at, m.updated_at,
-              u.id as sender_id, u.username, u.full_name, u.avatar_url, u.is_verified,
-              COUNT(*) OVER() as total_count
-       FROM messages m
-       JOIN users u ON m.sender_id = u.id
-       WHERE m.conversation_id = $1 AND m.is_deleted = false AND u.is_active = true
-       ORDER BY m.created_at DESC
-       LIMIT $2 OFFSET $3`,
-      [conversationId, validLimit, offset],
-    )
+    const query = {
+        conversation_id: conversationId,
+        is_deleted: false
+    };
+
+    const total = await MessageModel.countDocuments(query);
+    
+    // Get messages with sender info
+    const messagesDocs = await MessageModel.find(query)
+        .sort({ created_at: -1 })
+        .skip(skip)
+        .limit(validLimit)
+        .populate('sender_id', 'username full_name avatar_url is_verified')
+        .populate({
+            path: 'reply_to_id',
+            populate: { path: 'sender_id', select: 'username full_name' }
+        });
 
     const messages = await Promise.all(
-      result.rows.map(async (row) => {
+      messagesDocs.map(async (doc) => {
+        const sender = doc.sender_id as any;
+        
+        // Construct reply_to object
+        let replyTo = null;
+        if (doc.reply_to_id) {
+            const rt = doc.reply_to_id as any;
+            replyTo = {
+                id: rt._id.toString(),
+                content: rt.content,
+                media_url: rt.media_url,
+                message_type: rt.message_type,
+                created_at: rt.created_at,
+                sender: rt.sender_id ? {
+                    username: rt.sender_id.username,
+                    full_name: rt.sender_id.full_name
+                } : null
+            };
+        }
+
+        // Check is_read
+        const isRead = doc.read_by && doc.read_by.some(r => r.user_id.toString() === userId);
+
         const message: Message = {
-          id: row.id,
-          conversation_id: row.conversation_id,
-          sender_id: row.sender_id,
-          content: row.content,
-          media_url: row.media_url,
-          media_type: row.media_type,
-          message_type: row.message_type,
-          reply_to_id: row.reply_to_id,
-          is_deleted: row.is_deleted,
-          created_at: row.created_at,
-          updated_at: row.updated_at,
+          id: doc._id.toString(),
+          conversation_id: doc.conversation_id.toString(),
+          sender_id: doc.sender_id._id.toString(),
+          content: doc.content,
+          media_url: doc.media_url,
+          media_type: doc.media_type as any,
+          message_type: doc.message_type as any,
+          reply_to_id: doc.reply_to_id ? (doc.reply_to_id as any)._id.toString() : undefined,
+          is_deleted: doc.is_deleted,
+          created_at: doc.created_at,
+          updated_at: doc.updated_at,
           sender: {
-            id: row.sender_id,
-            username: row.username,
-            full_name: row.full_name,
-            avatar_url: row.avatar_url,
-            is_verified: row.is_verified,
+            id: sender._id.toString(),
+            username: sender.username,
+            full_name: sender.full_name,
+            avatar_url: sender.avatar_url,
+            is_verified: sender.is_verified,
           },
+          reply_to: replyTo,
+          is_read: !!isRead
         }
-
-        // Get reply-to message if exists
-        if (row.reply_to_id) {
-          const replyResult = await query(
-            `SELECT m.id, m.content, m.media_url, m.message_type, m.created_at,
-                    u.username, u.full_name
-             FROM messages m
-             JOIN users u ON m.sender_id = u.id
-             WHERE m.id = $1`,
-            [row.reply_to_id],
-          )
-          message.reply_to = replyResult.rows[0] || null
-        }
-
-        // Check if message is read by current user
-        const readResult = await query("SELECT id FROM message_reads WHERE message_id = $1 AND user_id = $2", [
-          message.id,
-          userId,
-        ])
-        message.is_read = readResult.rows.length > 0
 
         return message
       }),
     )
 
-    const total = result.rows.length > 0 ? Number.parseInt(result.rows[0].total_count) : 0
     const paginationMeta = pagination.getMetadata(validPage, validLimit, total)
 
     return {
@@ -406,84 +421,93 @@ export class ChatService {
   static async markMessagesAsRead(userId: string, messageIds: string[]): Promise<void> {
     if (messageIds.length === 0) return
 
-    // Insert read receipts (ignore duplicates)
-    const values = messageIds.map((messageId, index) => `($1, $${index + 2})`).join(", ")
+    // Update messages to add user to read_by array if not already present
+    await MessageModel.updateMany(
+        { 
+            _id: { $in: messageIds },
+            'read_by.user_id': { $ne: userId } // Only if not already read by this user
+        },
+        {
+            $addToSet: { 
+                read_by: { 
+                    user_id: userId,
+                    read_at: new Date()
+                } 
+            }
+        }
+    );
 
-    await query(
-      `INSERT INTO message_reads (user_id, message_id) 
-       VALUES ${values}
-       ON CONFLICT (message_id, user_id) DO NOTHING`,
-      [userId, ...messageIds],
-    )
-
-    // Get conversation ID for cache invalidation
-    const conversationResult = await query("SELECT DISTINCT conversation_id FROM messages WHERE id = ANY($1)", [
-      messageIds,
-    ])
-
-    if (conversationResult.rows.length > 0) {
-      const conversationId = conversationResult.rows[0].conversation_id
-      await cache.del(cacheKeys.conversation(conversationId))
+    // Get conversation IDs for cache invalidation
+    const messages = await MessageModel.find({ _id: { $in: messageIds } }).distinct('conversation_id');
+    
+    for (const conversationId of messages) {
+        await cache.del(cacheKeys.conversation(conversationId.toString()));
     }
   }
 
   // Delete message
   static async deleteMessage(messageId: string, userId: string): Promise<void> {
-    const result = await query("UPDATE messages SET is_deleted = true WHERE id = $1 AND sender_id = $2", [
-      messageId,
-      userId,
-    ])
+    const message = await MessageModel.findOne({ _id: messageId, sender_id: userId });
 
-    if (result.rowCount === 0) {
+    if (!message) {
       throw errors.notFound("Message not found or you don't have permission to delete it")
     }
 
-    // Get conversation ID for cache invalidation
-    const conversationResult = await query("SELECT conversation_id FROM messages WHERE id = $1", [messageId])
-    if (conversationResult.rows.length > 0) {
-      const conversationId = conversationResult.rows[0].conversation_id
-      await cache.del(cacheKeys.conversation(conversationId))
+    message.is_deleted = true;
+    await message.save();
 
-      // Notify participants about message deletion
-      const wsService = getWebSocketService()
-      wsService.sendMessageToConversation(conversationId, {
+    const conversationId = message.conversation_id.toString();
+    await cache.del(cacheKeys.conversation(conversationId))
+
+    // Notify participants about message deletion
+    const wsService = getWebSocketService()
+    wsService.sendMessageToConversation(conversationId, {
         type: "message_deleted",
         messageId,
         deletedBy: userId,
         timestamp: new Date(),
-      })
-    }
+    })
   }
 
   // Add participant to group
   static async addParticipant(conversationId: string, adminId: string, newParticipantId: string): Promise<void> {
     // Verify admin permissions
-    const adminCheck = await query(
-      `SELECT c.type FROM conversations c
-       JOIN conversation_participants cp ON c.id = cp.conversation_id
-       WHERE c.id = $1 AND cp.user_id = $2 AND cp.role = 'admin' AND cp.left_at IS NULL`,
-      [conversationId, adminId],
-    )
+    const conversation = await ConversationModel.findOne({
+        _id: conversationId,
+        'participants': {
+            $elemMatch: {
+                user: adminId,
+                role: 'admin',
+                left_at: null
+            }
+        }
+    });
 
-    if (adminCheck.rows.length === 0) {
+    if (!conversation) {
       throw errors.forbidden("Only group admins can add participants")
     }
 
     // Check if user is already a participant
-    const existingParticipant = await query(
-      "SELECT id FROM conversation_participants WHERE conversation_id = $1 AND user_id = $2 AND left_at IS NULL",
-      [conversationId, newParticipantId],
-    )
-
-    if (existingParticipant.rows.length > 0) {
+    const existingParticipant = conversation.participants.find(p => p.user.toString() === newParticipantId && !p.left_at);
+    if (existingParticipant) {
       throw errors.conflict("User is already a participant")
     }
 
     // Add participant
-    await query("INSERT INTO conversation_participants (conversation_id, user_id) VALUES ($1, $2)", [
-      conversationId,
-      newParticipantId,
-    ])
+    // Check if they were previously a participant and left
+    const oldParticipantIndex = conversation.participants.findIndex(p => p.user.toString() === newParticipantId);
+    if (oldParticipantIndex > -1) {
+        conversation.participants[oldParticipantIndex].left_at = undefined;
+        conversation.participants[oldParticipantIndex].joined_at = new Date();
+    } else {
+        conversation.participants.push({
+            user: newParticipantId as any,
+            role: 'member',
+            joined_at: new Date()
+        });
+    }
+
+    await conversation.save();
 
     // Clear cache
     await cache.del(cacheKeys.conversation(conversationId))
@@ -501,14 +525,18 @@ export class ChatService {
   // Remove participant from group
   static async removeParticipant(conversationId: string, adminId: string, participantId: string): Promise<void> {
     // Verify admin permissions
-    const adminCheck = await query(
-      `SELECT c.type FROM conversations c
-       JOIN conversation_participants cp ON c.id = cp.conversation_id
-       WHERE c.id = $1 AND cp.user_id = $2 AND cp.role = 'admin' AND cp.left_at IS NULL`,
-      [conversationId, adminId],
-    )
+    const conversation = await ConversationModel.findOne({
+        _id: conversationId,
+        'participants': {
+            $elemMatch: {
+                user: adminId,
+                role: 'admin',
+                left_at: null
+            }
+        }
+    });
 
-    if (adminCheck.rows.length === 0) {
+    if (!conversation) {
       throw errors.forbidden("Only group admins can remove participants")
     }
 
@@ -518,14 +546,13 @@ export class ChatService {
     }
 
     // Remove participant
-    const result = await query(
-      "UPDATE conversation_participants SET left_at = NOW() WHERE conversation_id = $1 AND user_id = $2",
-      [conversationId, participantId],
-    )
-
-    if (result.rowCount === 0) {
+    const participantIndex = conversation.participants.findIndex(p => p.user.toString() === participantId && !p.left_at);
+    if (participantIndex === -1) {
       throw errors.notFound("Participant not found")
     }
+
+    conversation.participants[participantIndex].left_at = new Date();
+    await conversation.save();
 
     // Clear cache
     await cache.del(cacheKeys.conversation(conversationId))
@@ -542,14 +569,18 @@ export class ChatService {
 
   // Leave conversation
   static async leaveConversation(conversationId: string, userId: string): Promise<void> {
-    const result = await query(
-      "UPDATE conversation_participants SET left_at = NOW() WHERE conversation_id = $1 AND user_id = $2",
-      [conversationId, userId],
-    )
+    const conversation = await ConversationModel.findById(conversationId);
+    if (!conversation) {
+        throw errors.notFound("Conversation not found");
+    }
 
-    if (result.rowCount === 0) {
+    const participantIndex = conversation.participants.findIndex(p => p.user.toString() === userId && !p.left_at);
+    if (participantIndex === -1) {
       throw errors.notFound("You are not a participant in this conversation")
     }
+
+    conversation.participants[participantIndex].left_at = new Date();
+    await conversation.save();
 
     // Clear cache
     await cache.del(cacheKeys.conversation(conversationId))

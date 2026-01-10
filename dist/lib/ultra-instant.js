@@ -2,6 +2,15 @@
 // ULTRA-INSTANT Loading System
 // Makes web app feel like native app (TikTok/Instagram speed)
 // Zero loading time through aggressive caching + prefetching
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ultraFetch = ultraFetch;
 exports.prefetch = prefetch;
@@ -16,111 +25,121 @@ const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes fresh
 const STALE_DURATION = 30 * 60 * 1000; // 30 minutes stale-while-revalidate
 // IndexedDB for persistent cache (survives page refresh)
 let db = null;
-async function initDB() {
-    if (db)
-        return db;
-    return new Promise((resolve, reject) => {
-        const request = indexedDB.open('UltraInstantCache', 1);
-        request.onerror = () => reject(request.error);
-        request.onsuccess = () => {
-            db = request.result;
-            resolve(db);
-        };
-        request.onupgradeneeded = (event) => {
-            const db = event.target.result;
-            if (!db.objectStoreNames.contains('cache')) {
-                db.createObjectStore('cache', { keyPath: 'key' });
-            }
-        };
+function initDB() {
+    return __awaiter(this, void 0, void 0, function* () {
+        if (db)
+            return db;
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open('UltraInstantCache', 1);
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => {
+                db = request.result;
+                resolve(db);
+            };
+            request.onupgradeneeded = (event) => {
+                const db = event.target.result;
+                if (!db.objectStoreNames.contains('cache')) {
+                    db.createObjectStore('cache', { keyPath: 'key' });
+                }
+            };
+        });
     });
 }
 // Get from IndexedDB
-async function getFromIndexedDB(key) {
-    try {
-        const database = await initDB();
-        return new Promise((resolve) => {
-            const transaction = database.transaction(['cache'], 'readonly');
-            const store = transaction.objectStore('cache');
-            const request = store.get(key);
-            request.onsuccess = () => {
-                const result = request.result;
-                if (result && Date.now() - result.timestamp < STALE_DURATION) {
-                    resolve(result.data);
-                }
-                else {
-                    resolve(null);
-                }
-            };
-            request.onerror = () => resolve(null);
-        });
-    }
-    catch {
-        return null;
-    }
+function getFromIndexedDB(key) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const database = yield initDB();
+            return new Promise((resolve) => {
+                const transaction = database.transaction(['cache'], 'readonly');
+                const store = transaction.objectStore('cache');
+                const request = store.get(key);
+                request.onsuccess = () => {
+                    const result = request.result;
+                    if (result && Date.now() - result.timestamp < STALE_DURATION) {
+                        resolve(result.data);
+                    }
+                    else {
+                        resolve(null);
+                    }
+                };
+                request.onerror = () => resolve(null);
+            });
+        }
+        catch (_a) {
+            return null;
+        }
+    });
 }
 // Save to IndexedDB
-async function saveToIndexedDB(key, data) {
-    try {
-        const database = await initDB();
-        const transaction = database.transaction(['cache'], 'readwrite');
-        const store = transaction.objectStore('cache');
-        store.put({ key, data, timestamp: Date.now() });
-    }
-    catch {
-        // Silently fail
-    }
+function saveToIndexedDB(key, data) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const database = yield initDB();
+            const transaction = database.transaction(['cache'], 'readwrite');
+            const store = transaction.objectStore('cache');
+            store.put({ key, data, timestamp: Date.now() });
+        }
+        catch (_a) {
+            // Silently fail
+        }
+    });
 }
 // INSTANT fetch with 3-layer cache
-async function ultraFetch(url, options) {
-    const cacheKey = `${url}_${JSON.stringify(options || {})}`;
-    // Layer 1: Memory cache (0ms)
-    const memCached = memoryCache.get(cacheKey);
-    if (memCached && !memCached.stale) {
-        // Return instantly, refresh in background
-        refreshInBackground(url, options, cacheKey);
-        return memCached.data;
-    }
-    // Layer 2: IndexedDB cache (5-10ms)
-    const idbCached = await getFromIndexedDB(cacheKey);
-    if (idbCached) {
-        // Return quickly, refresh in background
-        memoryCache.set(cacheKey, { data: idbCached, timestamp: Date.now(), stale: false });
-        refreshInBackground(url, options, cacheKey);
-        return idbCached;
-    }
-    // Layer 3: Network fetch
-    return fetchAndCache(url, options, cacheKey);
+function ultraFetch(url, options) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const cacheKey = `${url}_${JSON.stringify(options || {})}`;
+        // Layer 1: Memory cache (0ms)
+        const memCached = memoryCache.get(cacheKey);
+        if (memCached && !memCached.stale) {
+            // Return instantly, refresh in background
+            refreshInBackground(url, options, cacheKey);
+            return memCached.data;
+        }
+        // Layer 2: IndexedDB cache (5-10ms)
+        const idbCached = yield getFromIndexedDB(cacheKey);
+        if (idbCached) {
+            // Return quickly, refresh in background
+            memoryCache.set(cacheKey, { data: idbCached, timestamp: Date.now(), stale: false });
+            refreshInBackground(url, options, cacheKey);
+            return idbCached;
+        }
+        // Layer 3: Network fetch
+        return fetchAndCache(url, options, cacheKey);
+    });
 }
 // Fetch and cache at all layers
-async function fetchAndCache(url, options, cacheKey) {
-    try {
-        const response = await fetch(url, { ...options, credentials: 'include' });
-        if (!response.ok)
-            throw new Error('Network error');
-        const data = await response.json();
-        // Cache at all layers
-        memoryCache.set(cacheKey, { data, timestamp: Date.now(), stale: false });
-        saveToIndexedDB(cacheKey, data);
-        return data;
-    }
-    catch (error) {
-        // Return stale data if available
-        const stale = memoryCache.get(cacheKey);
-        if (stale)
-            return stale.data;
-        throw error;
-    }
+function fetchAndCache(url, options, cacheKey) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const response = yield fetch(url, Object.assign(Object.assign({}, options), { credentials: 'include' }));
+            if (!response.ok)
+                throw new Error('Network error');
+            const data = yield response.json();
+            // Cache at all layers
+            memoryCache.set(cacheKey, { data, timestamp: Date.now(), stale: false });
+            saveToIndexedDB(cacheKey, data);
+            return data;
+        }
+        catch (error) {
+            // Return stale data if available
+            const stale = memoryCache.get(cacheKey);
+            if (stale)
+                return stale.data;
+            throw error;
+        }
+    });
 }
 // Background refresh (stale-while-revalidate)
 function refreshInBackground(url, options, cacheKey) {
-    setTimeout(async () => {
+    setTimeout(() => __awaiter(this, void 0, void 0, function* () {
         try {
-            await fetchAndCache(url, options, cacheKey);
+            yield fetchAndCache(url, options, cacheKey);
         }
-        catch {
+        catch (_a) {
             // Silently fail
         }
-    }, 0);
+    }), 0);
 }
 // Prefetch data before user needs it
 function prefetch(url, options) {
@@ -186,20 +205,14 @@ if (typeof window !== 'undefined') {
 // Optimistic UI helpers
 function optimisticLike(posts, postId, liked) {
     return posts.map(post => post.id === postId
-        ? { ...post, liked, likes_count: post.likes_count + (liked ? 1 : -1) }
-        : post);
+        ? Object.assign(Object.assign({}, post), { liked, likes_count: post.likes_count + (liked ? 1 : -1) }) : post);
 }
 function optimisticComment(posts, postId, comment) {
     return posts.map(post => post.id === postId
-        ? { ...post, comments_count: post.comments_count + 1 }
-        : post);
+        ? Object.assign(Object.assign({}, post), { comments_count: post.comments_count + 1 }) : post);
 }
 function optimisticFollow(user, following) {
-    return {
-        ...user,
-        is_following: following,
-        followers_count: user.followers_count + (following ? 1 : -1)
-    };
+    return Object.assign(Object.assign({}, user), { is_following: following, followers_count: user.followers_count + (following ? 1 : -1) });
 }
 // Initialize on load
 if (typeof window !== 'undefined') {

@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { Document, Model } from 'mongoose';
 
 // Define the story schema
 const storySchema = new mongoose.Schema({
@@ -115,6 +115,39 @@ storySchema.pre('save', function (next) {
   next();
 });
 
+// Interface for Story Document
+export interface IStory extends Document {
+  user_id: mongoose.Types.ObjectId;
+  media_url: string;
+  media_type: 'image' | 'video';
+  caption?: string;
+  location?: string;
+  texts: any[];
+  stickers: any[];
+  filter: string;
+  music?: any;
+  views_count: number;
+  is_deleted: boolean;
+  share_type: 'your-story' | 'close-friends';
+  is_close_friends: boolean;
+  is_remix: boolean;
+  original_story_id?: mongoose.Types.ObjectId;
+  original_creator_id?: mongoose.Types.ObjectId;
+  original_creator_username?: string;
+  remix_changes: {
+    texts: any[];
+    stickers: any[];
+    filter: string;
+  };
+  created_at: Date;
+  expires_at: Date;
+  
+  isExpired(): boolean;
+  incrementViews(): Promise<IStory>;
+}
+
+export interface IStoryModel extends Model<IStory> {}
+
 // Method to check if story is expired
 storySchema.methods.isExpired = function () {
   return new Date() > this.expires_at;
@@ -127,6 +160,6 @@ storySchema.methods.incrementViews = function () {
 };
 
 // Create the model if it doesn't exist or get it if it does
-const Story = mongoose.models.Story || mongoose.model('Story', storySchema);
+const Story = (mongoose.models.Story as IStoryModel) || mongoose.model<IStory, IStoryModel>('Story', storySchema);
 
 export default Story;

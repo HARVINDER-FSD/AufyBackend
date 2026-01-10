@@ -1,282 +1,345 @@
 "use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.UserService = void 0;
 const database_1 = require("../lib/database");
 const utils_1 = require("../lib/utils");
 const config_1 = require("../lib/config");
+const user_1 = __importDefault(require("../models/user"));
+const follow_1 = __importDefault(require("../models/follow"));
+const post_1 = __importDefault(require("../models/post"));
+// Type assertions to fix Mongoose model type issues
+const User = user_1.default;
+const Follow = follow_1.default;
+const Post = post_1.default;
 class UserService {
     // Search users
-    static async searchUsers(searchTerm, currentUserId, page = 1, limit = 20) {
-        const { page: validPage, limit: validLimit } = utils_1.pagination.validateParams(page.toString(), limit.toString());
-        const offset = utils_1.pagination.getOffset(validPage, validLimit);
-        const searchQuery = `%${searchTerm.toLowerCase()}%`;
-        const result = await (0, database_1.query)(`SELECT u.id, u.username, u.email, u.full_name, u.bio, u.avatar_url,
-              u.is_verified, u.is_private, u.created_at,
-              COUNT(*) OVER() as total_count
-       FROM users u
-       WHERE (LOWER(u.username) LIKE $1 OR LOWER(u.full_name) LIKE $1)
-         AND u.is_active = true
-         AND ($2::uuid IS NULL OR u.id != $2)
-       ORDER BY 
-         CASE WHEN LOWER(u.username) = LOWER($3) THEN 1 ELSE 2 END,
-         u.is_verified DESC,
-         u.created_at DESC
-       LIMIT $4 OFFSET $5`, [searchQuery, currentUserId, searchTerm, validLimit, offset]);
-        const users = result.rows.map((row) => ({
-            id: row.id,
-            username: row.username,
-            email: row.email,
-            full_name: row.full_name,
-            bio: row.bio,
-            avatar_url: row.avatar_url,
-            is_verified: row.is_verified,
-            is_private: row.is_private,
-            created_at: row.created_at,
-        }));
-        const total = result.rows.length > 0 ? Number.parseInt(result.rows[0].total_count) : 0;
-        const paginationMeta = utils_1.pagination.getMetadata(validPage, validLimit, total);
-        return {
-            success: true,
-            data: users,
-            pagination: paginationMeta,
-        };
+    static searchUsers(searchTerm_1, currentUserId_1) {
+        return __awaiter(this, arguments, void 0, function* (searchTerm, currentUserId, page = 1, limit = 20) {
+            const { page: validPage, limit: validLimit } = utils_1.pagination.validateParams(page.toString(), limit.toString());
+            const offset = utils_1.pagination.getOffset(validPage, validLimit);
+            const searchRegex = new RegExp(searchTerm, 'i');
+            const searchFilter = {
+                $or: [
+                    { username: searchRegex },
+                    { full_name: searchRegex }
+                ],
+                is_active: true
+            };
+            if (currentUserId) {
+                searchFilter._id = { $ne: currentUserId };
+            }
+            const total = yield User.countDocuments(searchFilter).exec();
+            const users = yield User.find(searchFilter)
+                .select('id username email full_name bio avatar_url is_verified is_private created_at')
+                .sort({ is_verified: -1, created_at: -1 })
+                .skip(offset)
+                .limit(validLimit)
+                .lean()
+                .exec();
+            const paginationMeta = utils_1.pagination.getMetadata(validPage, validLimit, total);
+            return {
+                success: true,
+                data: users,
+                pagination: paginationMeta,
+            };
+        });
     }
     // Update user profile
-    static async updateProfile(userId, updates) {
-        const allowedFields = ["username", "full_name", "bio", "avatar_url", "phone", "website", "location", "is_private"];
-        const updateFields = Object.keys(updates).filter((key) => allowedFields.includes(key));
-        // Only update allowed fields
-        const filteredUpdates = {};
-        updateFields.forEach((field) => {
-            filteredUpdates[field] = updates[field];
+    static updateProfile(userId, updates) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const allowedFields = ["username", "full_name", "bio", "avatar_url", "phone", "website", "location", "is_private"];
+            // Only update allowed fields
+            const filteredUpdates = {};
+            Object.keys(updates).forEach((field) => {
+                if (allowedFields.includes(field)) {
+                    filteredUpdates[field] = updates[field];
+                }
+            });
+            // Update user in database
+            yield User.findByIdAndUpdate(userId, Object.assign(Object.assign({}, filteredUpdates), { updated_at: new Date() })).exec();
+            // Clear cache
+            yield database_1.cache.del(utils_1.cacheKeys.user(userId));
+            return {
+                success: true,
+                message: 'Profile updated successfully'
+            };
         });
-        // Update user in database
-        await (0, database_1.query)(`UPDATE users SET ${updateFields.map((field) => `${field} = ?`).join(', ')}, updated_at = NOW() 
-       WHERE id = ?`, [...updateFields.map((field) => filteredUpdates[field]), userId]);
-        // Clear cache
-        await database_1.cache.del(utils_1.cacheKeys.user(userId));
-        return {
-            success: true,
-            message: 'Profile updated successfully'
-        };
     }
     // Get user profile
-    static async getUserProfile(userId, currentUserId) {
-        // Check cache first
-        const cacheKey = `${utils_1.cacheKeys.user(userId)}:profile`;
-        const cachedProfile = await database_1.cache.get(cacheKey);
-        if (cachedProfile && !currentUserId) {
-            return cachedProfile;
-        }
-        const result = await (0, database_1.query)(`SELECT u.id, u.username, u.email, u.full_name, u.bio, u.avatar_url, u.phone,
-              u.is_verified, u.is_private, u.is_active, u.last_seen, u.created_at, u.updated_at,
-              (SELECT COUNT(*) FROM follows WHERE following_id = u.id AND status = 'active') as followers_count,
-              (SELECT COUNT(*) FROM follows WHERE follower_id = u.id AND status = 'active') as following_count,
-              (SELECT COUNT(*) FROM posts WHERE user_id = u.id AND is_archived = false) as posts_count
-       FROM users u
-       WHERE u.id = $1 AND u.is_active = true`, [userId]);
-        if (result.rows.length === 0) {
-            throw utils_1.errors.notFound("User not found");
-        }
-        const user = result.rows[0];
-        const profile = {
-            id: user.id,
-            username: user.username,
-            email: user.email,
-            full_name: user.full_name,
-            bio: user.bio,
-            avatar_url: user.avatar_url,
-            phone: user.phone,
-            is_verified: user.is_verified,
-            is_private: user.is_private,
-            is_active: user.is_active,
-            last_seen: user.last_seen,
-            created_at: user.created_at,
-            updated_at: user.updated_at,
-            followers_count: Number.parseInt(user.followers_count),
-            following_count: Number.parseInt(user.following_count),
-            posts_count: Number.parseInt(user.posts_count),
-        };
-        // Check follow status if current user is provided
-        if (currentUserId && currentUserId !== userId) {
-            const followStatus = await (0, database_1.query)(`SELECT 
-           (SELECT status FROM follows WHERE follower_id = $1 AND following_id = $2) as is_following,
-           (SELECT status FROM follows WHERE follower_id = $2 AND following_id = $1) as is_followed_by`, [currentUserId, userId]);
-            if (followStatus.rows.length > 0) {
-                profile.is_following = followStatus.rows[0].is_following === "active";
-                profile.is_followed_by = followStatus.rows[0].is_followed_by === "active";
+    static getUserProfile(userId, currentUserId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            // Check cache first
+            const cacheKey = `${utils_1.cacheKeys.user(userId)}:profile`;
+            const cachedProfile = yield database_1.cache.get(cacheKey);
+            if (cachedProfile && !currentUserId) {
+                return cachedProfile;
             }
-        }
-        // Cache the profile (without follow status for general caching)
-        if (!currentUserId) {
-            await database_1.cache.set(cacheKey, profile, config_1.config.redis.ttl.user);
-        }
-        return profile;
+            const user = yield User.findOne({ _id: userId, is_active: true }).lean().exec();
+            if (!user) {
+                throw utils_1.errors.notFound("User not found");
+            }
+            // Get counts
+            const followersCount = yield Follow.countDocuments({ following_id: userId, status: 'active' }).exec();
+            const followingCount = yield Follow.countDocuments({ follower_id: userId, status: 'active' }).exec();
+            const postsCount = yield Post.countDocuments({ user_id: userId, is_archived: false }).exec();
+            const profile = {
+                id: user._id,
+                username: user.username,
+                email: user.email,
+                full_name: user.full_name,
+                bio: user.bio,
+                avatar_url: user.avatar_url,
+                phone: user.phone,
+                is_verified: user.is_verified,
+                is_private: user.is_private,
+                is_active: user.is_active,
+                last_seen: user.last_seen,
+                created_at: user.created_at,
+                updated_at: user.updated_at,
+                followers_count: followersCount,
+                following_count: followingCount,
+                posts_count: postsCount,
+            };
+            // Check follow status if current user is provided
+            if (currentUserId && currentUserId !== userId) {
+                const isFollowing = yield Follow.findOne({
+                    follower_id: currentUserId,
+                    following_id: userId
+                }).lean().exec();
+                const isFollowedBy = yield Follow.findOne({
+                    follower_id: userId,
+                    following_id: currentUserId
+                }).lean().exec();
+                profile.is_following = (isFollowing === null || isFollowing === void 0 ? void 0 : isFollowing.status) === "active";
+                profile.is_followed_by = (isFollowedBy === null || isFollowedBy === void 0 ? void 0 : isFollowedBy.status) === "active";
+            }
+            // Cache the profile (without follow status for general caching)
+            if (!currentUserId) {
+                yield database_1.cache.set(cacheKey, profile, config_1.config.redis.ttl.user);
+            }
+            return profile;
+        });
     }
     // Follow user
-    static async followUser(followerId, followingId) {
-        if (followerId === followingId) {
-            throw utils_1.errors.badRequest("Cannot follow yourself");
-        }
-        // Check if target user exists
-        const targetUser = await (0, database_1.query)("SELECT id, is_private FROM users WHERE id = $1 AND is_active = true", [followingId]);
-        if (targetUser.rows.length === 0) {
-            throw utils_1.errors.notFound("User not found");
-        }
-        const isPrivate = targetUser.rows[0].is_private;
-        // Check if already following
-        const existingFollow = await (0, database_1.query)("SELECT id, status FROM follows WHERE follower_id = $1 AND following_id = $2", [
-            followerId,
-            followingId,
-        ]);
-        if (existingFollow.rows.length > 0) {
-            const currentStatus = existingFollow.rows[0].status;
-            if (currentStatus === "active") {
-                throw utils_1.errors.conflict("Already following this user");
+    static followUser(followerId, followingId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (followerId === followingId) {
+                throw utils_1.errors.badRequest("Cannot follow yourself");
             }
-            else if (currentStatus === "pending") {
-                throw utils_1.errors.conflict("Follow request already sent");
+            // Check if target user exists
+            const targetUser = yield User.findOne({ _id: followingId, is_active: true }).lean().exec();
+            if (!targetUser) {
+                throw utils_1.errors.notFound("User not found");
             }
-        }
-        // Determine status based on privacy
-        const status = isPrivate ? "pending" : "active";
-        // Insert or update follow record
-        await (0, database_1.query)(`INSERT INTO follows (follower_id, following_id, status) 
-       VALUES ($1, $2, $3)
-       ON CONFLICT (follower_id, following_id) 
-       DO UPDATE SET status = $3, created_at = NOW()`, [followerId, followingId, status]);
-        // Clear cache
-        await database_1.cache.del(utils_1.cacheKeys.userFollowers(followingId));
-        await database_1.cache.del(utils_1.cacheKeys.userFollowing(followerId));
-        await database_1.cache.del(`${utils_1.cacheKeys.user(followingId)}:profile`);
-        await database_1.cache.del(`${utils_1.cacheKeys.user(followerId)}:profile`);
-        // TODO: Send notification if follow is active or pending
+            const isPrivate = targetUser.is_private;
+            // Check if already following
+            const existingFollow = yield Follow.findOne({
+                follower_id: followerId,
+                following_id: followingId
+            }).lean().exec();
+            if (existingFollow) {
+                const currentStatus = existingFollow.status;
+                if (currentStatus === "active") {
+                    throw utils_1.errors.conflict("Already following this user");
+                }
+                else if (currentStatus === "pending") {
+                    throw utils_1.errors.conflict("Follow request already sent");
+                }
+            }
+            // Determine status based on privacy
+            const status = isPrivate ? "pending" : "active";
+            // Insert or update follow record
+            yield Follow.findOneAndUpdate({ follower_id: followerId, following_id: followingId }, {
+                follower_id: followerId,
+                following_id: followingId,
+                status,
+                created_at: new Date()
+            }, { upsert: true, new: true }).exec();
+            // Clear cache
+            yield database_1.cache.del(utils_1.cacheKeys.userFollowers(followingId));
+            yield database_1.cache.del(utils_1.cacheKeys.userFollowing(followerId));
+            yield database_1.cache.del(`${utils_1.cacheKeys.user(followingId)}:profile`);
+            yield database_1.cache.del(`${utils_1.cacheKeys.user(followerId)}:profile`);
+            // TODO: Send notification if follow is active or pending
+        });
     }
     // Unfollow user
-    static async unfollowUser(followerId, followingId) {
-        const result = await (0, database_1.query)("DELETE FROM follows WHERE follower_id = $1 AND following_id = $2", [
-            followerId,
-            followingId,
-        ]);
-        if (result.rowCount === 0) {
-            throw utils_1.errors.notFound("Follow relationship not found");
-        }
-        // Clear cache
-        await database_1.cache.del(utils_1.cacheKeys.userFollowers(followingId));
-        await database_1.cache.del(utils_1.cacheKeys.userFollowing(followerId));
-        await database_1.cache.del(`${utils_1.cacheKeys.user(followingId)}:profile`);
-        await database_1.cache.del(`${utils_1.cacheKeys.user(followerId)}:profile`);
+    static unfollowUser(followerId, followingId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const result = yield Follow.deleteOne({
+                follower_id: followerId,
+                following_id: followingId
+            }).exec();
+            if (result.deletedCount === 0) {
+                throw utils_1.errors.notFound("Follow relationship not found");
+            }
+            // Clear cache
+            yield database_1.cache.del(utils_1.cacheKeys.userFollowers(followingId));
+            yield database_1.cache.del(utils_1.cacheKeys.userFollowing(followerId));
+            yield database_1.cache.del(`${utils_1.cacheKeys.user(followingId)}:profile`);
+            yield database_1.cache.del(`${utils_1.cacheKeys.user(followerId)}:profile`);
+        });
     }
     // Get followers
-    static async getFollowers(userId, page = 1, limit = 20) {
-        const { page: validPage, limit: validLimit } = utils_1.pagination.validateParams(page.toString(), limit.toString());
-        const offset = utils_1.pagination.getOffset(validPage, validLimit);
-        const result = await (0, database_1.query)(`SELECT u.id, u.username, u.full_name, u.avatar_url, u.is_verified,
-              f.created_at as followed_at,
-              COUNT(*) OVER() as total_count
-       FROM follows f
-       JOIN users u ON f.follower_id = u.id
-       WHERE f.following_id = $1 AND f.status = 'active' AND u.is_active = true
-       ORDER BY f.created_at DESC
-       LIMIT $2 OFFSET $3`, [userId, validLimit, offset]);
-        const followers = result.rows.map((row) => ({
-            id: row.id,
-            username: row.username,
-            full_name: row.full_name,
-            avatar_url: row.avatar_url,
-            is_verified: row.is_verified,
-            followed_at: row.followed_at,
-        }));
-        const total = result.rows.length > 0 ? Number.parseInt(result.rows[0].total_count) : 0;
-        const paginationMeta = utils_1.pagination.getMetadata(validPage, validLimit, total);
-        return {
-            success: true,
-            data: followers,
-            pagination: paginationMeta,
-        };
+    static getFollowers(userId_1) {
+        return __awaiter(this, arguments, void 0, function* (userId, page = 1, limit = 20) {
+            const { page: validPage, limit: validLimit } = utils_1.pagination.validateParams(page.toString(), limit.toString());
+            const offset = utils_1.pagination.getOffset(validPage, validLimit);
+            const total = yield Follow.countDocuments({
+                following_id: userId,
+                status: 'active'
+            }).exec();
+            const follows = yield Follow.find({
+                following_id: userId,
+                status: 'active'
+            })
+                .sort({ created_at: -1 })
+                .skip(offset)
+                .limit(validLimit)
+                .lean()
+                .exec();
+            const followerIds = follows.map((f) => f.follower_id);
+            const users = yield User.find({
+                _id: { $in: followerIds },
+                is_active: true
+            })
+                .select('id username full_name avatar_url is_verified')
+                .lean()
+                .exec();
+            const followers = follows.map((follow) => {
+                const user = users.find((u) => u._id.toString() === follow.follower_id.toString());
+                return user ? Object.assign(Object.assign({}, user), { followed_at: follow.created_at }) : null;
+            }).filter(Boolean);
+            const paginationMeta = utils_1.pagination.getMetadata(validPage, validLimit, total);
+            return {
+                success: true,
+                data: followers,
+                pagination: paginationMeta,
+            };
+        });
     }
     // Get following
-    static async getFollowing(userId, page = 1, limit = 20) {
-        const { page: validPage, limit: validLimit } = utils_1.pagination.validateParams(page.toString(), limit.toString());
-        const offset = utils_1.pagination.getOffset(validPage, validLimit);
-        const result = await (0, database_1.query)(`SELECT u.id, u.username, u.full_name, u.avatar_url, u.is_verified,
-              f.created_at as followed_at,
-              COUNT(*) OVER() as total_count
-       FROM follows f
-       JOIN users u ON f.following_id = u.id
-       WHERE f.follower_id = $1 AND f.status = 'active' AND u.is_active = true
-       ORDER BY f.created_at DESC
-       LIMIT $2 OFFSET $3`, [userId, validLimit, offset]);
-        const following = result.rows.map((row) => ({
-            id: row.id,
-            username: row.username,
-            full_name: row.full_name,
-            avatar_url: row.avatar_url,
-            is_verified: row.is_verified,
-            followed_at: row.followed_at,
-        }));
-        const total = result.rows.length > 0 ? Number.parseInt(result.rows[0].total_count) : 0;
-        const paginationMeta = utils_1.pagination.getMetadata(validPage, validLimit, total);
-        return {
-            success: true,
-            data: following,
-            pagination: paginationMeta,
-        };
+    static getFollowing(userId_1) {
+        return __awaiter(this, arguments, void 0, function* (userId, page = 1, limit = 20) {
+            const { page: validPage, limit: validLimit } = utils_1.pagination.validateParams(page.toString(), limit.toString());
+            const offset = utils_1.pagination.getOffset(validPage, validLimit);
+            const total = yield Follow.countDocuments({
+                follower_id: userId,
+                status: 'active'
+            }).exec();
+            const follows = yield Follow.find({
+                follower_id: userId,
+                status: 'active'
+            })
+                .sort({ created_at: -1 })
+                .skip(offset)
+                .limit(validLimit)
+                .lean()
+                .exec();
+            const followingIds = follows.map((f) => f.following_id);
+            const users = yield User.find({
+                _id: { $in: followingIds },
+                is_active: true
+            })
+                .select('id username full_name avatar_url is_verified')
+                .lean()
+                .exec();
+            const following = follows.map((follow) => {
+                const user = users.find((u) => u._id.toString() === follow.following_id.toString());
+                return user ? Object.assign(Object.assign({}, user), { followed_at: follow.created_at }) : null;
+            }).filter(Boolean);
+            const paginationMeta = utils_1.pagination.getMetadata(validPage, validLimit, total);
+            return {
+                success: true,
+                data: following,
+                pagination: paginationMeta,
+            };
+        });
     }
     // Accept follow request
-    static async acceptFollowRequest(userId, followerId) {
-        const result = await (0, database_1.query)("UPDATE follows SET status = $1 WHERE follower_id = $2 AND following_id = $3 AND status = $4", ["active", followerId, userId, "pending"]);
-        if (result.rowCount === 0) {
-            throw utils_1.errors.notFound("Follow request not found");
-        }
-        // Clear cache
-        await database_1.cache.del(utils_1.cacheKeys.userFollowers(userId));
-        await database_1.cache.del(utils_1.cacheKeys.userFollowing(followerId));
-        await database_1.cache.del(`${utils_1.cacheKeys.user(userId)}:profile`);
-        await database_1.cache.del(`${utils_1.cacheKeys.user(followerId)}:profile`);
-        // TODO: Send notification
+    static acceptFollowRequest(userId, followerId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const result = yield Follow.updateOne({
+                follower_id: followerId,
+                following_id: userId,
+                status: "pending"
+            }, { status: "active" }).exec();
+            if (result.matchedCount === 0) {
+                throw utils_1.errors.notFound("Follow request not found");
+            }
+            // Clear cache
+            yield database_1.cache.del(utils_1.cacheKeys.userFollowers(userId));
+            yield database_1.cache.del(utils_1.cacheKeys.userFollowing(followerId));
+            yield database_1.cache.del(`${utils_1.cacheKeys.user(userId)}:profile`);
+            yield database_1.cache.del(`${utils_1.cacheKeys.user(followerId)}:profile`);
+            // TODO: Send notification
+        });
     }
     // Reject follow request
-    static async rejectFollowRequest(userId, followerId) {
-        const result = await (0, database_1.query)("DELETE FROM follows WHERE follower_id = $1 AND following_id = $2 AND status = $3", [
-            followerId,
-            userId,
-            "pending",
-        ]);
-        if (result.rowCount === 0) {
-            throw utils_1.errors.notFound("Follow request not found");
-        }
-        // Clear cache
-        await database_1.cache.del(utils_1.cacheKeys.userFollowers(userId));
-        await database_1.cache.del(utils_1.cacheKeys.userFollowing(followerId));
+    static rejectFollowRequest(userId, followerId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const result = yield Follow.deleteOne({
+                follower_id: followerId,
+                following_id: userId,
+                status: "pending"
+            }).exec();
+            if (result.deletedCount === 0) {
+                throw utils_1.errors.notFound("Follow request not found");
+            }
+            // Clear cache
+            yield database_1.cache.del(utils_1.cacheKeys.userFollowers(userId));
+            yield database_1.cache.del(utils_1.cacheKeys.userFollowing(followerId));
+        });
     }
     // Get pending follow requests
-    static async getPendingFollowRequests(userId, page = 1, limit = 20) {
-        const { page: validPage, limit: validLimit } = utils_1.pagination.validateParams(page.toString(), limit.toString());
-        const offset = utils_1.pagination.getOffset(validPage, validLimit);
-        const result = await (0, database_1.query)(`SELECT u.id, u.username, u.full_name, u.avatar_url, u.is_verified,
-              f.created_at as requested_at,
-              COUNT(*) OVER() as total_count
-       FROM follows f
-       JOIN users u ON f.follower_id = u.id
-       WHERE f.following_id = $1 AND f.status = 'pending' AND u.is_active = true
-       ORDER BY f.created_at DESC
-       LIMIT $2 OFFSET $3`, [userId, validLimit, offset]);
-        const requests = result.rows.map((row) => ({
-            id: row.id,
-            username: row.username,
-            full_name: row.full_name,
-            avatar_url: row.avatar_url,
-            is_verified: row.is_verified,
-            requested_at: row.requested_at,
-        }));
-        const total = result.rows.length > 0 ? Number.parseInt(result.rows[0].total_count) : 0;
-        const paginationMeta = utils_1.pagination.getMetadata(validPage, validLimit, total);
-        return {
-            success: true,
-            data: requests,
-            pagination: paginationMeta,
-        };
+    static getPendingFollowRequests(userId_1) {
+        return __awaiter(this, arguments, void 0, function* (userId, page = 1, limit = 20) {
+            const { page: validPage, limit: validLimit } = utils_1.pagination.validateParams(page.toString(), limit.toString());
+            const offset = utils_1.pagination.getOffset(validPage, validLimit);
+            const total = yield Follow.countDocuments({
+                following_id: userId,
+                status: 'pending'
+            }).exec();
+            const follows = yield Follow.find({
+                following_id: userId,
+                status: 'pending'
+            })
+                .sort({ created_at: -1 })
+                .skip(offset)
+                .limit(validLimit)
+                .lean()
+                .exec();
+            const requesterIds = follows.map((f) => f.follower_id);
+            const users = yield User.find({
+                _id: { $in: requesterIds },
+                is_active: true
+            })
+                .select('id username full_name avatar_url is_verified')
+                .lean()
+                .exec();
+            const requests = follows.map((follow) => {
+                const user = users.find((u) => u._id.toString() === follow.follower_id.toString());
+                return user ? Object.assign(Object.assign({}, user), { requested_at: follow.created_at }) : null;
+            }).filter(Boolean);
+            const paginationMeta = utils_1.pagination.getMetadata(validPage, validLimit, total);
+            return {
+                success: true,
+                data: requests,
+                pagination: paginationMeta,
+            };
+        });
     }
 }
 exports.UserService = UserService;

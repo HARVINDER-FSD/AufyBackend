@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { Document, Model } from 'mongoose';
 
 // Define the post schema
 const postSchema = new mongoose.Schema({
@@ -76,17 +76,39 @@ postSchema.pre('save', function(next) {
 postSchema.methods.extractHashtags = function() {
   const hashtagRegex = /#[\w\u0590-\u05ff]+/g;
   const matches = this.caption.match(hashtagRegex);
-  this.hashtags = matches ? matches.map(tag => tag.toLowerCase()) : [];
+  this.hashtags = matches ? matches.map((tag: string) => tag.toLowerCase()) : [];
 };
 
 // Method to extract mentions from caption
 postSchema.methods.extractMentions = function() {
   const mentionRegex = /@[\w\u0590-\u05ff]+/g;
   const matches = this.caption.match(mentionRegex);
-  this.mentions = matches ? matches.map(mention => mention.toLowerCase()) : [];
+  this.mentions = matches ? matches.map((mention: string) => mention.toLowerCase()) : [];
 };
 
+export interface IPost extends Document {
+  user_id: mongoose.Types.ObjectId;
+  caption: string;
+  media_urls: string[];
+  media_type: 'text' | 'image' | 'video' | 'carousel';
+  location?: string;
+  likes_count: number;
+  comments_count: number;
+  shares_count: number;
+  is_archived: boolean;
+  is_deleted: boolean;
+  hashtags: string[];
+  mentions: string[];
+  created_at: Date;
+  updated_at: Date;
+
+  extractHashtags(): void;
+  extractMentions(): void;
+}
+
+export interface IPostModel extends Model<IPost> {}
+
 // Create the model if it doesn't exist or get it if it does
-const Post = mongoose.models.Post || mongoose.model('Post', postSchema);
+const Post = (mongoose.models.Post as IPostModel) || mongoose.model<IPost, IPostModel>('Post', postSchema);
 
 export default Post;

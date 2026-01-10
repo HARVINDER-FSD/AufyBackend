@@ -1,4 +1,13 @@
 "use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const reel_1 = require("../services/reel");
@@ -6,13 +15,13 @@ const auth_1 = require("../middleware/auth");
 const database_1 = require("../lib/database");
 const router = (0, express_1.Router)();
 // Get trending posts
-router.get("/trending", async (req, res) => {
+router.get("/trending", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { category = 'all', limit = 20 } = req.query;
         const limitNum = Number.parseInt(limit) || 20;
-        const db = await (0, database_1.getDatabase)();
+        const db = yield (0, database_1.getDatabase)();
         // Get recent posts with most likes
-        const posts = await db.collection('posts')
+        const posts = yield db.collection('posts')
             .aggregate([
             {
                 $match: {
@@ -74,7 +83,7 @@ router.get("/trending", async (req, res) => {
         ])
             .toArray();
         // Get trending reels
-        const reels = await db.collection('reels')
+        const reels = yield db.collection('reels')
             .aggregate([
             {
                 $match: {
@@ -131,15 +140,15 @@ router.get("/trending", async (req, res) => {
             error: error.message || 'Failed to fetch trending content'
         });
     }
-});
+}));
 // Get suggested users
-router.get("/suggested-users", async (req, res) => {
+router.get("/suggested-users", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { limit = 10 } = req.query;
         const limitNum = Number.parseInt(limit) || 10;
-        const db = await (0, database_1.getDatabase)();
+        const db = yield (0, database_1.getDatabase)();
         // Get users with most followers (simple suggestion algorithm)
-        const users = await db.collection('users')
+        const users = yield db.collection('users')
             .aggregate([
             {
                 $lookup: {
@@ -185,12 +194,13 @@ router.get("/suggested-users", async (req, res) => {
             data: { users: [] }
         });
     }
-});
+}));
 // Get explore feed
-router.get("/feed", auth_1.authenticateToken, async (req, res) => {
+router.get("/feed", auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
     try {
         const { page, limit } = req.query;
-        const result = await reel_1.ReelService.getReelsFeed(req.user?.userId, Number.parseInt(page) || 1, Number.parseInt(limit) || 20);
+        const result = yield reel_1.ReelService.getReelsFeed((_a = req.user) === null || _a === void 0 ? void 0 : _a.userId, Number.parseInt(page) || 1, Number.parseInt(limit) || 20);
         res.json(result);
     }
     catch (error) {
@@ -199,5 +209,5 @@ router.get("/feed", auth_1.authenticateToken, async (req, res) => {
             error: error.message,
         });
     }
-});
+}));
 exports.default = router;

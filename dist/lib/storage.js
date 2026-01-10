@@ -1,4 +1,13 @@
 "use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -17,57 +26,65 @@ cloudinary_1.v2.config({
 });
 class StorageService {
     // Upload a single file to Cloudinary
-    static async uploadFile(fileBuffer, fileName, mimeType, userId, folder = "posts") {
-        // Validate type
-        if (!utils_1.file.isImage(mimeType) && !utils_1.file.isVideo(mimeType)) {
-            throw utils_1.errors.badRequest("Invalid file type. Only images and videos are allowed.");
-        }
-        // Validate size
-        const maxSize = utils_1.file.isImage(mimeType) ? config_1.config.upload.maxImageSize : config_1.config.upload.maxVideoSize;
-        if (fileBuffer.length > maxSize) {
-            throw utils_1.errors.badRequest(`File too large. Max ${Math.round(maxSize / 1024 / 1024)}MB`);
-        }
-        const extension = utils_1.file.getExtension(fileName);
-        const publicId = `${folder}/${userId}/${(0, uuid_1.v4)()}.${extension}`.replace(/\.[^/.]+$/, "");
-        try {
-            const result = await new Promise((resolve, reject) => {
-                const stream = cloudinary_1.v2.uploader.upload_stream({ folder, resource_type: "auto", public_id: publicId }, (error, result) => (error ? reject(error) : resolve(result)));
-                stream.end(fileBuffer);
-            });
-            return { url: result.secure_url, publicId: result.public_id };
-        }
-        catch (error) {
-            console.error("Cloudinary upload error:", error);
-            throw utils_1.errors.internal("Failed to upload file to Cloudinary");
-        }
+    static uploadFile(fileBuffer_1, fileName_1, mimeType_1, userId_1) {
+        return __awaiter(this, arguments, void 0, function* (fileBuffer, fileName, mimeType, userId, folder = "posts") {
+            // Validate type
+            if (!utils_1.file.isImage(mimeType) && !utils_1.file.isVideo(mimeType)) {
+                throw utils_1.errors.badRequest("Invalid file type. Only images and videos are allowed.");
+            }
+            // Validate size
+            const maxSize = config_1.config.upload.maxFileSize;
+            if (fileBuffer.length > maxSize) {
+                throw utils_1.errors.badRequest(`File too large. Max ${Math.round(maxSize / 1024 / 1024)}MB`);
+            }
+            const extension = utils_1.file.getExtension(fileName);
+            const publicId = `${folder}/${userId}/${(0, uuid_1.v4)()}.${extension}`.replace(/\.[^/.]+$/, "");
+            try {
+                const result = yield new Promise((resolve, reject) => {
+                    const stream = cloudinary_1.v2.uploader.upload_stream({ folder, resource_type: "auto", public_id: publicId }, (error, result) => (error ? reject(error) : resolve(result)));
+                    stream.end(fileBuffer);
+                });
+                return { url: result.secure_url, publicId: result.public_id };
+            }
+            catch (error) {
+                console.error("Cloudinary upload error:", error);
+                throw utils_1.errors.internal("Failed to upload file to Cloudinary");
+            }
+        });
     }
     // Upload multiple files
-    static async uploadMultipleFiles(files, userId, folder = "posts") {
-        if (files.length > 10)
-            throw utils_1.errors.badRequest("Max 10 files per upload");
-        return Promise.all(files.map((f) => this.uploadFile(f.buffer, f.originalname, f.mimetype, userId, folder)));
+    static uploadMultipleFiles(files_1, userId_1) {
+        return __awaiter(this, arguments, void 0, function* (files, userId, folder = "posts") {
+            if (files.length > 10)
+                throw utils_1.errors.badRequest("Max 10 files per upload");
+            return Promise.all(files.map((f) => this.uploadFile(f.buffer, f.originalname, f.mimetype, userId, folder)));
+        });
     }
     // Delete a single file
-    static async deleteFile(publicId) {
-        try {
-            await cloudinary_1.v2.uploader.destroy(publicId, { resource_type: "auto" });
-        }
-        catch (error) {
-            console.error("Cloudinary delete error:", error);
-            throw utils_1.errors.internal("Failed to delete file");
-        }
+    static deleteFile(publicId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            try {
+                yield cloudinary_1.v2.uploader.destroy(publicId, { resource_type: "auto" });
+            }
+            catch (error) {
+                console.error("Cloudinary delete error:", error);
+                throw utils_1.errors.internal("Failed to delete file");
+            }
+        });
     }
     // Delete multiple files
-    static async deleteMultipleFiles(publicIds) {
-        if (!publicIds.length)
-            return;
-        try {
-            await cloudinary_1.v2.api.delete_resources(publicIds, { resource_type: "auto" });
-        }
-        catch (error) {
-            console.error("Cloudinary bulk delete error:", error);
-            throw utils_1.errors.internal("Failed to delete files");
-        }
+    static deleteMultipleFiles(publicIds) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (!publicIds.length)
+                return;
+            try {
+                yield cloudinary_1.v2.api.delete_resources(publicIds, { resource_type: "auto" });
+            }
+            catch (error) {
+                console.error("Cloudinary bulk delete error:", error);
+                throw utils_1.errors.internal("Failed to delete files");
+            }
+        });
     }
     // Generate a video thumbnail (first frame)
     static generateVideoThumbnail(url, width = 300, height = 200) {

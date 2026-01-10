@@ -25,7 +25,7 @@ export const razorpayService = {
         amount: amount * 100, // Convert to paise
         currency,
         receipt,
-        payment_capture: 1,
+        payment_capture: 1 as any,
       });
       return order;
     } catch (error) {
@@ -61,7 +61,7 @@ export const razorpayService = {
     }
     try {
       const plan = await razorpay.plans.create({
-        period: interval,
+        period: interval as "daily" | "weekly" | "monthly" | "yearly",
         interval: 1,
         item: {
           name: 'Anufy Premium',
@@ -108,21 +108,5 @@ export const razorpayService = {
       console.error('Razorpay cancel subscription error:', error);
       throw error;
     }
-  },
-
-  // Fetch subscription details
-  async fetchSubscription(subscriptionId: string) {
-    if (!razorpay) {
-      throw new Error('Razorpay not configured');
-    }
-    try {
-      const subscription = await razorpay.subscriptions.fetch(subscriptionId);
-      return subscription;
-    } catch (error) {
-      console.error('Razorpay fetch subscription error:', error);
-      throw error;
-    }
-  },
+  }
 };
-
-export default razorpayService;

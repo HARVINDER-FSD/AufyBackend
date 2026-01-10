@@ -1,197 +1,151 @@
 "use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.WebSocketService = void 0;
-exports.initializeWebSocket = initializeWebSocket;
-exports.getWebSocketService = getWebSocketService;
+exports.getWebSocketService = exports.initializeWebSocket = exports.WebSocketService = void 0;
 const socket_io_1 = require("socket.io");
-const utils_1 = require("./utils");
-const database_1 = require("./database");
-const config_1 = require("./config");
+const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
+const message_1 = __importDefault(require("../models/message"));
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+// Store active connections
+const activeUsers = new Map(); // userId -> socketId
+const userSockets = new Map(); // userId -> socket
 class WebSocketService {
-    constructor(server) {
-        this.connectedUsers = new Map(); // userId -> Set of socketIds
-        this.io = new socket_io_1.Server(server, {
-            cors: {
-                origin: "*",
-                methods: ["GET", "POST"],
-            },
-            pingInterval: config_1.config.websocket.pingInterval,
-            pingTimeout: config_1.config.websocket.pingTimeout,
-        });
-        this.setupMiddleware();
-        this.setupEventHandlers();
-        this.setupRedisSubscription();
+    constructor() {
+        this.io = null;
     }
-    setupMiddleware() {
+    static getInstance() {
+        if (!WebSocketService.instance) {
+            WebSocketService.instance = new WebSocketService();
+        }
+        return WebSocketService.instance;
+    }
+    initialize(httpServer) {
+        this.io = new socket_io_1.Server(httpServer, {
+            cors: {
+                origin: '*',
+                methods: ['GET', 'POST'],
+                credentials: true,
+            },
+            transports: ['websocket', 'polling'],
+            pingTimeout: 60000,
+            pingInterval: 25000,
+        });
         // Authentication middleware
-        this.io.use((socket, next) => {
+        this.io.use((socket, next) => __awaiter(this, void 0, void 0, function* () {
+            var _a;
             try {
-                const authToken = socket.handshake.auth.token || socket.handshake.headers.authorization?.split(" ")[1];
-                if (!authToken) {
-                    return next(new Error("Authentication token required"));
+                const token = socket.handshake.auth.token || ((_a = socket.handshake.headers.authorization) === null || _a === void 0 ? void 0 : _a.replace('Bearer ', ''));
+                if (!token) {
+                    return next(new Error('Authentication error: No token provided'));
                 }
-                const payload = utils_1.token.verify(authToken);
-                socket.userId = payload.userId;
-                socket.username = payload.username;
+                const decoded = jsonwebtoken_1.default.verify(token, JWT_SECRET);
+                socket.data.userId = decoded.userId;
+                console.log(`✅ User ${decoded.userId} authenticated`);
                 next();
             }
             catch (error) {
-                next(new Error("Invalid authentication token"));
+                console.error('❌ WebSocket auth error:', error);
+                next(new Error('Authentication error'));
             }
-        });
-    }
-    setupEventHandlers() {
-        this.io.on("connection", (socket) => {
-            console.log(`User ${socket.username} connected with socket ${socket.id}`);
-            // Track connected user
-            if (socket.userId) {
-                if (!this.connectedUsers.has(socket.userId)) {
-                    this.connectedUsers.set(socket.userId, new Set());
-                }
-                this.connectedUsers.get(socket.userId).add(socket.id);
-                // Join user's personal room
-                socket.join(`user:${socket.userId}`);
-                // Broadcast user online status
-                this.broadcastUserStatus(socket.userId, "online");
-            }
-            // Handle joining conversation rooms
-            socket.on("join_conversation", (conversationId) => {
-                socket.join(`conversation:${conversationId}`);
-                console.log(`User ${socket.username} joined conversation ${conversationId}`);
+        }));
+        // Connection handler
+        this.io.on('connection', (socket) => {
+            const userId = socket.data.userId;
+            console.log(`🔌 User connected: ${userId} (${socket.id})`);
+            // Store user connection
+            activeUsers.set(userId, socket.id);
+            userSockets.set(userId, socket);
+            // Broadcast user online status
+            socket.broadcast.emit('user:online', { userId });
+            // Join user's personal room
+            socket.join(`user:${userId}`);
+            // Handle joining chat rooms
+            socket.on('chat:join', (data) => __awaiter(this, void 0, void 0, function* () {
+                const { chatId } = data;
+                socket.join(`chat:${chatId}`);
+                console.log(`👥 User ${userId} joined chat ${chatId}`);
+            }));
+            // Handle leaving chat rooms
+            socket.on('chat:leave', (data) => {
+                const { chatId } = data;
+                socket.leave(`chat:${chatId}`);
+                console.log(`👋 User ${userId} left chat ${chatId}`);
             });
-            // Handle leaving conversation rooms
-            socket.on("leave_conversation", (conversationId) => {
-                socket.leave(`conversation:${conversationId}`);
-                console.log(`User ${socket.username} left conversation ${conversationId}`);
-            });
-            // Handle typing indicators
-            socket.on("typing_start", (data) => {
-                socket.to(`conversation:${data.conversationId}`).emit("user_typing", {
-                    userId: socket.userId,
-                    username: socket.username,
-                    conversationId: data.conversationId,
-                });
-            });
-            socket.on("typing_stop", (data) => {
-                socket.to(`conversation:${data.conversationId}`).emit("user_stopped_typing", {
-                    userId: socket.userId,
-                    username: socket.username,
-                    conversationId: data.conversationId,
-                });
-            });
-            // Handle message read receipts
-            socket.on("mark_messages_read", (data) => {
-                // Broadcast read receipt to other participants
-                socket.to(`conversation:${data.conversationId}`).emit("messages_read", {
-                    userId: socket.userId,
-                    username: socket.username,
-                    conversationId: data.conversationId,
-                    messageIds: data.messageIds,
-                    readAt: new Date(),
-                });
-            });
-            // Handle user status updates
-            socket.on("update_status", (status) => {
-                if (socket.userId) {
-                    this.broadcastUserStatus(socket.userId, status);
-                }
-            });
-            // Handle disconnection
-            socket.on("disconnect", () => {
-                console.log(`User ${socket.username} disconnected`);
-                if (socket.userId) {
-                    const userSockets = this.connectedUsers.get(socket.userId);
-                    if (userSockets) {
-                        userSockets.delete(socket.id);
-                        if (userSockets.size === 0) {
-                            this.connectedUsers.delete(socket.userId);
-                            // Broadcast user offline status after a delay
-                            setTimeout(() => {
-                                if (!this.connectedUsers.has(socket.userId)) {
-                                    this.broadcastUserStatus(socket.userId, "offline");
-                                }
-                            }, 5000); // 5 second delay to handle quick reconnections
-                        }
+            // Handle sending messages
+            socket.on('message:send', (data) => __awaiter(this, void 0, void 0, function* () {
+                var _a, _b;
+                try {
+                    const { chatId, recipientId, content, type = 'text', mediaUrl, replyTo } = data;
+                    // Save message to database
+                    const message = new message_1.default({
+                        conversation_id: chatId,
+                        sender_id: userId,
+                        content,
+                        message_type: type,
+                        media_url: mediaUrl,
+                        reply_to_id: replyTo,
+                        status: 'sent',
+                    });
+                    yield message.save();
+                    // Populate sender info for real-time update
+                    yield message.populate('sender_id', 'username full_name avatar_url');
+                    if (replyTo) {
+                        yield message.populate('reply_to_id');
+                    }
+                    // Emit to chat room
+                    (_a = this.io) === null || _a === void 0 ? void 0 : _a.to(`chat:${chatId}`).emit('message:received', message);
+                    // If 1-on-1 and recipient not in room, emit to their personal room
+                    if (recipientId) {
+                        (_b = this.io) === null || _b === void 0 ? void 0 : _b.to(`user:${recipientId}`).emit('message:new', message);
                     }
                 }
+                catch (error) {
+                    console.error('Error sending message:', error);
+                    socket.emit('error', { message: 'Failed to send message' });
+                }
+            }));
+            // Handle disconnect
+            socket.on('disconnect', () => {
+                console.log(`User disconnected: ${userId}`);
+                activeUsers.delete(userId);
+                userSockets.delete(userId);
+                socket.broadcast.emit('user:offline', { userId });
             });
         });
     }
-    setupRedisSubscription() {
-        // Subscribe to Redis channels for cross-server communication
-        database_1.redisSub.subscribe("chat_message", "notification", "user_status");
-        database_1.redisSub.on("message", (channel, message) => {
-            try {
-                const data = JSON.parse(message);
-                switch (channel) {
-                    case "chat_message":
-                        this.handleChatMessage(data);
-                        break;
-                    case "notification":
-                        this.handleNotification(data);
-                        break;
-                    case "user_status":
-                        this.handleUserStatusUpdate(data);
-                        break;
-                }
-            }
-            catch (error) {
-                console.error("Error processing Redis message:", error);
-            }
-        });
-    }
-    handleChatMessage(data) {
-        // Emit message to conversation participants
-        this.io.to(`conversation:${data.conversationId}`).emit("new_message", data);
-    }
-    handleNotification(data) {
-        // Send notification to specific user
-        this.io.to(`user:${data.userId}`).emit("notification", data);
-    }
-    handleUserStatusUpdate(data) {
-        // Broadcast user status to all connected clients
-        this.io.emit("user_status_update", data);
-    }
-    // Public methods for sending messages
-    sendMessageToConversation(conversationId, message) {
-        // Publish to Redis for cross-server support
-        database_1.redisPub.publish("chat_message", JSON.stringify({ ...message, conversationId }));
+    getIO() {
+        return this.io;
     }
     sendNotificationToUser(userId, notification) {
-        // Publish to Redis for cross-server support
-        database_1.redisPub.publish("notification", JSON.stringify({ ...notification, userId }));
+        if (this.io) {
+            this.io.to(`user:${userId}`).emit('notification:new', notification);
+        }
     }
-    broadcastUserStatus(userId, status) {
-        const statusData = {
-            userId,
-            status,
-            timestamp: new Date(),
-        };
-        // Publish to Redis for cross-server support
-        database_1.redisPub.publish("user_status", JSON.stringify(statusData));
-    }
-    isUserOnline(userId) {
-        return this.connectedUsers.has(userId);
-    }
-    getOnlineUsers() {
-        return Array.from(this.connectedUsers.keys());
-    }
-    getUserSocketCount(userId) {
-        return this.connectedUsers.get(userId)?.size || 0;
+    sendMessageToConversation(conversationId, message) {
+        if (this.io) {
+            this.io.to(`chat:${conversationId}`).emit('message:new', message);
+        }
     }
 }
 exports.WebSocketService = WebSocketService;
-// Export singleton instance
-let wsService;
-function initializeWebSocket(server) {
-    if (!wsService) {
-        wsService = new WebSocketService(server);
-    }
-    return wsService;
-}
-function getWebSocketService() {
-    if (!wsService) {
-        throw new Error("WebSocket service not initialized");
-    }
-    return wsService;
-}
+const initializeWebSocket = (httpServer) => {
+    const service = WebSocketService.getInstance();
+    service.initialize(httpServer);
+    return service;
+};
+exports.initializeWebSocket = initializeWebSocket;
+const getWebSocketService = () => {
+    return WebSocketService.getInstance();
+};
+exports.getWebSocketService = getWebSocketService;

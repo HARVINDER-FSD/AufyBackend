@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { Document, Model } from 'mongoose';
 
 // Define the follow schema
 const followSchema = new mongoose.Schema({
@@ -36,6 +36,23 @@ followSchema.pre('save', function(next) {
   }
   next();
 });
+
+export interface IFollow extends Document {
+  follower_id: mongoose.Types.ObjectId;
+  following_id: mongoose.Types.ObjectId;
+  status: 'active' | 'pending';
+  created_at: Date;
+}
+
+export interface IFollowModel extends Model<IFollow> {
+  isFollowing(followerId: string, followingId: string): Promise<IFollow | null>;
+  getFollowersCount(userId: string): Promise<number>;
+  getFollowingCount(userId: string): Promise<number>;
+  getFollowers(userId: string, limit?: number, skip?: number): Promise<IFollow[]>;
+  getFollowing(userId: string, limit?: number, skip?: number): Promise<IFollow[]>;
+  followUser(followerId: string, followingId: string): Promise<IFollow>;
+  unfollowUser(followerId: string, followingId: string): Promise<IFollow | null>;
+}
 
 // Method to check if user A follows user B
 followSchema.statics.isFollowing = function(followerId: string, followingId: string) {
@@ -141,6 +158,6 @@ followSchema.statics.unfollowUser = async function(followerId: string, following
 };
 
 // Create the model if it doesn't exist or get it if it does
-const Follow = mongoose.models.Follow || mongoose.model('Follow', followSchema);
+const Follow = (mongoose.models.Follow as IFollowModel) || mongoose.model<IFollow, IFollowModel>('Follow', followSchema);
 
 export default Follow;

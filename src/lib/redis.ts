@@ -1,21 +1,20 @@
 import { Redis } from '@upstash/redis';
+import IORedis from 'ioredis';
 
 // Initialize Redis client
-const redis = new Redis({
+const redis = process.env.UPSTASH_REDIS_REST_URL ? new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL!,
   token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-});
-
-// Fallback to local Redis if Upstash is not configured
-const localRedis = process.env.REDIS_URL ? new Redis({
-  url: process.env.REDIS_URL,
 }) : null;
 
-const client = redis || localRedis;
+// Fallback to local Redis if Upstash is not configured
+const localRedis = process.env.REDIS_URL ? new IORedis(process.env.REDIS_URL) : null;
+
+const client: any = redis || localRedis;
 
 export class CacheService {
   private static instance: CacheService;
-  private redis: Redis;
+  private redis: any;
 
   private constructor() {
     this.redis = client!;

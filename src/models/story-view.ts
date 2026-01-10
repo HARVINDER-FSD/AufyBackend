@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { Document, Model } from 'mongoose';
 
 // Story View Schema - Track who viewed each story
 const storyViewSchema = new mongoose.Schema({
@@ -26,6 +26,14 @@ storyViewSchema.index({ viewer_id: 1, viewed_at: -1 });
 // TTL index - auto-delete views after 30 days
 storyViewSchema.index({ viewed_at: 1 }, { expireAfterSeconds: 2592000 });
 
-const StoryView = mongoose.models.StoryView || mongoose.model('StoryView', storyViewSchema);
+export interface IStoryView extends Document {
+  story_id: mongoose.Types.ObjectId;
+  viewer_id: mongoose.Types.ObjectId;
+  viewed_at: Date;
+}
+
+export interface IStoryViewModel extends Model<IStoryView> {}
+
+const StoryView = (mongoose.models.StoryView as IStoryViewModel) || mongoose.model<IStoryView, IStoryViewModel>('StoryView', storyViewSchema);
 
 export default StoryView;

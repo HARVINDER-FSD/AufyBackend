@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { Document, Model } from 'mongoose';
 
 const subscriptionSchema = new mongoose.Schema({
   userId: {
@@ -50,6 +50,22 @@ const subscriptionSchema = new mongoose.Schema({
   },
 });
 
-const Subscription = mongoose.models.Subscription || mongoose.model('Subscription', subscriptionSchema);
+export interface ISubscription extends Document {
+  userId: mongoose.Types.ObjectId;
+  razorpaySubscriptionId: string;
+  razorpayPlanId: string;
+  status: 'created' | 'active' | 'paused' | 'cancelled' | 'expired';
+  startDate: Date;
+  endDate: Date;
+  amount: number;
+  currency: string;
+  autoRenew: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ISubscriptionModel extends Model<ISubscription> {}
+
+const Subscription = (mongoose.models.Subscription as ISubscriptionModel) || mongoose.model<ISubscription, ISubscriptionModel>('Subscription', subscriptionSchema);
 
 export default Subscription;

@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { Document, Model } from 'mongoose';
 import bcrypt from 'bcryptjs';
 
 // Define the user schema
@@ -254,6 +254,50 @@ userSchema.pre('save', async function(next) {
   }
 });
 
+export interface IUser extends Document {
+  username: string;
+  email: string;
+  phone?: string;
+  phone_verified: boolean;
+  password?: string;
+  full_name: string;
+  date_of_birth: Date;
+  bio: string;
+  links: string[];
+  avatar_url: string;
+  is_verified: boolean;
+  badge_type?: 'blue' | 'gold' | 'purple' | 'green' | 'gray' | null;
+  verification_type?: 'blue' | 'gold' | 'purple' | 'green' | 'gray' | null;
+  verification_date?: Date;
+  verification_status: 'none' | 'pending' | 'approved' | 'rejected';
+  premium_tier: 'none' | 'premium';
+  premium_status: 'none' | 'active' | 'cancelled' | 'expired';
+  premium_start_date?: Date;
+  premium_end_date?: Date;
+  premium_auto_renew: boolean;
+  is_private: boolean;
+  is_active: boolean;
+  followers_count: number;
+  following_count: number;
+  secretCrushCount: number;
+  maxSecretCrushes: number;
+  isPremium: boolean;
+  posts_count: number;
+  fcmToken?: string;
+  pushToken?: string;
+  pushTokenPlatform?: string;
+  pushTokenUpdatedAt?: Date;
+  settings: any; // Simplified for now, can be more specific
+  resetPasswordToken?: string;
+  resetPasswordExpires?: Date;
+  created_at: Date;
+  updated_at: Date;
+
+  comparePassword(candidatePassword: string): Promise<boolean>;
+}
+
+export interface IUserModel extends Model<IUser> {}
+
 // Method to compare password for login
 userSchema.methods.comparePassword = async function(candidatePassword: string): Promise<boolean> {
   return bcrypt.compare(candidatePassword, this.password);
@@ -267,6 +311,6 @@ userSchema.methods.toJSON = function() {
 };
 
 // Create the model if it doesn't exist or get it if it does
-const User = mongoose.models.User || mongoose.model('User', userSchema);
+const User = (mongoose.models.User as IUserModel) || mongoose.model<IUser, IUserModel>('User', userSchema);
 
 export default User;

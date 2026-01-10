@@ -1,5 +1,14 @@
 "use strict";
 // Mobile optimization utilities
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.hasGoodPerformance = exports.preloadImage = exports.throttle = exports.debounce = exports.fetchWithTimeout = exports.shouldReduceMotion = exports.lazyLoadConfig = exports.isSlowConnection = exports.isMobile = void 0;
 const isMobile = () => {
@@ -12,7 +21,7 @@ const isSlowConnection = () => {
     if (typeof navigator === 'undefined' || !('connection' in navigator))
         return false;
     const conn = navigator.connection;
-    return conn?.effectiveType === 'slow-2g' || conn?.effectiveType === '2g' || conn?.saveData;
+    return (conn === null || conn === void 0 ? void 0 : conn.effectiveType) === 'slow-2g' || (conn === null || conn === void 0 ? void 0 : conn.effectiveType) === '2g' || (conn === null || conn === void 0 ? void 0 : conn.saveData);
 };
 exports.isSlowConnection = isSlowConnection;
 // Lazy load images on mobile
@@ -28,14 +37,11 @@ const shouldReduceMotion = () => {
 };
 exports.shouldReduceMotion = shouldReduceMotion;
 // Optimize fetch for mobile
-const fetchWithTimeout = async (url, options = {}, timeout = 8000) => {
+const fetchWithTimeout = (url_1, ...args_1) => __awaiter(void 0, [url_1, ...args_1], void 0, function* (url, options = {}, timeout = 8000) {
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), timeout);
     try {
-        const response = await fetch(url, {
-            ...options,
-            signal: controller.signal,
-        });
+        const response = yield fetch(url, Object.assign(Object.assign({}, options), { signal: controller.signal }));
         clearTimeout(id);
         return response;
     }
@@ -43,7 +49,7 @@ const fetchWithTimeout = async (url, options = {}, timeout = 8000) => {
         clearTimeout(id);
         throw error;
     }
-};
+});
 exports.fetchWithTimeout = fetchWithTimeout;
 // Debounce for mobile input
 const debounce = (func, wait) => {

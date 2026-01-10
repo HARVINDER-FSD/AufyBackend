@@ -2,7 +2,7 @@ import express from 'express';
 import { ObjectId } from 'mongodb';
 import { getDatabase } from '../lib/database';
 import { authenticateToken } from '../middleware/auth';
-import razorpayService from '../services/razorpay';
+import { razorpayService } from '../services/razorpay';
 import Payment from '../models/payment';
 import Subscription from '../models/subscription';
 

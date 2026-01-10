@@ -1,6 +1,15 @@
 "use strict";
 // Spotify Authentication & Web Playback SDK
 // Handles user login and full song playback
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.redirectToSpotifyAuth = redirectToSpotifyAuth;
 exports.isSpotifyAuthenticated = isSpotifyAuthenticated;
@@ -65,39 +74,43 @@ function clearSpotifyTokens() {
     localStorage.removeItem('spotify_auth_state');
 }
 // Refresh access token
-async function refreshSpotifyToken() {
-    const tokens = getSpotifyTokens();
-    if (!tokens?.refresh_token)
-        return null;
-    try {
-        const response = await fetch('/api/spotify/refresh', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ refresh_token: tokens.refresh_token })
-        });
-        if (!response.ok)
-            throw new Error('Token refresh failed');
-        const data = await response.json();
-        setSpotifyTokens({ ...tokens, ...data });
-        return data.access_token;
-    }
-    catch (error) {
-        console.error('Token refresh error:', error);
-        clearSpotifyTokens();
-        return null;
-    }
+function refreshSpotifyToken() {
+    return __awaiter(this, void 0, void 0, function* () {
+        const tokens = getSpotifyTokens();
+        if (!(tokens === null || tokens === void 0 ? void 0 : tokens.refresh_token))
+            return null;
+        try {
+            const response = yield fetch('/api/spotify/refresh', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ refresh_token: tokens.refresh_token })
+            });
+            if (!response.ok)
+                throw new Error('Token refresh failed');
+            const data = yield response.json();
+            setSpotifyTokens(Object.assign(Object.assign({}, tokens), data));
+            return data.access_token;
+        }
+        catch (error) {
+            console.error('Token refresh error:', error);
+            clearSpotifyTokens();
+            return null;
+        }
+    });
 }
 // Get valid access token (refresh if needed)
-async function getValidAccessToken() {
-    const tokens = getSpotifyTokens();
-    if (!tokens)
-        return null;
-    // Check if token is expired (with 5 min buffer)
-    const expiryTime = parseInt(localStorage.getItem('spotify_token_expiry') || '0');
-    const now = Date.now();
-    if (now >= expiryTime - 300000) {
-        // Token expired or expiring soon, refresh it
-        return await refreshSpotifyToken();
-    }
-    return tokens.access_token;
+function getValidAccessToken() {
+    return __awaiter(this, void 0, void 0, function* () {
+        const tokens = getSpotifyTokens();
+        if (!tokens)
+            return null;
+        // Check if token is expired (with 5 min buffer)
+        const expiryTime = parseInt(localStorage.getItem('spotify_token_expiry') || '0');
+        const now = Date.now();
+        if (now >= expiryTime - 300000) {
+            // Token expired or expiring soon, refresh it
+            return yield refreshSpotifyToken();
+        }
+        return tokens.access_token;
+    });
 }

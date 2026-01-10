@@ -1,15 +1,15 @@
-import { query } from "../lib/database"
 import { getWebSocketService } from "../lib/websocket"
 import type { Notification, PaginatedResponse } from "../lib/types"
 import { pagination, errors } from "../lib/utils"
 import NotificationModel from "../models/notification"
+import UserModel from "../models/user"
 
 export class NotificationService {
-  // Get unread count (MongoDB version)
+  // Get unread count
   static async getUnreadCount(userId: string): Promise<number> {
     try {
       const count = await NotificationModel.countDocuments({
-        recipient_id: userId,
+        user_id: userId,
         is_read: false
       });
       return count;
@@ -27,23 +27,32 @@ export class NotificationService {
     content?: string,
     data?: any,
   ): Promise<Notification> {
-    const result = await query(
-      `INSERT INTO notifications (user_id, type, title, content, data) 
-       VALUES ($1, $2, $3, $4, $5) 
-       RETURNING id, user_id, type, title, content, data, is_read, created_at`,
-      [userId, type, title, content, data ? JSON.stringify(data) : null],
-    )
+    const notification = await NotificationModel.create({
+        user_id: userId,
+        type,
+        title,
+        content,
+        data,
+        is_read: false
+    });
 
-    const notification: Notification = {
-      ...result.rows[0],
-      data: result.rows[0].data ? JSON.parse(result.rows[0].data) : null,
-    }
+    const notifObj: Notification = {
+      id: notification._id.toString(),
+      user_id: notification.user_id.toString(),
+      type: notification.type as any,
+      title: notification.title,
+      content: notification.content,
+      data: notification.data,
+      is_read: notification.is_read,
+      created_at: notification.created_at,
+      updated_at: notification.updated_at
+    };
 
     // Send real-time notification
     const wsService = getWebSocketService()
-    wsService.sendNotificationToUser(userId, notification)
+    wsService.sendNotificationToUser(userId, notifObj)
 
-    return notification
+    return notifObj
   }
 
   // Get user notifications
@@ -54,32 +63,32 @@ export class NotificationService {
     unreadOnly = false,
   ): Promise<PaginatedResponse<Notification>> {
     const { page: validPage, limit: validLimit } = pagination.validateParams(page.toString(), limit.toString())
-    const offset = pagination.getOffset(validPage, validLimit)
+    const skip = (validPage - 1) * validLimit;
 
-    const whereClause = unreadOnly ? "WHERE user_id = $1 AND is_read = false" : "WHERE user_id = $1"
+    const query: any = { user_id: userId };
+    if (unreadOnly) {
+        query.is_read = false;
+    }
 
-    const result = await query(
-      `SELECT id, user_id, type, title, content, data, is_read, created_at,
-              COUNT(*) OVER() as total_count
-       FROM notifications
-       ${whereClause}
-       ORDER BY created_at DESC
-       LIMIT $2 OFFSET $3`,
-      [userId, validLimit, offset],
-    )
+    const total = await NotificationModel.countDocuments(query);
+    
+    const docs = await NotificationModel.find(query)
+        .sort({ created_at: -1 })
+        .skip(skip)
+        .limit(validLimit);
 
-    const notifications = result.rows.map((row) => ({
-      id: row.id,
-      user_id: row.user_id,
-      type: row.type,
-      title: row.title,
-      content: row.content,
-      data: row.data ? JSON.parse(row.data) : null,
-      is_read: row.is_read,
-      created_at: row.created_at,
+    const notifications = docs.map((doc) => ({
+      id: doc._id.toString(),
+      user_id: doc.user_id.toString(),
+      type: doc.type as any,
+      title: doc.title,
+      content: doc.content,
+      data: doc.data,
+      is_read: doc.is_read,
+      created_at: doc.created_at,
+      updated_at: doc.updated_at
     }))
 
-    const total = result.rows.length > 0 ? Number.parseInt(result.rows[0].total_count) : 0
     const paginationMeta = pagination.getMetadata(validPage, validLimit, total)
 
     return {
@@ -91,47 +100,40 @@ export class NotificationService {
 
   // Mark notification as read
   static async markAsRead(notificationId: string, userId: string): Promise<void> {
-    const result = await query("UPDATE notifications SET is_read = true WHERE id = $1 AND user_id = $2", [
-      notificationId,
-      userId,
-    ])
+    const result = await NotificationModel.updateOne(
+        { _id: notificationId, user_id: userId },
+        { is_read: true }
+    );
 
-    if (result.rowCount === 0) {
+    if (result.matchedCount === 0) {
       throw errors.notFound("Notification not found")
     }
   }
 
   // Mark all notifications as read
   static async markAllAsRead(userId: string): Promise<void> {
-    await query("UPDATE notifications SET is_read = true WHERE user_id = $1 AND is_read = false", [userId])
+    await NotificationModel.updateMany(
+        { user_id: userId, is_read: false },
+        { is_read: true }
+    );
   }
 
   // Delete notification
   static async deleteNotification(notificationId: string, userId: string): Promise<void> {
-    const result = await query("DELETE FROM notifications WHERE id = $1 AND user_id = $2", [notificationId, userId])
+    const result = await NotificationModel.deleteOne({ _id: notificationId, user_id: userId });
 
-    if (result.rowCount === 0) {
+    if (result.deletedCount === 0) {
       throw errors.notFound("Notification not found")
     }
-  }
-
-  // Get unread count
-  static async getUnreadCount(userId: string): Promise<number> {
-    const result = await query("SELECT COUNT(*) as count FROM notifications WHERE user_id = $1 AND is_read = false", [
-      userId,
-    ])
-
-    return Number.parseInt(result.rows[0].count)
   }
 
   // Notification helpers for different events
   static async notifyLike(postId: string, likedByUserId: string, postOwnerId: string): Promise<void> {
     if (likedByUserId === postOwnerId) return // Don't notify self
 
-    const userResult = await query("SELECT username, full_name FROM users WHERE id = $1", [likedByUserId])
-    if (userResult.rows.length === 0) return
+    const user = await UserModel.findById(likedByUserId).select('username full_name');
+    if (!user) return
 
-    const user = userResult.rows[0]
     const displayName = user.full_name || user.username
 
     await this.createNotification(postOwnerId, "like", "New Like", `${displayName} liked your post`, {
@@ -145,10 +147,9 @@ export class NotificationService {
   static async notifyComment(postId: string, commentedByUserId: string, postOwnerId: string): Promise<void> {
     if (commentedByUserId === postOwnerId) return // Don't notify self
 
-    const userResult = await query("SELECT username, full_name FROM users WHERE id = $1", [commentedByUserId])
-    if (userResult.rows.length === 0) return
+    const user = await UserModel.findById(commentedByUserId).select('username full_name');
+    if (!user) return
 
-    const user = userResult.rows[0]
     const displayName = user.full_name || user.username
 
     await this.createNotification(postOwnerId, "comment", "New Comment", `${displayName} commented on your post`, {
@@ -160,10 +161,9 @@ export class NotificationService {
   }
 
   static async notifyFollow(followerId: string, followingId: string): Promise<void> {
-    const userResult = await query("SELECT username, full_name FROM users WHERE id = $1", [followerId])
-    if (userResult.rows.length === 0) return
+    const user = await UserModel.findById(followerId).select('username full_name');
+    if (!user) return
 
-    const user = userResult.rows[0]
     const displayName = user.full_name || user.username
 
     await this.createNotification(followingId, "follow", "New Follower", `${displayName} started following you`, {
@@ -174,10 +174,9 @@ export class NotificationService {
   }
 
   static async notifyFollowRequest(followerId: string, followingId: string): Promise<void> {
-    const userResult = await query("SELECT username, full_name FROM users WHERE id = $1", [followerId])
-    if (userResult.rows.length === 0) return
+    const user = await UserModel.findById(followerId).select('username full_name');
+    if (!user) return
 
-    const user = userResult.rows[0]
     const displayName = user.full_name || user.username
 
     await this.createNotification(
@@ -196,10 +195,9 @@ export class NotificationService {
   static async notifyMessage(conversationId: string, senderId: string, recipientId: string): Promise<void> {
     if (senderId === recipientId) return // Don't notify self
 
-    const userResult = await query("SELECT username, full_name FROM users WHERE id = $1", [senderId])
-    if (userResult.rows.length === 0) return
+    const user = await UserModel.findById(senderId).select('username full_name');
+    if (!user) return
 
-    const user = userResult.rows[0]
     const displayName = user.full_name || user.username
 
     await this.createNotification(recipientId, "message", "New Message", `${displayName} sent you a message`, {
@@ -212,8 +210,13 @@ export class NotificationService {
 
   // Clean up old notifications (cleanup job)
   static async cleanupOldNotifications(daysOld = 30): Promise<number> {
-    const result = await query("DELETE FROM notifications WHERE created_at < NOW() - INTERVAL '$1 days'", [daysOld])
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - daysOld);
+    
+    const result = await NotificationModel.deleteMany({
+        created_at: { $lt: cutoffDate }
+    });
 
-    return result.rowCount || 0
+    return result.deletedCount || 0
   }
 }

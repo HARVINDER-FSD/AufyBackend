@@ -1,6 +1,15 @@
 "use strict";
 // Spotify Web Playback SDK Integration
 // Handles full song playback in the browser
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SpotifyPlayer = void 0;
 exports.getSpotifyPlayer = getSpotifyPlayer;
@@ -12,25 +21,27 @@ class SpotifyPlayer {
         this.isReady = false;
     }
     // Initialize the Spotify Web Playback SDK
-    async initialize() {
-        const token = await (0, spotify_auth_1.getValidAccessToken)();
-        if (!token) {
-            console.error('No valid Spotify token');
-            return false;
-        }
-        // Load SDK script if not already loaded
-        if (!window.Spotify) {
-            await this.loadSDK();
-        }
-        return new Promise((resolve) => {
-            window.onSpotifyWebPlaybackSDKReady = () => {
-                this.setupPlayer(token);
-                resolve(true);
-            };
-            // If SDK already loaded, call immediately
-            if (window.Spotify) {
-                window.onSpotifyWebPlaybackSDKReady();
+    initialize() {
+        return __awaiter(this, void 0, void 0, function* () {
+            const token = yield (0, spotify_auth_1.getValidAccessToken)();
+            if (!token) {
+                console.error('No valid Spotify token');
+                return false;
             }
+            // Load SDK script if not already loaded
+            if (!window.Spotify) {
+                yield this.loadSDK();
+            }
+            return new Promise((resolve) => {
+                window.onSpotifyWebPlaybackSDKReady = () => {
+                    this.setupPlayer(token);
+                    resolve(true);
+                };
+                // If SDK already loaded, call immediately
+                if (window.Spotify) {
+                    window.onSpotifyWebPlaybackSDKReady();
+                }
+            });
         });
     }
     // Load Spotify SDK script
@@ -85,62 +96,74 @@ class SpotifyPlayer {
         this.player.connect();
     }
     // Play a track by Spotify URI
-    async playTrack(spotifyUri, positionMs = 0) {
-        if (!this.isReady || !this.deviceId) {
-            console.error('Player not ready');
-            return false;
-        }
-        const token = await (0, spotify_auth_1.getValidAccessToken)();
-        if (!token)
-            return false;
-        try {
-            const response = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${this.deviceId}`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({
-                    uris: [spotifyUri],
-                    position_ms: positionMs
-                })
-            });
-            return response.ok;
-        }
-        catch (error) {
-            console.error('Play track error:', error);
-            return false;
-        }
+    playTrack(spotifyUri_1) {
+        return __awaiter(this, arguments, void 0, function* (spotifyUri, positionMs = 0) {
+            if (!this.isReady || !this.deviceId) {
+                console.error('Player not ready');
+                return false;
+            }
+            const token = yield (0, spotify_auth_1.getValidAccessToken)();
+            if (!token)
+                return false;
+            try {
+                const response = yield fetch(`https://api.spotify.com/v1/me/player/play?device_id=${this.deviceId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({
+                        uris: [spotifyUri],
+                        position_ms: positionMs
+                    })
+                });
+                return response.ok;
+            }
+            catch (error) {
+                console.error('Play track error:', error);
+                return false;
+            }
+        });
     }
     // Pause playback
-    async pause() {
-        if (this.player) {
-            await this.player.pause();
-        }
+    pause() {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (this.player) {
+                yield this.player.pause();
+            }
+        });
     }
     // Resume playback
-    async resume() {
-        if (this.player) {
-            await this.player.resume();
-        }
+    resume() {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (this.player) {
+                yield this.player.resume();
+            }
+        });
     }
     // Seek to position (milliseconds)
-    async seek(positionMs) {
-        if (this.player) {
-            await this.player.seek(positionMs);
-        }
+    seek(positionMs) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (this.player) {
+                yield this.player.seek(positionMs);
+            }
+        });
     }
     // Get current playback state
-    async getState() {
-        if (!this.player)
-            return null;
-        return await this.player.getCurrentState();
+    getState() {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (!this.player)
+                return null;
+            return yield this.player.getCurrentState();
+        });
     }
     // Set volume (0.0 to 1.0)
-    async setVolume(volume) {
-        if (this.player) {
-            await this.player.setVolume(volume);
-        }
+    setVolume(volume) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (this.player) {
+                yield this.player.setVolume(volume);
+            }
+        });
     }
     // Disconnect player
     disconnect() {

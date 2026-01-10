@@ -1,4 +1,13 @@
 "use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.analyticsService = exports.AnalyticsService = void 0;
 const mongodb_1 = require("mongodb");
@@ -13,239 +22,250 @@ class AnalyticsService {
         }
         return AnalyticsService.instance;
     }
-    async getClient() {
-        if (!this.client) {
-            this.client = new mongodb_1.MongoClient(MONGODB_URI);
-            await this.client.connect();
-        }
-        return this.client;
+    getClient() {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (!this.client) {
+                this.client = new mongodb_1.MongoClient(MONGODB_URI);
+                yield this.client.connect();
+            }
+            return this.client;
+        });
     }
     // User analytics
-    async getUserAnalytics(userId, period = 'daily') {
-        const client = await this.getClient();
-        const db = client.db();
-        const startDate = this.getStartDate(period);
-        const endDate = new Date();
-        const [postsCount, likesReceived, commentsReceived, followersGained, profileViews, storiesCreated, reelsCreated] = await Promise.all([
-            // Posts created in period
-            db.collection('posts').countDocuments({
-                user_id: new mongodb_1.ObjectId(userId),
-                created_at: { $gte: startDate, $lte: endDate }
-            }),
-            // Likes received in period
-            db.collection('likes').aggregate([
-                {
-                    $lookup: {
-                        from: 'posts',
-                        localField: 'post_id',
-                        foreignField: '_id',
-                        as: 'post'
-                    }
-                },
-                { $unwind: '$post' },
-                {
-                    $match: {
-                        'post.user_id': new mongodb_1.ObjectId(userId),
-                        created_at: { $gte: startDate, $lte: endDate }
-                    }
-                },
-                { $count: 'total' }
-            ]).toArray(),
-            // Comments received in period
-            db.collection('comments').aggregate([
-                {
-                    $lookup: {
-                        from: 'posts',
-                        localField: 'post_id',
-                        foreignField: '_id',
-                        as: 'post'
-                    }
-                },
-                { $unwind: '$post' },
-                {
-                    $match: {
-                        'post.user_id': new mongodb_1.ObjectId(userId),
-                        created_at: { $gte: startDate, $lte: endDate }
-                    }
-                },
-                { $count: 'total' }
-            ]).toArray(),
-            // Followers gained in period
-            db.collection('follows').countDocuments({
-                following_id: new mongodb_1.ObjectId(userId),
-                created_at: { $gte: startDate, $lte: endDate }
-            }),
-            // Profile views in period
-            db.collection('profile_visits').countDocuments({
-                profile_owner_id: new mongodb_1.ObjectId(userId),
-                visited_at: { $gte: startDate, $lte: endDate }
-            }),
-            // Stories created in period
-            db.collection('stories').countDocuments({
-                user_id: new mongodb_1.ObjectId(userId),
-                created_at: { $gte: startDate, $lte: endDate }
-            }),
-            // Reels created in period
-            db.collection('reels').countDocuments({
-                user_id: new mongodb_1.ObjectId(userId),
-                created_at: { $gte: startDate, $lte: endDate }
-            })
-        ]);
-        return {
-            period,
-            startDate,
-            endDate,
-            posts: postsCount,
-            likesReceived: likesReceived[0]?.total || 0,
-            commentsReceived: commentsReceived[0]?.total || 0,
-            followersGained,
-            profileViews,
-            storiesCreated,
-            reelsCreated,
-            engagement: this.calculateEngagement(postsCount, likesReceived[0]?.total || 0, commentsReceived[0]?.total || 0)
-        };
-    }
-    // Platform analytics
-    async getPlatformAnalytics(period = 'daily') {
-        const client = await this.getClient();
-        const db = client.db();
-        const startDate = this.getStartDate(period);
-        const endDate = new Date();
-        const [totalUsers, newUsers, totalPosts, newPosts, totalStories, totalReels, totalMessages, activeUsers] = await Promise.all([
-            db.collection('users').countDocuments(),
-            db.collection('users').countDocuments({
-                created_at: { $gte: startDate, $lte: endDate }
-            }),
-            db.collection('posts').countDocuments(),
-            db.collection('posts').countDocuments({
-                created_at: { $gte: startDate, $lte: endDate }
-            }),
-            db.collection('stories').countDocuments({
-                created_at: { $gte: startDate, $lte: endDate }
-            }),
-            db.collection('reels').countDocuments({
-                created_at: { $gte: startDate, $lte: endDate }
-            }),
-            db.collection('messages').countDocuments({
-                created_at: { $gte: startDate, $lte: endDate }
-            }),
-            this.getActiveUsers(startDate, endDate)
-        ]);
-        return {
-            period,
-            startDate,
-            endDate,
-            totalUsers,
-            newUsers,
-            totalPosts,
-            newPosts,
-            totalStories,
-            totalReels,
-            totalMessages,
-            activeUsers,
-            growthRate: this.calculateGrowthRate(totalUsers, newUsers, period)
-        };
-    }
-    // Content performance analytics
-    async getContentPerformance(userId, contentType) {
-        const client = await this.getClient();
-        const db = client.db();
-        const collection = contentType === 'posts' ? 'posts' :
-            contentType === 'stories' ? 'stories' : 'reels';
-        const content = await db.collection(collection)
-            .find({ user_id: new mongodb_1.ObjectId(userId) })
-            .sort({ created_at: -1 })
-            .limit(50)
-            .toArray();
-        const performance = await Promise.all(content.map(async (item) => {
-            const [likes, comments, views] = await Promise.all([
-                db.collection(`${collection === 'posts' ? 'likes' : `reel_likes`}`)
-                    .countDocuments({ [`${collection === 'posts' ? 'post' : 'reel'}_id`]: item._id }),
-                db.collection(`${collection === 'posts' ? 'comments' : `reel_comments`}`)
-                    .countDocuments({ [`${collection === 'posts' ? 'post' : 'reel'}_id`]: item._id }),
-                collection === 'stories' ?
-                    db.collection('stories').findOne({ _id: item._id }).then(s => s?.views_count || 0) :
-                    db.collection('reel_views').countDocuments({ reel_id: item._id })
+    getUserAnalytics(userId_1) {
+        return __awaiter(this, arguments, void 0, function* (userId, period = 'daily') {
+            var _a, _b, _c, _d;
+            const client = yield this.getClient();
+            const db = client.db();
+            const startDate = this.getStartDate(period);
+            const endDate = new Date();
+            const [postsCount, likesReceived, commentsReceived, followersGained, profileViews, storiesCreated, reelsCreated] = yield Promise.all([
+                // Posts created in period
+                db.collection('posts').countDocuments({
+                    user_id: new mongodb_1.ObjectId(userId),
+                    created_at: { $gte: startDate, $lte: endDate }
+                }),
+                // Likes received in period
+                db.collection('likes').aggregate([
+                    {
+                        $lookup: {
+                            from: 'posts',
+                            localField: 'post_id',
+                            foreignField: '_id',
+                            as: 'post'
+                        }
+                    },
+                    { $unwind: '$post' },
+                    {
+                        $match: {
+                            'post.user_id': new mongodb_1.ObjectId(userId),
+                            created_at: { $gte: startDate, $lte: endDate }
+                        }
+                    },
+                    { $count: 'total' }
+                ]).toArray(),
+                // Comments received in period
+                db.collection('comments').aggregate([
+                    {
+                        $lookup: {
+                            from: 'posts',
+                            localField: 'post_id',
+                            foreignField: '_id',
+                            as: 'post'
+                        }
+                    },
+                    { $unwind: '$post' },
+                    {
+                        $match: {
+                            'post.user_id': new mongodb_1.ObjectId(userId),
+                            created_at: { $gte: startDate, $lte: endDate }
+                        }
+                    },
+                    { $count: 'total' }
+                ]).toArray(),
+                // Followers gained in period
+                db.collection('follows').countDocuments({
+                    following_id: new mongodb_1.ObjectId(userId),
+                    created_at: { $gte: startDate, $lte: endDate }
+                }),
+                // Profile views in period
+                db.collection('profile_visits').countDocuments({
+                    profile_owner_id: new mongodb_1.ObjectId(userId),
+                    visited_at: { $gte: startDate, $lte: endDate }
+                }),
+                // Stories created in period
+                db.collection('stories').countDocuments({
+                    user_id: new mongodb_1.ObjectId(userId),
+                    created_at: { $gte: startDate, $lte: endDate }
+                }),
+                // Reels created in period
+                db.collection('reels').countDocuments({
+                    user_id: new mongodb_1.ObjectId(userId),
+                    created_at: { $gte: startDate, $lte: endDate }
+                })
             ]);
             return {
-                id: item._id,
-                caption: item.caption,
-                created_at: item.created_at,
-                likes,
-                comments,
-                views,
-                engagement: this.calculateEngagement(1, likes, comments)
+                period,
+                startDate,
+                endDate,
+                posts: postsCount,
+                likesReceived: ((_a = likesReceived[0]) === null || _a === void 0 ? void 0 : _a.total) || 0,
+                commentsReceived: ((_b = commentsReceived[0]) === null || _b === void 0 ? void 0 : _b.total) || 0,
+                followersGained,
+                profileViews,
+                storiesCreated,
+                reelsCreated,
+                engagement: this.calculateEngagement(postsCount, ((_c = likesReceived[0]) === null || _c === void 0 ? void 0 : _c.total) || 0, ((_d = commentsReceived[0]) === null || _d === void 0 ? void 0 : _d.total) || 0)
             };
-        }));
-        return performance.sort((a, b) => b.engagement - a.engagement);
+        });
+    }
+    // Platform analytics
+    getPlatformAnalytics() {
+        return __awaiter(this, arguments, void 0, function* (period = 'daily') {
+            const client = yield this.getClient();
+            const db = client.db();
+            const startDate = this.getStartDate(period);
+            const endDate = new Date();
+            const [totalUsers, newUsers, totalPosts, newPosts, totalStories, totalReels, totalMessages, activeUsers] = yield Promise.all([
+                db.collection('users').countDocuments(),
+                db.collection('users').countDocuments({
+                    created_at: { $gte: startDate, $lte: endDate }
+                }),
+                db.collection('posts').countDocuments(),
+                db.collection('posts').countDocuments({
+                    created_at: { $gte: startDate, $lte: endDate }
+                }),
+                db.collection('stories').countDocuments({
+                    created_at: { $gte: startDate, $lte: endDate }
+                }),
+                db.collection('reels').countDocuments({
+                    created_at: { $gte: startDate, $lte: endDate }
+                }),
+                db.collection('messages').countDocuments({
+                    created_at: { $gte: startDate, $lte: endDate }
+                }),
+                this.getActiveUsers(startDate, endDate)
+            ]);
+            return {
+                period,
+                startDate,
+                endDate,
+                totalUsers,
+                newUsers,
+                totalPosts,
+                newPosts,
+                totalStories,
+                totalReels,
+                totalMessages,
+                activeUsers,
+                growthRate: this.calculateGrowthRate(totalUsers, newUsers, period)
+            };
+        });
+    }
+    // Content performance analytics
+    getContentPerformance(userId, contentType) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const client = yield this.getClient();
+            const db = client.db();
+            const collection = contentType === 'posts' ? 'posts' :
+                contentType === 'stories' ? 'stories' : 'reels';
+            const content = yield db.collection(collection)
+                .find({ user_id: new mongodb_1.ObjectId(userId) })
+                .sort({ created_at: -1 })
+                .limit(50)
+                .toArray();
+            const performance = yield Promise.all(content.map((item) => __awaiter(this, void 0, void 0, function* () {
+                const [likes, comments, views] = yield Promise.all([
+                    db.collection(`${collection === 'posts' ? 'likes' : `reel_likes`}`)
+                        .countDocuments({ [`${collection === 'posts' ? 'post' : 'reel'}_id`]: item._id }),
+                    db.collection(`${collection === 'posts' ? 'comments' : `reel_comments`}`)
+                        .countDocuments({ [`${collection === 'posts' ? 'post' : 'reel'}_id`]: item._id }),
+                    collection === 'stories' ?
+                        db.collection('stories').findOne({ _id: item._id }).then(s => (s === null || s === void 0 ? void 0 : s.views_count) || 0) :
+                        db.collection('reel_views').countDocuments({ reel_id: item._id })
+                ]);
+                return {
+                    id: item._id,
+                    caption: item.caption,
+                    created_at: item.created_at,
+                    likes,
+                    comments,
+                    views,
+                    engagement: this.calculateEngagement(1, likes, comments)
+                };
+            })));
+            return performance.sort((a, b) => b.engagement - a.engagement);
+        });
     }
     // Trending content
-    async getTrendingContent(type, limit = 10) {
-        const client = await this.getClient();
-        const db = client.db();
-        const collection = type === 'posts' ? 'posts' : 'reels';
-        const likesCollection = type === 'posts' ? 'likes' : 'reel_likes';
-        const commentsCollection = type === 'posts' ? 'comments' : 'reel_comments';
-        const trending = await db.collection(collection)
-            .aggregate([
-            {
-                $lookup: {
-                    from: 'users',
-                    localField: 'user_id',
-                    foreignField: '_id',
-                    as: 'user'
-                }
-            },
-            { $unwind: '$user' },
-            {
-                $lookup: {
-                    from: likesCollection,
-                    localField: '_id',
-                    foreignField: `${type === 'posts' ? 'post' : 'reel'}_id`,
-                    as: 'likes'
-                }
-            },
-            {
-                $lookup: {
-                    from: commentsCollection,
-                    localField: '_id',
-                    foreignField: `${type === 'posts' ? 'post' : 'reel'}_id`,
-                    as: 'comments'
-                }
-            },
-            {
-                $addFields: {
-                    engagement: {
-                        $add: [
-                            { $size: '$likes' },
-                            { $multiply: [{ $size: '$comments' }, 2] }
-                        ]
+    getTrendingContent(type_1) {
+        return __awaiter(this, arguments, void 0, function* (type, limit = 10) {
+            const client = yield this.getClient();
+            const db = client.db();
+            const collection = type === 'posts' ? 'posts' : 'reels';
+            const likesCollection = type === 'posts' ? 'likes' : 'reel_likes';
+            const commentsCollection = type === 'posts' ? 'comments' : 'reel_comments';
+            const trending = yield db.collection(collection)
+                .aggregate([
+                {
+                    $lookup: {
+                        from: 'users',
+                        localField: 'user_id',
+                        foreignField: '_id',
+                        as: 'user'
+                    }
+                },
+                { $unwind: '$user' },
+                {
+                    $lookup: {
+                        from: likesCollection,
+                        localField: '_id',
+                        foreignField: `${type === 'posts' ? 'post' : 'reel'}_id`,
+                        as: 'likes'
+                    }
+                },
+                {
+                    $lookup: {
+                        from: commentsCollection,
+                        localField: '_id',
+                        foreignField: `${type === 'posts' ? 'post' : 'reel'}_id`,
+                        as: 'comments'
+                    }
+                },
+                {
+                    $addFields: {
+                        engagement: {
+                            $add: [
+                                { $size: '$likes' },
+                                { $multiply: [{ $size: '$comments' }, 2] }
+                            ]
+                        }
+                    }
+                },
+                { $sort: { engagement: -1, created_at: -1 } },
+                { $limit: limit },
+                {
+                    $project: {
+                        _id: 1,
+                        caption: 1,
+                        media_urls: 1,
+                        media_type: 1,
+                        created_at: 1,
+                        likes_count: { $size: '$likes' },
+                        comments_count: { $size: '$comments' },
+                        engagement: 1,
+                        user: {
+                            username: 1,
+                            full_name: 1,
+                            avatar_url: 1,
+                            is_verified: 1
+                        }
                     }
                 }
-            },
-            { $sort: { engagement: -1, created_at: -1 } },
-            { $limit: limit },
-            {
-                $project: {
-                    _id: 1,
-                    caption: 1,
-                    media_urls: 1,
-                    media_type: 1,
-                    created_at: 1,
-                    likes_count: { $size: '$likes' },
-                    comments_count: { $size: '$comments' },
-                    engagement: 1,
-                    user: {
-                        username: 1,
-                        full_name: 1,
-                        avatar_url: 1,
-                        is_verified: 1
-                    }
-                }
-            }
-        ])
-            .toArray();
-        return trending;
+            ])
+                .toArray();
+            return trending;
+        });
     }
     // Helper methods
     getStartDate(period) {
@@ -275,52 +295,57 @@ class AnalyticsService {
         const rate = (newCount / total) * 100;
         return Math.round(rate * 100) / 100;
     }
-    async getActiveUsers(startDate, endDate) {
-        const client = await this.getClient();
-        const db = client.db();
-        const activeUsers = await db.collection('users').aggregate([
-            {
-                $lookup: {
-                    from: 'posts',
-                    localField: '_id',
-                    foreignField: 'user_id',
-                    as: 'posts'
-                }
-            },
-            {
-                $lookup: {
-                    from: 'stories',
-                    localField: '_id',
-                    foreignField: 'user_id',
-                    as: 'stories'
-                }
-            },
-            {
-                $lookup: {
-                    from: 'messages',
-                    localField: '_id',
-                    foreignField: 'sender_id',
-                    as: 'messages'
-                }
-            },
-            {
-                $match: {
-                    $or: [
-                        { 'posts.created_at': { $gte: startDate, $lte: endDate } },
-                        { 'stories.created_at': { $gte: startDate, $lte: endDate } },
-                        { 'messages.created_at': { $gte: startDate, $lte: endDate } }
-                    ]
-                }
-            },
-            { $count: 'total' }
-        ]).toArray();
-        return activeUsers[0]?.total || 0;
+    getActiveUsers(startDate, endDate) {
+        return __awaiter(this, void 0, void 0, function* () {
+            var _a;
+            const client = yield this.getClient();
+            const db = client.db();
+            const activeUsers = yield db.collection('users').aggregate([
+                {
+                    $lookup: {
+                        from: 'posts',
+                        localField: '_id',
+                        foreignField: 'user_id',
+                        as: 'posts'
+                    }
+                },
+                {
+                    $lookup: {
+                        from: 'stories',
+                        localField: '_id',
+                        foreignField: 'user_id',
+                        as: 'stories'
+                    }
+                },
+                {
+                    $lookup: {
+                        from: 'messages',
+                        localField: '_id',
+                        foreignField: 'sender_id',
+                        as: 'messages'
+                    }
+                },
+                {
+                    $match: {
+                        $or: [
+                            { 'posts.created_at': { $gte: startDate, $lte: endDate } },
+                            { 'stories.created_at': { $gte: startDate, $lte: endDate } },
+                            { 'messages.created_at': { $gte: startDate, $lte: endDate } }
+                        ]
+                    }
+                },
+                { $count: 'total' }
+            ]).toArray();
+            return ((_a = activeUsers[0]) === null || _a === void 0 ? void 0 : _a.total) || 0;
+        });
     }
-    async close() {
-        if (this.client) {
-            await this.client.close();
-            this.client = null;
-        }
+    close() {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (this.client) {
+                yield this.client.close();
+                this.client = null;
+            }
+        });
     }
 }
 exports.AnalyticsService = AnalyticsService;

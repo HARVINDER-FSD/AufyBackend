@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { Document, Model } from 'mongoose';
 
 const paymentSchema = new mongoose.Schema({
   userId: {
@@ -46,6 +46,22 @@ const paymentSchema = new mongoose.Schema({
   },
 });
 
-const Payment = mongoose.models.Payment || mongoose.model('Payment', paymentSchema);
+export interface IPayment extends Document {
+  userId: mongoose.Types.ObjectId;
+  subscriptionId?: mongoose.Types.ObjectId;
+  razorpayOrderId: string;
+  razorpayPaymentId?: string;
+  razorpaySignature?: string;
+  amount: number;
+  currency: string;
+  status: 'created' | 'pending' | 'success' | 'failed';
+  paymentMethod?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface IPaymentModel extends Model<IPayment> {}
+
+const Payment = (mongoose.models.Payment as IPaymentModel) || mongoose.model<IPayment, IPaymentModel>('Payment', paymentSchema);
 
 export default Payment;

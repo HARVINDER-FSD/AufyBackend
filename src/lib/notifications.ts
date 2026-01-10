@@ -14,7 +14,8 @@ export type NotificationType =
   | 'follow_request'
   | 'follow_accept'
   | 'secret_crush_match'
-  | 'secret_crush_ended';
+  | 'secret_crush_ended'
+  | 'secret_crush_removed';
 
 interface CreateNotificationOptions {
   userId: string | ObjectId; // Recipient

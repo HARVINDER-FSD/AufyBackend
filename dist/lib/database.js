@@ -1,4 +1,13 @@
 "use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -31,64 +40,68 @@ let cachedClient = null;
 let cachedDb = null;
 let mongooseConnected = false;
 // Get MongoDB client and database
-async function connectToDatabase() {
-    // Connect Mongoose if not already connected
-    if (!mongooseConnected) {
+function connectToDatabase() {
+    return __awaiter(this, void 0, void 0, function* () {
+        // Connect Mongoose if not already connected
+        if (!mongooseConnected) {
+            try {
+                yield mongoose_1.default.connect(MONGODB_URI, {
+                    serverSelectionTimeoutMS: 10000,
+                    socketTimeoutMS: 45000,
+                    connectTimeoutMS: 10000,
+                    maxPoolSize: 50,
+                    minPoolSize: 5,
+                    maxIdleTimeMS: 60000,
+                });
+                mongooseConnected = true;
+                console.log('Mongoose connected successfully');
+            }
+            catch (error) {
+                console.error('Failed to connect Mongoose:', error);
+            }
+        }
+        if (cachedClient && cachedDb) {
+            // Test if connection is still alive
+            try {
+                yield cachedDb.admin().ping();
+                return { client: cachedClient, db: cachedDb };
+            }
+            catch (error) {
+                console.log('Cached connection is stale, reconnecting...');
+                cachedClient = null;
+                cachedDb = null;
+            }
+        }
         try {
-            await mongoose_1.default.connect(MONGODB_URI, {
+            const client = yield mongodb_1.MongoClient.connect(MONGODB_URI, {
                 serverSelectionTimeoutMS: 10000,
                 socketTimeoutMS: 45000,
                 connectTimeoutMS: 10000,
                 maxPoolSize: 50,
                 minPoolSize: 5,
                 maxIdleTimeMS: 60000,
+                retryWrites: true,
+                retryReads: true,
+                w: 'majority'
             });
-            mongooseConnected = true;
-            console.log('Mongoose connected successfully');
+            const db = client.db();
+            cachedClient = client;
+            cachedDb = db;
+            console.log('MongoDB connection established successfully');
+            return { client, db };
         }
         catch (error) {
-            console.error('Failed to connect Mongoose:', error);
+            console.error('Failed to connect to MongoDB:', error);
+            throw error;
         }
-    }
-    if (cachedClient && cachedDb) {
-        // Test if connection is still alive
-        try {
-            await cachedDb.admin().ping();
-            return { client: cachedClient, db: cachedDb };
-        }
-        catch (error) {
-            console.log('Cached connection is stale, reconnecting...');
-            cachedClient = null;
-            cachedDb = null;
-        }
-    }
-    try {
-        const client = await mongodb_1.MongoClient.connect(MONGODB_URI, {
-            serverSelectionTimeoutMS: 10000,
-            socketTimeoutMS: 45000,
-            connectTimeoutMS: 10000,
-            maxPoolSize: 50,
-            minPoolSize: 5,
-            maxIdleTimeMS: 60000,
-            retryWrites: true,
-            retryReads: true,
-            w: 'majority'
-        });
-        const db = client.db();
-        cachedClient = client;
-        cachedDb = db;
-        console.log('MongoDB connection established successfully');
-        return { client, db };
-    }
-    catch (error) {
-        console.error('Failed to connect to MongoDB:', error);
-        throw error;
-    }
+    });
 }
 // Export a function to get the database
-async function getDatabase() {
-    const { db } = await connectToDatabase();
-    return db;
+function getDatabase() {
+    return __awaiter(this, void 0, void 0, function* () {
+        const { db } = yield connectToDatabase();
+        return db;
+    });
 }
 exports.redis = process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
     ? new redis_1.Redis({
@@ -101,107 +114,119 @@ exports.redisSub = exports.redis;
 // Check if Redis is available
 const isRedisAvailable = !!exports.redis;
 // MongoDB query helper with error handling and retry logic
-async function query(collectionName, operation) {
-    const start = Date.now();
-    let retries = 0;
-    while (retries <= MAX_RETRIES) {
+function query(collectionName, operation) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const start = Date.now();
+        let retries = 0;
+        while (retries <= MAX_RETRIES) {
+            try {
+                const db = yield getDatabase();
+                const collection = db.collection(collectionName);
+                const result = yield operation(collection);
+                const duration = Date.now() - start;
+                console.log("Executed MongoDB operation", { collection: collectionName, duration });
+                return result;
+            }
+            catch (error) {
+                const isConnectionError = error.message && (error.message.includes('timeout') ||
+                    error.message.includes('terminated') ||
+                    error.message.includes('connection'));
+                if (isConnectionError && retries < MAX_RETRIES) {
+                    retries++;
+                    console.log(`Database connection error, retrying (${retries}/${MAX_RETRIES})...`);
+                    // Reset cached connection
+                    cachedClient = null;
+                    cachedDb = null;
+                    yield new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+                    continue;
+                }
+                console.error("Database query error:", error);
+                throw error;
+            }
+        }
+        console.error("Database query failed after maximum retries");
+        throw new Error("Database connection failed after multiple attempts");
+    });
+}
+// MongoDB transaction helper
+function transaction(callback) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const { client } = yield connectToDatabase();
+        const session = client.startSession();
         try {
-            const db = await getDatabase();
-            const collection = db.collection(collectionName);
-            const result = await operation(collection);
-            const duration = Date.now() - start;
-            console.log("Executed MongoDB operation", { collection: collectionName, duration });
+            session.startTransaction();
+            const result = yield callback(session);
+            yield session.commitTransaction();
             return result;
         }
         catch (error) {
-            const isConnectionError = error.message && (error.message.includes('timeout') ||
-                error.message.includes('terminated') ||
-                error.message.includes('connection'));
-            if (isConnectionError && retries < MAX_RETRIES) {
-                retries++;
-                console.log(`Database connection error, retrying (${retries}/${MAX_RETRIES})...`);
-                // Reset cached connection
-                cachedClient = null;
-                cachedDb = null;
-                await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
-                continue;
-            }
-            console.error("Database query error:", error);
+            yield session.abortTransaction();
             throw error;
         }
-    }
-    console.error("Database query failed after maximum retries");
-    throw new Error("Database connection failed after multiple attempts");
-}
-// MongoDB transaction helper
-async function transaction(callback) {
-    const { client } = await connectToDatabase();
-    const session = client.startSession();
-    try {
-        session.startTransaction();
-        const result = await callback(session);
-        await session.commitTransaction();
-        return result;
-    }
-    catch (error) {
-        await session.abortTransaction();
-        throw error;
-    }
-    finally {
-        session.endSession();
-    }
+        finally {
+            session.endSession();
+        }
+    });
 }
 exports.cache = {
-    async get(key) {
-        if (!exports.redis) {
-            console.warn("Redis not available, skipping cache get");
-            return null;
-        }
-        try {
-            const value = await exports.redis.get(key);
-            return value ? (typeof value === "string" ? JSON.parse(value) : value) : null;
-        }
-        catch (error) {
-            console.error("Cache get error:", error);
-            return null;
-        }
+    get(key) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (!exports.redis) {
+                console.warn("Redis not available, skipping cache get");
+                return null;
+            }
+            try {
+                const value = yield exports.redis.get(key);
+                return value ? (typeof value === "string" ? JSON.parse(value) : value) : null;
+            }
+            catch (error) {
+                console.error("Cache get error:", error);
+                return null;
+            }
+        });
     },
-    async set(key, value, ttl = 3600) {
-        if (!exports.redis) {
-            console.warn("Redis not available, skipping cache set");
-            return;
-        }
-        try {
-            await exports.redis.setex(key, ttl, JSON.stringify(value));
-        }
-        catch (error) {
-            console.error("Cache set error:", error);
-        }
+    set(key_1, value_1) {
+        return __awaiter(this, arguments, void 0, function* (key, value, ttl = 3600) {
+            if (!exports.redis) {
+                console.warn("Redis not available, skipping cache set");
+                return;
+            }
+            try {
+                yield exports.redis.setex(key, ttl, JSON.stringify(value));
+            }
+            catch (error) {
+                console.error("Cache set error:", error);
+            }
+        });
     },
-    async del(key) {
-        if (!exports.redis) {
-            console.warn("Redis not available, skipping cache delete");
-            return;
-        }
-        try {
-            await exports.redis.del(key);
-        }
-        catch (error) {
-            console.error("Cache delete error:", error);
-        }
+    del(key) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (!exports.redis) {
+                console.warn("Redis not available, skipping cache delete");
+                return;
+            }
+            try {
+                yield exports.redis.del(key);
+            }
+            catch (error) {
+                console.error("Cache delete error:", error);
+            }
+        });
     },
-    async invalidatePattern(pattern) {
-        if (!exports.redis) {
-            console.warn("Redis not available, skipping cache invalidate");
-            return;
-        }
-        try {
-            // Note: Upstash Redis REST API doesn't support KEYS command
-            // For pattern invalidation, we'll need to track keys manually
-            console.warn("Pattern invalidation not supported with Upstash REST API");
-        }
-        catch (error) {
-            console.error("Cache invalidate pattern error:", error);
-        }
+    invalidatePattern(pattern) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (!exports.redis) {
+                console.warn("Redis not available, skipping cache invalidate");
+                return;
+            }
+            try {
+                // Note: Upstash Redis REST API doesn't support KEYS command
+                // For pattern invalidation, we'll need to track keys manually
+                console.warn("Pattern invalidation not supported with Upstash REST API");
+            }
+            catch (error) {
+                console.error("Cache invalidate pattern error:", error);
+            }
+        });
     },
 };

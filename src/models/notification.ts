@@ -1,30 +1,48 @@
-// Notification Model for MongoDB
-import { ObjectId } from 'mongodb';
+import mongoose, { Schema, Document } from 'mongoose';
 
-export interface Notification {
-  _id?: ObjectId;
-  userId: ObjectId; // Recipient user ID
-  actorId: ObjectId; // User who performed the action
-  type: 'like' | 'comment' | 'follow' | 'message' | 'mention' | 'share' | 'follow_request' | 'follow_accept';
-  postId?: ObjectId;
-  commentId?: ObjectId;
-  conversationId?: string;
-  content?: string; // Comment text, message preview, etc.
-  isRead: boolean;
-  createdAt: Date;
-  updatedAt: Date;
+export interface INotification extends Document {
+  user_id: mongoose.Types.ObjectId;
+  actor_id?: mongoose.Types.ObjectId;
+  type: string;
+  title: string;
+  content?: string;
+  data?: any;
+  is_read: boolean;
+  created_at: Date;
+  updated_at: Date;
 }
 
-export interface NotificationWithActor extends Notification {
-  actor: {
-    _id: ObjectId;
-    username: string;
-    fullName?: string;
-    avatar?: string;
-    verified?: boolean;
-  };
-  post?: {
-    _id: ObjectId;
-    image?: string;
-  };
-}
+const notificationSchema = new Schema({
+  user_id: {
+    type: Schema.Types.ObjectId,
+    ref: 'User',
+    required: true,
+    index: true
+  },
+  actor_id: {
+    type: Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  type: {
+    type: String,
+    required: true
+  },
+  title: {
+    type: String,
+    required: true
+  },
+  content: {
+    type: String
+  },
+  data: {
+    type: Schema.Types.Mixed
+  },
+  is_read: {
+    type: Boolean,
+    default: false
+  }
+}, {
+  timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' }
+});
+
+export default mongoose.model<INotification>('Notification', notificationSchema);

@@ -20,8 +20,8 @@ export const password = {
 // JWT utilities
 export const token = {
   sign(payload: Omit<JWTPayload, "iat" | "exp">): string {
-    return jwt.sign(payload, config.jwt.secret, {
-      expiresIn: config.jwt.expiresIn,
+    return jwt.sign(payload as any, config.jwt.secret, {
+      expiresIn: config.jwt.expiresIn as any,
     })
   },
 

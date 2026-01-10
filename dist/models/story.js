@@ -53,6 +53,49 @@ const storySchema = new mongoose_1.default.Schema({
         type: Boolean,
         default: false
     },
+    // Close Friends 2.0 fields
+    share_type: {
+        type: String,
+        enum: ['your-story', 'close-friends'],
+        default: 'your-story'
+    },
+    is_close_friends: {
+        type: Boolean,
+        default: false
+    },
+    // Remix fields
+    is_remix: {
+        type: Boolean,
+        default: false
+    },
+    original_story_id: {
+        type: mongoose_1.default.Schema.Types.ObjectId,
+        ref: 'Story',
+        default: null
+    },
+    original_creator_id: {
+        type: mongoose_1.default.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null
+    },
+    original_creator_username: {
+        type: String,
+        default: null
+    },
+    remix_changes: {
+        texts: {
+            type: Array,
+            default: []
+        },
+        stickers: {
+            type: Array,
+            default: []
+        },
+        filter: {
+            type: String,
+            default: 'none'
+        }
+    },
     created_at: {
         type: Date,
         default: Date.now

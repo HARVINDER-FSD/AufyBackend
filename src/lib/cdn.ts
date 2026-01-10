@@ -126,7 +126,7 @@ export class CDNOptimizer {
     } = options;
 
     try {
-      const result = await cloudinary.uploader.upload(file, {
+      const result = await cloudinary.uploader.upload(file as any, {
         folder,
         public_id: publicId,
         tags,
@@ -170,7 +170,7 @@ export class CDNOptimizer {
     } = options;
 
     try {
-      const result = await cloudinary.uploader.upload(file, {
+      const result = await cloudinary.uploader.upload(file as any, {
         folder,
         public_id: publicId,
         tags,
@@ -259,7 +259,6 @@ export class CDNOptimizer {
       width,
       height,
       crop: 'fill',
-      gravity: 'auto',
       overlay: watermarkPublicId,
       opacity,
       gravity: position,

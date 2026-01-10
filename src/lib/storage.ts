@@ -26,7 +26,7 @@ export class StorageService {
     }
 
     // Validate size
-    const maxSize = file.isImage(mimeType) ? config.upload.maxImageSize : config.upload.maxVideoSize
+    const maxSize = config.upload.maxFileSize
     if (fileBuffer.length > maxSize) {
       throw errors.badRequest(`File too large. Max ${Math.round(maxSize / 1024 / 1024)}MB`)
     }

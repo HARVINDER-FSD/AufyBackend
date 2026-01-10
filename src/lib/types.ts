@@ -94,7 +94,7 @@ export interface Conversation {
   created_by?: string
   created_at: Date
   updated_at: Date
-  participants?: User[]
+  participants?: Partial<User>[]
   last_message?: Message
   unread_count?: number
 }
@@ -111,7 +111,7 @@ export interface Message {
   is_deleted: boolean
   created_at: Date
   updated_at: Date
-  sender?: User
+  sender?: Partial<User>
   reply_to?: Message
   is_read?: boolean
 }
@@ -125,6 +125,7 @@ export interface Notification {
   data?: any
   is_read: boolean
   created_at: Date
+  updated_at?: Date
 }
 
 export interface Report {

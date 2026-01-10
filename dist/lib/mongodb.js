@@ -1,4 +1,13 @@
 "use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -19,27 +28,29 @@ const connectionOptions = {
     maxPoolSize: 10
 };
 // Initialize MongoDB connection
-async function initMongo() {
-    if (!global._mongoClientPromise) {
-        try {
-            console.log('Connecting to MongoDB at:', MONGODB_URI);
-            // Connect mongoose with proper options
-            await mongoose_1.default.connect(MONGODB_URI, connectionOptions);
-            console.log('Mongoose connected successfully');
-            // Connect MongoDB client
-            const client = new mongodb_1.MongoClient(MONGODB_URI, connectionOptions);
-            global._mongoClientPromise = client.connect();
-            // Test the connection
-            const testClient = await global._mongoClientPromise;
-            await testClient.db().command({ ping: 1 });
-            console.log('MongoDB connection verified successfully');
+function initMongo() {
+    return __awaiter(this, void 0, void 0, function* () {
+        if (!global._mongoClientPromise) {
+            try {
+                console.log('Connecting to MongoDB at:', MONGODB_URI);
+                // Connect mongoose with proper options
+                yield mongoose_1.default.connect(MONGODB_URI, connectionOptions);
+                console.log('Mongoose connected successfully');
+                // Connect MongoDB client
+                const client = new mongodb_1.MongoClient(MONGODB_URI, connectionOptions);
+                global._mongoClientPromise = client.connect();
+                // Test the connection
+                const testClient = yield global._mongoClientPromise;
+                yield testClient.db().command({ ping: 1 });
+                console.log('MongoDB connection verified successfully');
+            }
+            catch (error) {
+                console.error('MongoDB initialization error:', error);
+                throw error;
+            }
         }
-        catch (error) {
-            console.error('MongoDB initialization error:', error);
-            throw error;
-        }
-    }
-    return global._mongoClientPromise;
+        return global._mongoClientPromise;
+    });
 }
 // Initialize connection immediately to ensure it's ready before models are used
 exports.clientPromise = clientPromise = global._mongoClientPromise || initMongo();
@@ -57,39 +68,45 @@ const userSchema = new mongoose_1.default.Schema({
     updated_at: { type: Date, default: Date.now }
 });
 // Hash password before saving
-userSchema.pre('save', async function (next) {
-    if (!this.isModified('password'))
-        return next();
-    try {
-        const salt = await bcryptjs_1.default.genSalt(10);
-        this.password = await bcryptjs_1.default.hash(this.password, salt);
-        next();
-    }
-    catch (error) {
-        next(error);
-    }
+userSchema.pre('save', function (next) {
+    return __awaiter(this, void 0, void 0, function* () {
+        if (!this.isModified('password'))
+            return next();
+        try {
+            const salt = yield bcryptjs_1.default.genSalt(10);
+            this.password = yield bcryptjs_1.default.hash(this.password, salt);
+            next();
+        }
+        catch (error) {
+            next(error);
+        }
+    });
 });
 // Method to compare passwords
-userSchema.methods.comparePassword = async function (candidatePassword) {
-    try {
-        return await bcryptjs_1.default.compare(candidatePassword, this.password);
-    }
-    catch (error) {
-        throw error;
-    }
+userSchema.methods.comparePassword = function (candidatePassword) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            return yield bcryptjs_1.default.compare(candidatePassword, this.password);
+        }
+        catch (error) {
+            throw error;
+        }
+    });
 };
 // Create User model
 const UserModel = mongoose_1.default.models.User || mongoose_1.default.model('User', userSchema);
 exports.UserModel = UserModel;
 // Function to connect to the database
-async function connectToDatabase() {
-    try {
-        const client = await clientPromise;
-        const db = client.db();
-        return { client, db };
-    }
-    catch (error) {
-        console.error('Error connecting to database:', error);
-        throw error;
-    }
+function connectToDatabase() {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const client = yield clientPromise;
+            const db = client.db();
+            return { client, db };
+        }
+        catch (error) {
+            console.error('Error connecting to database:', error);
+            throw error;
+        }
+    });
 }

@@ -1,4 +1,13 @@
 "use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -15,6 +24,11 @@ const followSchema = new mongoose_1.default.Schema({
         type: mongoose_1.default.Schema.Types.ObjectId,
         ref: 'User',
         required: true
+    },
+    status: {
+        type: String,
+        enum: ['active', 'pending'],
+        default: 'active'
     },
     created_at: {
         type: Date,
@@ -65,49 +79,53 @@ followSchema.statics.getFollowing = function (userId, limit = 20, skip = 0) {
         .limit(limit);
 };
 // Method to follow a user
-followSchema.statics.followUser = async function (followerId, followingId) {
-    try {
-        // Check if already following
-        const existingFollow = await this.findOne({
-            follower_id: followerId,
-            following_id: followingId
-        });
-        if (existingFollow) {
-            throw new Error('Already following this user');
+followSchema.statics.followUser = function (followerId, followingId) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            // Check if already following
+            const existingFollow = yield this.findOne({
+                follower_id: followerId,
+                following_id: followingId
+            });
+            if (existingFollow) {
+                throw new Error('Already following this user');
+            }
+            // Create follow relationship
+            const follow = new this({
+                follower_id: followerId,
+                following_id: followingId
+            });
+            yield follow.save();
+            // Update follower counts in users collection
+            yield mongoose_1.default.model('User').updateOne({ _id: followerId }, { $inc: { following_count: 1 } });
+            yield mongoose_1.default.model('User').updateOne({ _id: followingId }, { $inc: { followers_count: 1 } });
+            return follow;
         }
-        // Create follow relationship
-        const follow = new this({
-            follower_id: followerId,
-            following_id: followingId
-        });
-        await follow.save();
-        // Update follower counts in users collection
-        await mongoose_1.default.model('User').updateOne({ _id: followerId }, { $inc: { following_count: 1 } });
-        await mongoose_1.default.model('User').updateOne({ _id: followingId }, { $inc: { followers_count: 1 } });
-        return follow;
-    }
-    catch (error) {
-        throw error;
-    }
+        catch (error) {
+            throw error;
+        }
+    });
 };
 // Method to unfollow a user
-followSchema.statics.unfollowUser = async function (followerId, followingId) {
-    try {
-        const follow = await this.findOneAndDelete({
-            follower_id: followerId,
-            following_id: followingId
-        });
-        if (!follow) {
-            throw new Error('Not following this user');
+followSchema.statics.unfollowUser = function (followerId, followingId) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const follow = yield this.findOneAndDelete({
+                follower_id: followerId,
+                following_id: followingId
+            });
+            if (!follow) {
+                throw new Error('Not following this user');
+            }
+            // Update follower counts in users collection
+            yield mongoose_1.default.model('User').updateOne({ _id: followerId }, { $inc: { following_count: -1 } });
+            yield mongoose_1.default.model('User').updateOne({ _id: followingId }, { $inc: { followers_count: -1 } });
+            return follow;
         }
-        // Update follower counts in users collection
-        await mongoose_1.default.model('User').updateOne({ _id: followerId }, { $inc: { following_count: -1 } });
-        await mongoose_1.default.model('User').updateOne({ _id: followingId }, { $inc: { followers_count: -1 } });
-        return follow;
-    }
-    catch (error) {
-        throw error;
-    }
+        catch (error) {
+            throw error;
+        }
+    });
 };
 // Create the model if it doesn't exist or get it if it does
 const Follow = mongoose_1.default.models.Follow || mongoose_1.default.model('Follow', followSchema);

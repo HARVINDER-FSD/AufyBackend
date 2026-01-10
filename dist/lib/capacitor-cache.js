@@ -1,4 +1,13 @@
 "use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.capacitorCache = void 0;
 // Capacitor-specific caching for instant app loading
@@ -33,164 +42,186 @@ class CapacitorCache {
         this.isNative = core_1.Capacitor.isNativePlatform();
     }
     // Initialize cache on app start
-    async initialize() {
-        if (!this.isNative)
-            return;
-        console.log('🚀 Initializing Capacitor cache...');
-        // Check if cache exists
-        const cacheTimestamp = await this.getCacheTimestamp();
-        const cacheAge = Date.now() - (cacheTimestamp || 0);
-        const ONE_HOUR = 60 * 60 * 1000;
-        // If cache is older than 1 hour, refresh in background
-        if (cacheAge > ONE_HOUR) {
-            console.log('📦 Cache is stale, refreshing in background...');
-            this.refreshCache();
-        }
-        else {
-            console.log('✅ Cache is fresh');
-        }
+    initialize() {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (!this.isNative)
+                return;
+            console.log('🚀 Initializing Capacitor cache...');
+            // Check if cache exists
+            const cacheTimestamp = yield this.getCacheTimestamp();
+            const cacheAge = Date.now() - (cacheTimestamp || 0);
+            const ONE_HOUR = 60 * 60 * 1000;
+            // If cache is older than 1 hour, refresh in background
+            if (cacheAge > ONE_HOUR) {
+                console.log('📦 Cache is stale, refreshing in background...');
+                this.refreshCache();
+            }
+            else {
+                console.log('✅ Cache is fresh');
+            }
+        });
     }
     // Preload and cache critical routes
-    async preloadRoutes() {
-        if (!this.isNative)
-            return;
-        console.log('📥 Preloading critical routes...');
-        for (const route of CRITICAL_ROUTES) {
-            try {
-                const response = await fetch(route);
-                const html = await response.text();
-                await this.cacheHTML(route, html);
+    preloadRoutes() {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (!this.isNative)
+                return;
+            console.log('📥 Preloading critical routes...');
+            for (const route of CRITICAL_ROUTES) {
+                try {
+                    const response = yield fetch(route);
+                    const html = yield response.text();
+                    yield this.cacheHTML(route, html);
+                }
+                catch (error) {
+                    console.error(`Failed to preload ${route}:`, error);
+                }
             }
-            catch (error) {
-                console.error(`Failed to preload ${route}:`, error);
-            }
-        }
-        console.log('✅ Critical routes cached');
+            console.log('✅ Critical routes cached');
+        });
     }
     // Cache HTML content
-    async cacheHTML(route, html) {
-        if (!this.isNative)
-            return;
-        try {
-            await preferences_1.Preferences.set({
-                key: `${CACHE_KEYS.HTML}-${route}`,
-                value: html
-            });
-        }
-        catch (error) {
-            console.error('Failed to cache HTML:', error);
-        }
-    }
-    // Get cached HTML
-    async getCachedHTML(route) {
-        if (!this.isNative)
-            return null;
-        try {
-            const { value } = await preferences_1.Preferences.get({
-                key: `${CACHE_KEYS.HTML}-${route}`
-            });
-            return value;
-        }
-        catch (error) {
-            console.error('Failed to get cached HTML:', error);
-            return null;
-        }
-    }
-    // Cache API response
-    async cacheAPIResponse(endpoint, data) {
-        if (!this.isNative)
-            return;
-        try {
-            await preferences_1.Preferences.set({
-                key: `${CACHE_KEYS.API}-${endpoint}`,
-                value: JSON.stringify(data)
-            });
-        }
-        catch (error) {
-            console.error('Failed to cache API response:', error);
-        }
-    }
-    // Get cached API response
-    async getCachedAPIResponse(endpoint) {
-        if (!this.isNative)
-            return null;
-        try {
-            const { value } = await preferences_1.Preferences.get({
-                key: `${CACHE_KEYS.API}-${endpoint}`
-            });
-            return value ? JSON.parse(value) : null;
-        }
-        catch (error) {
-            console.error('Failed to get cached API response:', error);
-            return null;
-        }
-    }
-    // Refresh cache in background
-    async refreshCache() {
-        if (!this.isNative)
-            return;
-        // Update timestamp
-        await this.updateCacheTimestamp();
-        // Preload routes
-        await this.preloadRoutes();
-        // Cache API responses
-        for (const endpoint of CRITICAL_API_ENDPOINTS) {
+    cacheHTML(route, html) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (!this.isNative)
+                return;
             try {
-                const response = await fetch(endpoint, {
-                    headers: {
-                        'Authorization': `Bearer ${await this.getAuthToken()}`
-                    }
+                yield preferences_1.Preferences.set({
+                    key: `${CACHE_KEYS.HTML}-${route}`,
+                    value: html
                 });
-                const data = await response.json();
-                await this.cacheAPIResponse(endpoint, data);
             }
             catch (error) {
-                console.error(`Failed to cache ${endpoint}:`, error);
+                console.error('Failed to cache HTML:', error);
             }
-        }
-        console.log('✅ Cache refreshed');
+        });
+    }
+    // Get cached HTML
+    getCachedHTML(route) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (!this.isNative)
+                return null;
+            try {
+                const { value } = yield preferences_1.Preferences.get({
+                    key: `${CACHE_KEYS.HTML}-${route}`
+                });
+                return value;
+            }
+            catch (error) {
+                console.error('Failed to get cached HTML:', error);
+                return null;
+            }
+        });
+    }
+    // Cache API response
+    cacheAPIResponse(endpoint, data) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (!this.isNative)
+                return;
+            try {
+                yield preferences_1.Preferences.set({
+                    key: `${CACHE_KEYS.API}-${endpoint}`,
+                    value: JSON.stringify(data)
+                });
+            }
+            catch (error) {
+                console.error('Failed to cache API response:', error);
+            }
+        });
+    }
+    // Get cached API response
+    getCachedAPIResponse(endpoint) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (!this.isNative)
+                return null;
+            try {
+                const { value } = yield preferences_1.Preferences.get({
+                    key: `${CACHE_KEYS.API}-${endpoint}`
+                });
+                return value ? JSON.parse(value) : null;
+            }
+            catch (error) {
+                console.error('Failed to get cached API response:', error);
+                return null;
+            }
+        });
+    }
+    // Refresh cache in background
+    refreshCache() {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (!this.isNative)
+                return;
+            // Update timestamp
+            yield this.updateCacheTimestamp();
+            // Preload routes
+            yield this.preloadRoutes();
+            // Cache API responses
+            for (const endpoint of CRITICAL_API_ENDPOINTS) {
+                try {
+                    const response = yield fetch(endpoint, {
+                        headers: {
+                            'Authorization': `Bearer ${yield this.getAuthToken()}`
+                        }
+                    });
+                    const data = yield response.json();
+                    yield this.cacheAPIResponse(endpoint, data);
+                }
+                catch (error) {
+                    console.error(`Failed to cache ${endpoint}:`, error);
+                }
+            }
+            console.log('✅ Cache refreshed');
+        });
     }
     // Get auth token from storage
-    async getAuthToken() {
-        try {
-            const { value } = await preferences_1.Preferences.get({ key: 'auth-token' });
-            return value;
-        }
-        catch {
-            return null;
-        }
+    getAuthToken() {
+        return __awaiter(this, void 0, void 0, function* () {
+            try {
+                const { value } = yield preferences_1.Preferences.get({ key: 'auth-token' });
+                return value;
+            }
+            catch (_a) {
+                return null;
+            }
+        });
     }
     // Update cache timestamp
-    async updateCacheTimestamp() {
-        await preferences_1.Preferences.set({
-            key: CACHE_KEYS.TIMESTAMP,
-            value: Date.now().toString()
+    updateCacheTimestamp() {
+        return __awaiter(this, void 0, void 0, function* () {
+            yield preferences_1.Preferences.set({
+                key: CACHE_KEYS.TIMESTAMP,
+                value: Date.now().toString()
+            });
         });
     }
     // Get cache timestamp
-    async getCacheTimestamp() {
-        try {
-            const { value } = await preferences_1.Preferences.get({ key: CACHE_KEYS.TIMESTAMP });
-            return value ? parseInt(value) : null;
-        }
-        catch {
-            return null;
-        }
+    getCacheTimestamp() {
+        return __awaiter(this, void 0, void 0, function* () {
+            try {
+                const { value } = yield preferences_1.Preferences.get({ key: CACHE_KEYS.TIMESTAMP });
+                return value ? parseInt(value) : null;
+            }
+            catch (_a) {
+                return null;
+            }
+        });
     }
     // Clear all cache
-    async clearCache() {
-        if (!this.isNative)
-            return;
-        console.log('🗑️ Clearing cache...');
-        // Clear all cached items
-        for (const route of CRITICAL_ROUTES) {
-            await preferences_1.Preferences.remove({ key: `${CACHE_KEYS.HTML}-${route}` });
-        }
-        for (const endpoint of CRITICAL_API_ENDPOINTS) {
-            await preferences_1.Preferences.remove({ key: `${CACHE_KEYS.API}-${endpoint}` });
-        }
-        await preferences_1.Preferences.remove({ key: CACHE_KEYS.TIMESTAMP });
-        console.log('✅ Cache cleared');
+    clearCache() {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (!this.isNative)
+                return;
+            console.log('🗑️ Clearing cache...');
+            // Clear all cached items
+            for (const route of CRITICAL_ROUTES) {
+                yield preferences_1.Preferences.remove({ key: `${CACHE_KEYS.HTML}-${route}` });
+            }
+            for (const endpoint of CRITICAL_API_ENDPOINTS) {
+                yield preferences_1.Preferences.remove({ key: `${CACHE_KEYS.API}-${endpoint}` });
+            }
+            yield preferences_1.Preferences.remove({ key: CACHE_KEYS.TIMESTAMP });
+            console.log('✅ Cache cleared');
+        });
     }
 }
 exports.capacitorCache = new CapacitorCache();

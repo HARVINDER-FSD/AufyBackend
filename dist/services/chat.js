@@ -1,304 +1,404 @@
 "use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ChatService = void 0;
 const database_1 = require("../lib/database");
 const websocket_1 = require("../lib/websocket");
 const utils_1 = require("../lib/utils");
 const config_1 = require("../lib/config");
+const conversation_1 = __importDefault(require("../models/conversation"));
+const message_1 = __importDefault(require("../models/message"));
+const user_1 = __importDefault(require("../models/user"));
 class ChatService {
     // Create or get direct conversation
-    static async getOrCreateDirectConversation(userId1, userId2) {
-        if (userId1 === userId2) {
-            throw utils_1.errors.badRequest("Cannot create conversation with yourself");
-        }
-        // Check if conversation already exists
-        const existingConversation = await (0, database_1.query)(`SELECT c.id, c.type, c.name, c.created_by, c.created_at, c.updated_at
-       FROM conversations c
-       JOIN conversation_participants cp1 ON c.id = cp1.conversation_id
-       JOIN conversation_participants cp2 ON c.id = cp2.conversation_id
-       WHERE c.type = 'direct' 
-         AND cp1.user_id = $1 AND cp1.left_at IS NULL
-         AND cp2.user_id = $2 AND cp2.left_at IS NULL`, [userId1, userId2]);
-        if (existingConversation.rows.length > 0) {
-            const conversation = existingConversation.rows[0];
-            return await this.getConversationWithParticipants(conversation.id, userId1);
-        }
-        // Create new conversation
-        const result = await (0, database_1.transaction)(async (client) => {
-            // Create conversation
-            const conversationResult = await client.query(`INSERT INTO conversations (type, created_by) 
-         VALUES ('direct', $1) 
-         RETURNING id, type, name, created_by, created_at, updated_at`, [userId1]);
-            const conversation = conversationResult.rows[0];
-            // Add participants
-            await client.query(`INSERT INTO conversation_participants (conversation_id, user_id) 
-         VALUES ($1, $2), ($1, $3)`, [conversation.id, userId1, userId2]);
-            return conversation;
+    static getOrCreateDirectConversation(userId1, userId2) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (userId1 === userId2) {
+                throw utils_1.errors.badRequest("Cannot create conversation with yourself");
+            }
+            // Check if conversation already exists
+            // We want a direct conversation where BOTH users are participants
+            const existingConversation = yield conversation_1.default.findOne({
+                type: 'direct',
+                $and: [
+                    { 'participants.user': userId1 },
+                    { 'participants.user': userId2 }
+                ]
+            });
+            if (existingConversation) {
+                return yield this.getConversationWithParticipants(existingConversation._id.toString(), userId1);
+            }
+            // Create new conversation
+            const newConversation = yield conversation_1.default.create({
+                type: 'direct',
+                created_by: userId1,
+                participants: [
+                    { user: userId1, role: 'member', joined_at: new Date() },
+                    { user: userId2, role: 'member', joined_at: new Date() }
+                ]
+            });
+            return yield this.getConversationWithParticipants(newConversation._id.toString(), userId1);
         });
-        return await this.getConversationWithParticipants(result.id, userId1);
     }
     // Create group conversation
-    static async createGroupConversation(creatorId, name, participantIds) {
-        if (!name || name.trim().length === 0) {
-            throw utils_1.errors.badRequest("Group name is required");
-        }
-        if (participantIds.length < 2) {
-            throw utils_1.errors.badRequest("Group must have at least 2 participants");
-        }
-        if (participantIds.length > 100) {
-            throw utils_1.errors.badRequest("Group cannot have more than 100 participants");
-        }
-        // Remove duplicates and ensure creator is included
-        const uniqueParticipants = Array.from(new Set([creatorId, ...participantIds]));
-        const result = await (0, database_1.transaction)(async (client) => {
-            // Create conversation
-            const conversationResult = await client.query(`INSERT INTO conversations (type, name, created_by) 
-         VALUES ('group', $1, $2) 
-         RETURNING id, type, name, created_by, created_at, updated_at`, [name.trim(), creatorId]);
-            const conversation = conversationResult.rows[0];
-            // Add participants
-            const participantValues = uniqueParticipants
-                .map((userId, index) => {
-                const role = userId === creatorId ? "admin" : "member";
-                return `($1, $${index + 2}, '${role}')`;
-            })
-                .join(", ");
-            await client.query(`INSERT INTO conversation_participants (conversation_id, user_id, role) 
-         VALUES ${participantValues}`, [conversation.id, ...uniqueParticipants]);
-            return conversation;
+    static createGroupConversation(creatorId, name, participantIds) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (!name || name.trim().length === 0) {
+                throw utils_1.errors.badRequest("Group name is required");
+            }
+            if (participantIds.length < 2) {
+                throw utils_1.errors.badRequest("Group must have at least 2 participants");
+            }
+            if (participantIds.length > 100) {
+                throw utils_1.errors.badRequest("Group cannot have more than 100 participants");
+            }
+            // Remove duplicates and ensure creator is included
+            const uniqueParticipants = Array.from(new Set([creatorId, ...participantIds]));
+            const participants = uniqueParticipants.map(userId => ({
+                user: userId,
+                role: userId === creatorId ? 'admin' : 'member',
+                joined_at: new Date()
+            }));
+            const newConversation = yield conversation_1.default.create({
+                type: 'group',
+                name: name.trim(),
+                created_by: creatorId,
+                participants
+            });
+            return yield this.getConversationWithParticipants(newConversation._id.toString(), creatorId);
         });
-        return await this.getConversationWithParticipants(result.id, creatorId);
     }
     // Get conversation with participants
-    static async getConversationWithParticipants(conversationId, userId) {
-        // Check cache first
-        const cacheKey = utils_1.cacheKeys.conversation(conversationId);
-        const cachedConversation = await database_1.cache.get(cacheKey);
-        if (cachedConversation) {
-            return cachedConversation;
-        }
-        // Verify user is participant
-        const participantCheck = await (0, database_1.query)("SELECT id FROM conversation_participants WHERE conversation_id = $1 AND user_id = $2 AND left_at IS NULL", [conversationId, userId]);
-        if (participantCheck.rows.length === 0) {
-            throw utils_1.errors.forbidden("You are not a participant in this conversation");
-        }
-        // Get conversation details
-        const conversationResult = await (0, database_1.query)("SELECT id, type, name, created_by, created_at, updated_at FROM conversations WHERE id = $1", [conversationId]);
-        if (conversationResult.rows.length === 0) {
-            throw utils_1.errors.notFound("Conversation not found");
-        }
-        const conversation = conversationResult.rows[0];
-        // Get participants
-        const participantsResult = await (0, database_1.query)(`SELECT u.id, u.username, u.full_name, u.avatar_url, u.is_verified,
-              cp.role, cp.joined_at
-       FROM conversation_participants cp
-       JOIN users u ON cp.user_id = u.id
-       WHERE cp.conversation_id = $1 AND cp.left_at IS NULL AND u.is_active = true
-       ORDER BY cp.joined_at ASC`, [conversationId]);
-        // Get last message
-        const lastMessageResult = await (0, database_1.query)(`SELECT m.id, m.content, m.media_url, m.message_type, m.created_at,
-              u.username, u.full_name
-       FROM messages m
-       JOIN users u ON m.sender_id = u.id
-       WHERE m.conversation_id = $1 AND m.is_deleted = false
-       ORDER BY m.created_at DESC
-       LIMIT 1`, [conversationId]);
-        // Get unread count for current user
-        const unreadResult = await (0, database_1.query)(`SELECT COUNT(*) as unread_count
-       FROM messages m
-       WHERE m.conversation_id = $1 
-         AND m.sender_id != $2 
-         AND m.is_deleted = false
-         AND NOT EXISTS (
-           SELECT 1 FROM message_reads mr 
-           WHERE mr.message_id = m.id AND mr.user_id = $2
-         )`, [conversationId, userId]);
-        const conversationWithDetails = {
-            ...conversation,
-            participants: participantsResult.rows,
-            last_message: lastMessageResult.rows[0] || null,
-            unread_count: Number.parseInt(unreadResult.rows[0].unread_count),
-        };
-        // Cache the conversation
-        await database_1.cache.set(cacheKey, conversationWithDetails, config_1.config.redis.ttl.user);
-        return conversationWithDetails;
+    static getConversationWithParticipants(conversationId, userId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            // Check cache first
+            const cacheKey = utils_1.cacheKeys.conversation(conversationId);
+            const cachedConversation = yield database_1.cache.get(cacheKey);
+            if (cachedConversation) {
+                return cachedConversation;
+            }
+            // Get conversation details
+            const conversation = yield conversation_1.default.findById(conversationId)
+                .populate('participants.user', 'username full_name avatar_url is_verified')
+                .populate({
+                path: 'last_message',
+                populate: { path: 'sender_id', select: 'username full_name' }
+            });
+            if (!conversation) {
+                throw utils_1.errors.notFound("Conversation not found");
+            }
+            // Verify user is participant
+            const participant = conversation.participants.find(p => p.user && p.user._id.toString() === userId && !p.left_at);
+            if (!participant) {
+                throw utils_1.errors.forbidden("You are not a participant in this conversation");
+            }
+            // Get unread count for current user
+            const unreadCount = yield message_1.default.countDocuments({
+                conversation_id: conversationId,
+                sender_id: { $ne: userId },
+                is_deleted: false,
+                'read_by.user_id': { $ne: userId }
+            });
+            // Format response
+            // Map Mongoose document to Conversation interface
+            // Note: The interface in types.ts expects `last_message` as Message type.
+            // My Mongoose model has `last_message` as ObjectId or populated doc.
+            let lastMessage = null;
+            if (conversation.last_message) {
+                const lm = conversation.last_message;
+                lastMessage = {
+                    id: lm._id.toString(),
+                    content: lm.content,
+                    media_url: lm.media_url,
+                    message_type: lm.message_type,
+                    created_at: lm.created_at,
+                    sender: lm.sender_id ? {
+                        username: lm.sender_id.username,
+                        full_name: lm.sender_id.full_name
+                    } : null
+                };
+            }
+            const participants = conversation.participants
+                .filter(p => !p.left_at)
+                .map(p => {
+                const u = p.user;
+                return {
+                    id: u._id.toString(),
+                    username: u.username,
+                    full_name: u.full_name,
+                    avatar_url: u.avatar_url,
+                    is_verified: u.is_verified,
+                    role: p.role,
+                    joined_at: p.joined_at
+                };
+            });
+            const conversationWithDetails = {
+                id: conversation._id.toString(),
+                type: conversation.type,
+                name: conversation.name,
+                created_by: conversation.created_by.toString(),
+                created_at: conversation.created_at, // timestamps
+                updated_at: conversation.updated_at,
+                participants: participants, // Cast to avoid strict type issues with User interface
+                last_message: lastMessage,
+                unread_count: unreadCount,
+            };
+            // Cache the conversation
+            yield database_1.cache.set(cacheKey, conversationWithDetails, config_1.config.redis.ttl.user);
+            return conversationWithDetails;
+        });
     }
     // Get user conversations
-    static async getUserConversations(userId, page = 1, limit = 20) {
-        const { page: validPage, limit: validLimit } = utils_1.pagination.validateParams(page.toString(), limit.toString());
-        const offset = utils_1.pagination.getOffset(validPage, validLimit);
-        const result = await (0, database_1.query)(`SELECT c.id, c.type, c.name, c.created_by, c.created_at, c.updated_at,
-              COUNT(*) OVER() as total_count
-       FROM conversations c
-       JOIN conversation_participants cp ON c.id = cp.conversation_id
-       WHERE cp.user_id = $1 AND cp.left_at IS NULL
-       ORDER BY c.updated_at DESC
-       LIMIT $2 OFFSET $3`, [userId, validLimit, offset]);
-        const conversations = await Promise.all(result.rows.map(async (row) => {
-            return await this.getConversationWithParticipants(row.id, userId);
-        }));
-        const total = result.rows.length > 0 ? Number.parseInt(result.rows[0].total_count) : 0;
-        const paginationMeta = utils_1.pagination.getMetadata(validPage, validLimit, total);
-        return {
-            success: true,
-            data: conversations,
-            pagination: paginationMeta,
-        };
+    static getUserConversations(userId_1) {
+        return __awaiter(this, arguments, void 0, function* (userId, page = 1, limit = 20) {
+            const { page: validPage, limit: validLimit } = utils_1.pagination.validateParams(page.toString(), limit.toString());
+            const skip = (validPage - 1) * validLimit;
+            // Find conversations where user is a participant and hasn't left
+            const query = {
+                'participants': {
+                    $elemMatch: {
+                        user: userId,
+                        left_at: null
+                    }
+                }
+            };
+            const total = yield conversation_1.default.countDocuments(query);
+            const conversationsDocs = yield conversation_1.default.find(query)
+                .sort({ updated_at: -1 }) // or updatedAt
+                .skip(skip)
+                .limit(validLimit);
+            const conversations = yield Promise.all(conversationsDocs.map((doc) => __awaiter(this, void 0, void 0, function* () {
+                return yield this.getConversationWithParticipants(doc._id.toString(), userId);
+            })));
+            const paginationMeta = utils_1.pagination.getMetadata(validPage, validLimit, total);
+            return {
+                success: true,
+                data: conversations,
+                pagination: paginationMeta,
+            };
+        });
     }
     // Send message
-    static async sendMessage(senderId, conversationId, messageData) {
-        const { content, media_url, media_type, message_type, reply_to_id } = messageData;
-        // Validate message
-        if (!content && !media_url) {
-            throw utils_1.errors.badRequest("Message must have content or media");
-        }
-        if (content && content.length > 4000) {
-            throw utils_1.errors.badRequest("Message content too long (max 4000 characters)");
-        }
-        // Verify sender is participant
-        const participantCheck = await (0, database_1.query)("SELECT id FROM conversation_participants WHERE conversation_id = $1 AND user_id = $2 AND left_at IS NULL", [conversationId, senderId]);
-        if (participantCheck.rows.length === 0) {
-            throw utils_1.errors.forbidden("You are not a participant in this conversation");
-        }
-        // Verify reply-to message exists (if provided)
-        if (reply_to_id) {
-            const replyToCheck = await (0, database_1.query)("SELECT id FROM messages WHERE id = $1 AND conversation_id = $2 AND is_deleted = false", [reply_to_id, conversationId]);
-            if (replyToCheck.rows.length === 0) {
-                throw utils_1.errors.notFound("Reply-to message not found");
+    static sendMessage(senderId, conversationId, messageData) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const { content, media_url, media_type, message_type, reply_to_id } = messageData;
+            // Validate message
+            if (!content && !media_url) {
+                throw utils_1.errors.badRequest("Message must have content or media");
             }
-        }
-        const result = await (0, database_1.transaction)(async (client) => {
-            // Insert message
-            const messageResult = await client.query(`INSERT INTO messages (conversation_id, sender_id, content, media_url, media_type, message_type, reply_to_id) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7) 
-         RETURNING id, conversation_id, sender_id, content, media_url, media_type, message_type, 
-                   reply_to_id, is_deleted, created_at, updated_at`, [conversationId, senderId, content, media_url, media_type, message_type, reply_to_id]);
-            const message = messageResult.rows[0];
-            // Update conversation timestamp
-            await client.query("UPDATE conversations SET updated_at = NOW() WHERE id = $1", [conversationId]);
-            return message;
+            if (content && content.length > 4000) {
+                throw utils_1.errors.badRequest("Message content too long (max 4000 characters)");
+            }
+            // Verify conversation exists and user is participant
+            const conversation = yield conversation_1.default.findById(conversationId);
+            if (!conversation) {
+                throw utils_1.errors.notFound("Conversation not found");
+            }
+            const isParticipant = conversation.participants.some(p => p.user.toString() === senderId && !p.left_at);
+            if (!isParticipant) {
+                throw utils_1.errors.forbidden("You are not a participant in this conversation");
+            }
+            // Verify reply-to message exists (if provided)
+            if (reply_to_id) {
+                const replyTo = yield message_1.default.findOne({
+                    _id: reply_to_id,
+                    conversation_id: conversationId,
+                    is_deleted: false
+                });
+                if (!replyTo) {
+                    throw utils_1.errors.notFound("Reply-to message not found");
+                }
+            }
+            // Create message
+            const newMessage = yield message_1.default.create({
+                conversation_id: conversationId,
+                sender_id: senderId,
+                content,
+                media_url,
+                media_type,
+                message_type: message_type || 'text',
+                reply_to_id
+            });
+            // Update conversation timestamp and last message
+            conversation.last_message = newMessage._id;
+            // Mongoose handles updatedAt automatically on save
+            yield conversation.save();
+            // Get sender info
+            const sender = yield user_1.default.findById(senderId).select('username full_name avatar_url is_verified');
+            // Get reply-to message details if exists
+            let replyToMessage = null;
+            if (reply_to_id) {
+                const rt = yield message_1.default.findById(reply_to_id).populate('sender_id', 'username full_name');
+                if (rt) {
+                    replyToMessage = {
+                        id: rt._id.toString(),
+                        content: rt.content,
+                        media_url: rt.media_url,
+                        message_type: rt.message_type,
+                        created_at: rt.created_at,
+                        sender: rt.sender_id ? {
+                            username: rt.sender_id.username,
+                            full_name: rt.sender_id.full_name
+                        } : null
+                    };
+                }
+            }
+            const messageWithDetails = {
+                id: newMessage._id.toString(),
+                conversation_id: conversationId,
+                sender_id: senderId,
+                content: newMessage.content,
+                media_url: newMessage.media_url,
+                media_type: newMessage.media_type,
+                message_type: newMessage.message_type,
+                reply_to_id: newMessage.reply_to_id ? newMessage.reply_to_id.toString() : undefined,
+                is_deleted: newMessage.is_deleted,
+                created_at: newMessage.created_at,
+                updated_at: newMessage.updated_at,
+                sender: sender ? {
+                    id: sender._id.toString(),
+                    username: sender.username,
+                    full_name: sender.full_name,
+                    avatar_url: sender.avatar_url,
+                    is_verified: sender.is_verified
+                } : undefined,
+                reply_to: replyToMessage,
+                is_read: false,
+            };
+            // Clear conversation cache
+            yield database_1.cache.del(utils_1.cacheKeys.conversation(conversationId));
+            // Send real-time message
+            const wsService = (0, websocket_1.getWebSocketService)();
+            wsService.sendMessageToConversation(conversationId, messageWithDetails);
+            return messageWithDetails;
         });
-        // Get sender info
-        const senderResult = await (0, database_1.query)("SELECT id, username, full_name, avatar_url, is_verified FROM users WHERE id = $1", [senderId]);
-        // Get reply-to message if exists
-        let replyToMessage = null;
-        if (reply_to_id) {
-            const replyResult = await (0, database_1.query)(`SELECT m.id, m.content, m.media_url, m.message_type, m.created_at,
-                u.username, u.full_name
-         FROM messages m
-         JOIN users u ON m.sender_id = u.id
-         WHERE m.id = $1`, [reply_to_id]);
-            replyToMessage = replyResult.rows[0] || null;
-        }
-        const messageWithDetails = {
-            ...result,
-            sender: senderResult.rows[0],
-            reply_to: replyToMessage,
-            is_read: false,
-        };
-        // Clear conversation cache
-        await database_1.cache.del(utils_1.cacheKeys.conversation(conversationId));
-        // Send real-time message
-        const wsService = (0, websocket_1.getWebSocketService)();
-        wsService.sendMessageToConversation(conversationId, messageWithDetails);
-        return messageWithDetails;
     }
     // Get conversation messages
-    static async getConversationMessages(conversationId, userId, page = 1, limit = 50) {
-        // Verify user is participant
-        const participantCheck = await (0, database_1.query)("SELECT id FROM conversation_participants WHERE conversation_id = $1 AND user_id = $2 AND left_at IS NULL", [conversationId, userId]);
-        if (participantCheck.rows.length === 0) {
-            throw utils_1.errors.forbidden("You are not a participant in this conversation");
-        }
-        const { page: validPage, limit: validLimit } = utils_1.pagination.validateParams(page.toString(), limit.toString());
-        const offset = utils_1.pagination.getOffset(validPage, validLimit);
-        const result = await (0, database_1.query)(`SELECT m.id, m.conversation_id, m.sender_id, m.content, m.media_url, m.media_type, 
-              m.message_type, m.reply_to_id, m.is_deleted, m.created_at, m.updated_at,
-              u.id as sender_id, u.username, u.full_name, u.avatar_url, u.is_verified,
-              COUNT(*) OVER() as total_count
-       FROM messages m
-       JOIN users u ON m.sender_id = u.id
-       WHERE m.conversation_id = $1 AND m.is_deleted = false AND u.is_active = true
-       ORDER BY m.created_at DESC
-       LIMIT $2 OFFSET $3`, [conversationId, validLimit, offset]);
-        const messages = await Promise.all(result.rows.map(async (row) => {
-            const message = {
-                id: row.id,
-                conversation_id: row.conversation_id,
-                sender_id: row.sender_id,
-                content: row.content,
-                media_url: row.media_url,
-                media_type: row.media_type,
-                message_type: row.message_type,
-                reply_to_id: row.reply_to_id,
-                is_deleted: row.is_deleted,
-                created_at: row.created_at,
-                updated_at: row.updated_at,
-                sender: {
-                    id: row.sender_id,
-                    username: row.username,
-                    full_name: row.full_name,
-                    avatar_url: row.avatar_url,
-                    is_verified: row.is_verified,
-                },
-            };
-            // Get reply-to message if exists
-            if (row.reply_to_id) {
-                const replyResult = await (0, database_1.query)(`SELECT m.id, m.content, m.media_url, m.message_type, m.created_at,
-                    u.username, u.full_name
-             FROM messages m
-             JOIN users u ON m.sender_id = u.id
-             WHERE m.id = $1`, [row.reply_to_id]);
-                message.reply_to = replyResult.rows[0] || null;
+    static getConversationMessages(conversationId_1, userId_1) {
+        return __awaiter(this, arguments, void 0, function* (conversationId, userId, page = 1, limit = 50) {
+            // Verify conversation and participation
+            const conversation = yield conversation_1.default.findOne({
+                _id: conversationId,
+                'participants': { $elemMatch: { user: userId, left_at: null } }
+            });
+            if (!conversation) {
+                throw utils_1.errors.forbidden("You are not a participant in this conversation or it doesn't exist");
             }
-            // Check if message is read by current user
-            const readResult = await (0, database_1.query)("SELECT id FROM message_reads WHERE message_id = $1 AND user_id = $2", [
-                message.id,
-                userId,
-            ]);
-            message.is_read = readResult.rows.length > 0;
-            return message;
-        }));
-        const total = result.rows.length > 0 ? Number.parseInt(result.rows[0].total_count) : 0;
-        const paginationMeta = utils_1.pagination.getMetadata(validPage, validLimit, total);
-        return {
-            success: true,
-            data: messages.reverse(), // Reverse to show oldest first
-            pagination: paginationMeta,
-        };
+            const { page: validPage, limit: validLimit } = utils_1.pagination.validateParams(page.toString(), limit.toString());
+            const skip = (validPage - 1) * validLimit;
+            const query = {
+                conversation_id: conversationId,
+                is_deleted: false
+            };
+            const total = yield message_1.default.countDocuments(query);
+            // Get messages with sender info
+            const messagesDocs = yield message_1.default.find(query)
+                .sort({ created_at: -1 })
+                .skip(skip)
+                .limit(validLimit)
+                .populate('sender_id', 'username full_name avatar_url is_verified')
+                .populate({
+                path: 'reply_to_id',
+                populate: { path: 'sender_id', select: 'username full_name' }
+            });
+            const messages = yield Promise.all(messagesDocs.map((doc) => __awaiter(this, void 0, void 0, function* () {
+                const sender = doc.sender_id;
+                // Construct reply_to object
+                let replyTo = null;
+                if (doc.reply_to_id) {
+                    const rt = doc.reply_to_id;
+                    replyTo = {
+                        id: rt._id.toString(),
+                        content: rt.content,
+                        media_url: rt.media_url,
+                        message_type: rt.message_type,
+                        created_at: rt.created_at,
+                        sender: rt.sender_id ? {
+                            username: rt.sender_id.username,
+                            full_name: rt.sender_id.full_name
+                        } : null
+                    };
+                }
+                // Check is_read
+                const isRead = doc.read_by && doc.read_by.some(r => r.user_id.toString() === userId);
+                const message = {
+                    id: doc._id.toString(),
+                    conversation_id: doc.conversation_id.toString(),
+                    sender_id: doc.sender_id._id.toString(),
+                    content: doc.content,
+                    media_url: doc.media_url,
+                    media_type: doc.media_type,
+                    message_type: doc.message_type,
+                    reply_to_id: doc.reply_to_id ? doc.reply_to_id._id.toString() : undefined,
+                    is_deleted: doc.is_deleted,
+                    created_at: doc.created_at,
+                    updated_at: doc.updated_at,
+                    sender: {
+                        id: sender._id.toString(),
+                        username: sender.username,
+                        full_name: sender.full_name,
+                        avatar_url: sender.avatar_url,
+                        is_verified: sender.is_verified,
+                    },
+                    reply_to: replyTo,
+                    is_read: !!isRead
+                };
+                return message;
+            })));
+            const paginationMeta = utils_1.pagination.getMetadata(validPage, validLimit, total);
+            return {
+                success: true,
+                data: messages.reverse(), // Reverse to show oldest first
+                pagination: paginationMeta,
+            };
+        });
     }
     // Mark messages as read
-    static async markMessagesAsRead(userId, messageIds) {
-        if (messageIds.length === 0)
-            return;
-        // Insert read receipts (ignore duplicates)
-        const values = messageIds.map((messageId, index) => `($1, $${index + 2})`).join(", ");
-        await (0, database_1.query)(`INSERT INTO message_reads (user_id, message_id) 
-       VALUES ${values}
-       ON CONFLICT (message_id, user_id) DO NOTHING`, [userId, ...messageIds]);
-        // Get conversation ID for cache invalidation
-        const conversationResult = await (0, database_1.query)("SELECT DISTINCT conversation_id FROM messages WHERE id = ANY($1)", [
-            messageIds,
-        ]);
-        if (conversationResult.rows.length > 0) {
-            const conversationId = conversationResult.rows[0].conversation_id;
-            await database_1.cache.del(utils_1.cacheKeys.conversation(conversationId));
-        }
+    static markMessagesAsRead(userId, messageIds) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (messageIds.length === 0)
+                return;
+            // Update messages to add user to read_by array if not already present
+            yield message_1.default.updateMany({
+                _id: { $in: messageIds },
+                'read_by.user_id': { $ne: userId } // Only if not already read by this user
+            }, {
+                $addToSet: {
+                    read_by: {
+                        user_id: userId,
+                        read_at: new Date()
+                    }
+                }
+            });
+            // Get conversation IDs for cache invalidation
+            const messages = yield message_1.default.find({ _id: { $in: messageIds } }).distinct('conversation_id');
+            for (const conversationId of messages) {
+                yield database_1.cache.del(utils_1.cacheKeys.conversation(conversationId.toString()));
+            }
+        });
     }
     // Delete message
-    static async deleteMessage(messageId, userId) {
-        const result = await (0, database_1.query)("UPDATE messages SET is_deleted = true WHERE id = $1 AND sender_id = $2", [
-            messageId,
-            userId,
-        ]);
-        if (result.rowCount === 0) {
-            throw utils_1.errors.notFound("Message not found or you don't have permission to delete it");
-        }
-        // Get conversation ID for cache invalidation
-        const conversationResult = await (0, database_1.query)("SELECT conversation_id FROM messages WHERE id = $1", [messageId]);
-        if (conversationResult.rows.length > 0) {
-            const conversationId = conversationResult.rows[0].conversation_id;
-            await database_1.cache.del(utils_1.cacheKeys.conversation(conversationId));
+    static deleteMessage(messageId, userId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const message = yield message_1.default.findOne({ _id: messageId, sender_id: userId });
+            if (!message) {
+                throw utils_1.errors.notFound("Message not found or you don't have permission to delete it");
+            }
+            message.is_deleted = true;
+            yield message.save();
+            const conversationId = message.conversation_id.toString();
+            yield database_1.cache.del(utils_1.cacheKeys.conversation(conversationId));
             // Notify participants about message deletion
             const wsService = (0, websocket_1.getWebSocketService)();
             wsService.sendMessageToConversation(conversationId, {
@@ -307,81 +407,119 @@ class ChatService {
                 deletedBy: userId,
                 timestamp: new Date(),
             });
-        }
+        });
     }
     // Add participant to group
-    static async addParticipant(conversationId, adminId, newParticipantId) {
-        // Verify admin permissions
-        const adminCheck = await (0, database_1.query)(`SELECT c.type FROM conversations c
-       JOIN conversation_participants cp ON c.id = cp.conversation_id
-       WHERE c.id = $1 AND cp.user_id = $2 AND cp.role = 'admin' AND cp.left_at IS NULL`, [conversationId, adminId]);
-        if (adminCheck.rows.length === 0) {
-            throw utils_1.errors.forbidden("Only group admins can add participants");
-        }
-        // Check if user is already a participant
-        const existingParticipant = await (0, database_1.query)("SELECT id FROM conversation_participants WHERE conversation_id = $1 AND user_id = $2 AND left_at IS NULL", [conversationId, newParticipantId]);
-        if (existingParticipant.rows.length > 0) {
-            throw utils_1.errors.conflict("User is already a participant");
-        }
-        // Add participant
-        await (0, database_1.query)("INSERT INTO conversation_participants (conversation_id, user_id) VALUES ($1, $2)", [
-            conversationId,
-            newParticipantId,
-        ]);
-        // Clear cache
-        await database_1.cache.del(utils_1.cacheKeys.conversation(conversationId));
-        // Send notification
-        const wsService = (0, websocket_1.getWebSocketService)();
-        wsService.sendMessageToConversation(conversationId, {
-            type: "participant_added",
-            participantId: newParticipantId,
-            addedBy: adminId,
-            timestamp: new Date(),
+    static addParticipant(conversationId, adminId, newParticipantId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            // Verify admin permissions
+            const conversation = yield conversation_1.default.findOne({
+                _id: conversationId,
+                'participants': {
+                    $elemMatch: {
+                        user: adminId,
+                        role: 'admin',
+                        left_at: null
+                    }
+                }
+            });
+            if (!conversation) {
+                throw utils_1.errors.forbidden("Only group admins can add participants");
+            }
+            // Check if user is already a participant
+            const existingParticipant = conversation.participants.find(p => p.user.toString() === newParticipantId && !p.left_at);
+            if (existingParticipant) {
+                throw utils_1.errors.conflict("User is already a participant");
+            }
+            // Add participant
+            // Check if they were previously a participant and left
+            const oldParticipantIndex = conversation.participants.findIndex(p => p.user.toString() === newParticipantId);
+            if (oldParticipantIndex > -1) {
+                conversation.participants[oldParticipantIndex].left_at = undefined;
+                conversation.participants[oldParticipantIndex].joined_at = new Date();
+            }
+            else {
+                conversation.participants.push({
+                    user: newParticipantId,
+                    role: 'member',
+                    joined_at: new Date()
+                });
+            }
+            yield conversation.save();
+            // Clear cache
+            yield database_1.cache.del(utils_1.cacheKeys.conversation(conversationId));
+            // Send notification
+            const wsService = (0, websocket_1.getWebSocketService)();
+            wsService.sendMessageToConversation(conversationId, {
+                type: "participant_added",
+                participantId: newParticipantId,
+                addedBy: adminId,
+                timestamp: new Date(),
+            });
         });
     }
     // Remove participant from group
-    static async removeParticipant(conversationId, adminId, participantId) {
-        // Verify admin permissions
-        const adminCheck = await (0, database_1.query)(`SELECT c.type FROM conversations c
-       JOIN conversation_participants cp ON c.id = cp.conversation_id
-       WHERE c.id = $1 AND cp.user_id = $2 AND cp.role = 'admin' AND cp.left_at IS NULL`, [conversationId, adminId]);
-        if (adminCheck.rows.length === 0) {
-            throw utils_1.errors.forbidden("Only group admins can remove participants");
-        }
-        // Cannot remove yourself as admin
-        if (adminId === participantId) {
-            throw utils_1.errors.badRequest("Admins cannot remove themselves");
-        }
-        // Remove participant
-        const result = await (0, database_1.query)("UPDATE conversation_participants SET left_at = NOW() WHERE conversation_id = $1 AND user_id = $2", [conversationId, participantId]);
-        if (result.rowCount === 0) {
-            throw utils_1.errors.notFound("Participant not found");
-        }
-        // Clear cache
-        await database_1.cache.del(utils_1.cacheKeys.conversation(conversationId));
-        // Send notification
-        const wsService = (0, websocket_1.getWebSocketService)();
-        wsService.sendMessageToConversation(conversationId, {
-            type: "participant_removed",
-            participantId,
-            removedBy: adminId,
-            timestamp: new Date(),
+    static removeParticipant(conversationId, adminId, participantId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            // Verify admin permissions
+            const conversation = yield conversation_1.default.findOne({
+                _id: conversationId,
+                'participants': {
+                    $elemMatch: {
+                        user: adminId,
+                        role: 'admin',
+                        left_at: null
+                    }
+                }
+            });
+            if (!conversation) {
+                throw utils_1.errors.forbidden("Only group admins can remove participants");
+            }
+            // Cannot remove yourself as admin
+            if (adminId === participantId) {
+                throw utils_1.errors.badRequest("Admins cannot remove themselves");
+            }
+            // Remove participant
+            const participantIndex = conversation.participants.findIndex(p => p.user.toString() === participantId && !p.left_at);
+            if (participantIndex === -1) {
+                throw utils_1.errors.notFound("Participant not found");
+            }
+            conversation.participants[participantIndex].left_at = new Date();
+            yield conversation.save();
+            // Clear cache
+            yield database_1.cache.del(utils_1.cacheKeys.conversation(conversationId));
+            // Send notification
+            const wsService = (0, websocket_1.getWebSocketService)();
+            wsService.sendMessageToConversation(conversationId, {
+                type: "participant_removed",
+                participantId,
+                removedBy: adminId,
+                timestamp: new Date(),
+            });
         });
     }
     // Leave conversation
-    static async leaveConversation(conversationId, userId) {
-        const result = await (0, database_1.query)("UPDATE conversation_participants SET left_at = NOW() WHERE conversation_id = $1 AND user_id = $2", [conversationId, userId]);
-        if (result.rowCount === 0) {
-            throw utils_1.errors.notFound("You are not a participant in this conversation");
-        }
-        // Clear cache
-        await database_1.cache.del(utils_1.cacheKeys.conversation(conversationId));
-        // Send notification
-        const wsService = (0, websocket_1.getWebSocketService)();
-        wsService.sendMessageToConversation(conversationId, {
-            type: "participant_left",
-            participantId: userId,
-            timestamp: new Date(),
+    static leaveConversation(conversationId, userId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const conversation = yield conversation_1.default.findById(conversationId);
+            if (!conversation) {
+                throw utils_1.errors.notFound("Conversation not found");
+            }
+            const participantIndex = conversation.participants.findIndex(p => p.user.toString() === userId && !p.left_at);
+            if (participantIndex === -1) {
+                throw utils_1.errors.notFound("You are not a participant in this conversation");
+            }
+            conversation.participants[participantIndex].left_at = new Date();
+            yield conversation.save();
+            // Clear cache
+            yield database_1.cache.del(utils_1.cacheKeys.conversation(conversationId));
+            // Send notification
+            const wsService = (0, websocket_1.getWebSocketService)();
+            wsService.sendMessageToConversation(conversationId, {
+                type: "participant_left",
+                participantId: userId,
+                timestamp: new Date(),
+            });
         });
     }
 }

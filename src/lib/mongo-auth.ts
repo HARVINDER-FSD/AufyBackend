@@ -2,8 +2,8 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
-import User from '@/models/user';
-import { ensureDbConnected } from './mongodb';
+import User from '../models/user';
+import { connectToDatabase } from './mongodb';
 
 // MongoDB Auth Service (Real implementation)
 export class MongoAuthService {
@@ -16,7 +16,7 @@ export class MongoAuthService {
   }) {
     try {
       // Ensure database is connected before proceeding
-      await ensureDbConnected();
+      const { db } = await connectToDatabase();
 
       // Check if user already exists
       const existingUser = await User.findOne({
@@ -65,7 +65,7 @@ export class MongoAuthService {
   static async login({ email, password }: { email: string; password: string }) {
     try {
       // Ensure database is connected before proceeding
-      await ensureDbConnected();
+      const { db } = await connectToDatabase();
 
       // Find user by email
       const user = await User.findOne({ email });
@@ -102,7 +102,7 @@ export class MongoAuthService {
   static async getUserById(userId: string) {
     try {
       // Ensure database is connected before proceeding
-      await ensureDbConnected();
+      const { db } = await connectToDatabase();
 
       // Find user by ID
       const user = await User.findById(userId);

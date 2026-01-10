@@ -1,4 +1,13 @@
 "use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -28,9 +37,10 @@ class SocketService {
     setupMiddleware() {
         // Authentication middleware
         this.io.use((socket, next) => {
+            var _a;
             try {
                 const authToken = socket.handshake.auth.token ||
-                    socket.handshake.headers.authorization?.split(" ")[1];
+                    ((_a = socket.handshake.headers.authorization) === null || _a === void 0 ? void 0 : _a.split(" ")[1]);
                 if (!authToken) {
                     return next(new Error("Authentication token required"));
                 }
@@ -69,9 +79,9 @@ class SocketService {
                 console.log(`User ${socket.username} left conversation ${conversationId}`);
             });
             // Handle sending messages
-            socket.on("send_message", async (data) => {
+            socket.on("send_message", (data) => __awaiter(this, void 0, void 0, function* () {
                 try {
-                    const message = await this.saveMessage({
+                    const message = yield this.saveMessage({
                         conversationId: data.conversationId,
                         senderId: socket.userId,
                         content: data.content,
@@ -86,7 +96,7 @@ class SocketService {
                     console.error("Error sending message:", error);
                     socket.emit("message_error", { error: "Failed to send message" });
                 }
-            });
+            }));
             // Handle typing indicators
             socket.on("typing_start", (data) => {
                 socket.to(`conversation:${data.conversationId}`).emit("user_typing", {
@@ -103,9 +113,9 @@ class SocketService {
                 });
             });
             // Handle message read receipts
-            socket.on("mark_messages_read", async (data) => {
+            socket.on("mark_messages_read", (data) => __awaiter(this, void 0, void 0, function* () {
                 try {
-                    await this.markMessagesAsRead(data.messageIds, socket.userId);
+                    yield this.markMessagesAsRead(data.messageIds, socket.userId);
                     // Broadcast read receipt to other participants
                     socket.to(`conversation:${data.conversationId}`).emit("messages_read", {
                         userId: socket.userId,
@@ -118,11 +128,11 @@ class SocketService {
                 catch (error) {
                     console.error("Error marking messages as read:", error);
                 }
-            });
+            }));
             // Handle reactions
-            socket.on("add_reaction", async (data) => {
+            socket.on("add_reaction", (data) => __awaiter(this, void 0, void 0, function* () {
                 try {
-                    const message = await this.addReaction(data.messageId, socket.userId, data.emoji);
+                    const message = yield this.addReaction(data.messageId, socket.userId, data.emoji);
                     // Broadcast reaction to conversation
                     this.io.to(`conversation:${message.conversation_id}`).emit("message_reaction", {
                         messageId: data.messageId,
@@ -134,7 +144,7 @@ class SocketService {
                 catch (error) {
                     console.error("Error adding reaction:", error);
                 }
-            });
+            }));
             // Handle disconnection
             socket.on("disconnect", () => {
                 console.log(`User ${socket.username} disconnected`);
@@ -156,79 +166,76 @@ class SocketService {
             });
         });
     }
-    async saveMessage(data) {
-        const client = await mongodb_1.MongoClient.connect(MONGODB_URI);
-        const db = client.db();
-        // Get conversation participants
-        const conversation = await db.collection('conversations').findOne({
-            _id: new mongodb_1.ObjectId(data.conversationId)
-        });
-        if (!conversation) {
-            throw new Error("Conversation not found");
-        }
-        // Find recipient (other participant)
-        const recipientId = conversation.participants.find((p) => p.toString() !== data.senderId);
-        const message = {
-            conversation_id: new mongodb_1.ObjectId(data.conversationId),
-            sender_id: new mongodb_1.ObjectId(data.senderId),
-            recipient_id: new mongodb_1.ObjectId(recipientId),
-            content: data.content,
-            message_type: data.messageType,
-            media_url: data.mediaUrl || null,
-            is_read: false,
-            reactions: [],
-            created_at: new Date(),
-            updated_at: new Date()
-        };
-        const result = await db.collection('messages').insertOne(message);
-        // Update conversation's updated_at
-        await db.collection('conversations').updateOne({ _id: new mongodb_1.ObjectId(data.conversationId) }, { $set: { updated_at: new Date() } });
-        await client.close();
-        return {
-            _id: result.insertedId,
-            ...message,
-            conversation_id: data.conversationId,
-            sender_id: data.senderId,
-            recipient_id: recipientId
-        };
-    }
-    async markMessagesAsRead(messageIds, userId) {
-        const client = await mongodb_1.MongoClient.connect(MONGODB_URI);
-        const db = client.db();
-        await db.collection('messages').updateMany({
-            _id: { $in: messageIds.map(id => new mongodb_1.ObjectId(id)) },
-            recipient_id: new mongodb_1.ObjectId(userId)
-        }, {
-            $set: {
-                is_read: true,
-                read_at: new Date()
+    saveMessage(data) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
+            const db = client.db();
+            // Get conversation participants
+            const conversation = yield db.collection('conversations').findOne({
+                _id: new mongodb_1.ObjectId(data.conversationId)
+            });
+            if (!conversation) {
+                throw new Error("Conversation not found");
             }
+            // Find recipient (other participant)
+            const recipientId = conversation.participants.find((p) => p.toString() !== data.senderId);
+            const message = {
+                conversation_id: new mongodb_1.ObjectId(data.conversationId),
+                sender_id: new mongodb_1.ObjectId(data.senderId),
+                recipient_id: new mongodb_1.ObjectId(recipientId),
+                content: data.content,
+                message_type: data.messageType,
+                media_url: data.mediaUrl || null,
+                is_read: false,
+                reactions: [],
+                created_at: new Date(),
+                updated_at: new Date()
+            };
+            const result = yield db.collection('messages').insertOne(message);
+            // Update conversation's updated_at
+            yield db.collection('conversations').updateOne({ _id: new mongodb_1.ObjectId(data.conversationId) }, { $set: { updated_at: new Date() } });
+            yield client.close();
+            return Object.assign(Object.assign({ _id: result.insertedId }, message), { conversation_id: data.conversationId, sender_id: data.senderId, recipient_id: recipientId });
         });
-        await client.close();
     }
-    async addReaction(messageId, userId, emoji) {
-        const client = await mongodb_1.MongoClient.connect(MONGODB_URI);
-        const db = client.db();
-        const message = await db.collection('messages').findOne({
-            _id: new mongodb_1.ObjectId(messageId)
+    markMessagesAsRead(messageIds, userId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
+            const db = client.db();
+            yield db.collection('messages').updateMany({
+                _id: { $in: messageIds.map(id => new mongodb_1.ObjectId(id)) },
+                recipient_id: new mongodb_1.ObjectId(userId)
+            }, {
+                $set: {
+                    is_read: true,
+                    read_at: new Date()
+                }
+            });
+            yield client.close();
         });
-        if (!message) {
-            throw new Error("Message not found");
-        }
-        // Remove existing reaction from this user
-        const updatedReactions = message.reactions.filter((reaction) => reaction.user_id.toString() !== userId);
-        // Add new reaction
-        updatedReactions.push({
-            user_id: new mongodb_1.ObjectId(userId),
-            emoji: emoji,
-            created_at: new Date()
+    }
+    addReaction(messageId, userId, emoji) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
+            const db = client.db();
+            const message = yield db.collection('messages').findOne({
+                _id: new mongodb_1.ObjectId(messageId)
+            });
+            if (!message) {
+                throw new Error("Message not found");
+            }
+            // Remove existing reaction from this user
+            const updatedReactions = message.reactions.filter((reaction) => reaction.user_id.toString() !== userId);
+            // Add new reaction
+            updatedReactions.push({
+                user_id: new mongodb_1.ObjectId(userId),
+                emoji: emoji,
+                created_at: new Date()
+            });
+            yield db.collection('messages').updateOne({ _id: new mongodb_1.ObjectId(messageId) }, { $set: { reactions: updatedReactions } });
+            yield client.close();
+            return Object.assign(Object.assign({}, message), { reactions: updatedReactions });
         });
-        await db.collection('messages').updateOne({ _id: new mongodb_1.ObjectId(messageId) }, { $set: { reactions: updatedReactions } });
-        await client.close();
-        return {
-            ...message,
-            reactions: updatedReactions
-        };
     }
     broadcastUserStatus(userId, status) {
         const statusData = {
@@ -245,7 +252,8 @@ class SocketService {
         return Array.from(this.connectedUsers.keys());
     }
     getUserSocketCount(userId) {
-        return this.connectedUsers.get(userId)?.size || 0;
+        var _a;
+        return ((_a = this.connectedUsers.get(userId)) === null || _a === void 0 ? void 0 : _a.size) || 0;
     }
 }
 exports.SocketService = SocketService;

@@ -1,4 +1,13 @@
 "use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.cronScheduler = void 0;
 const queue_1 = require("./queue");
@@ -19,28 +28,28 @@ class CronScheduler {
         if (this.jobs.has(name)) {
             this.unschedule(name);
         }
-        const job = setInterval(async () => {
+        const job = setInterval(() => __awaiter(this, void 0, void 0, function* () {
             try {
-                await queue_1.queue.enqueue(taskType, data, 1);
+                yield queue_1.queue.enqueue(taskType, data, 1);
             }
             catch (error) {
                 console.error(`Error in scheduled job ${name}:`, error);
             }
-        }, intervalMs);
+        }), intervalMs);
         this.jobs.set(name, job);
         console.log(`Scheduled job ${name} to run every ${intervalMs}ms`);
     }
     // Schedule a one-time job
     scheduleOnce(name, taskType, data, delayMs) {
-        const job = setTimeout(async () => {
+        const job = setTimeout(() => __awaiter(this, void 0, void 0, function* () {
             try {
-                await queue_1.queue.enqueue(taskType, data, 1);
+                yield queue_1.queue.enqueue(taskType, data, 1);
                 this.jobs.delete(name);
             }
             catch (error) {
                 console.error(`Error in one-time job ${name}:`, error);
             }
-        }, delayMs);
+        }), delayMs);
         this.jobs.set(name, job);
         console.log(`Scheduled one-time job ${name} to run in ${delayMs}ms`);
     }
