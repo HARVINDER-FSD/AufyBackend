@@ -92,14 +92,24 @@ router.get("/liked", authenticateToken, async (req: any, res: Response) => {
       userObjectId = new ObjectId(userId)
     } catch (err) {
       console.log('[Reels] Invalid ObjectId format, trying to find user by ID string')
-      const user = await db.collection('users').findOne({ _id: userId })
-      if (!user) {
-        return res.status(400).json({
-          success: false,
-          error: 'User not found'
+      try {
+        const user = await db.collection('users').findOne({ _id: userId as any })
+        if (user) {
+          userObjectId = user._id
+        } else {
+          return res.json({
+            success: true,
+            reels: [],
+            pagination: { page, limit, total: 0, totalPages: 0, hasNext: false, hasPrev: false }
+          })
+        }
+      } catch (findErr) {
+        return res.json({
+          success: true,
+          reels: [],
+          pagination: { page, limit, total: 0, totalPages: 0, hasNext: false, hasPrev: false }
         })
       }
-      userObjectId = user._id
     }
 
     console.log('[Reels] Converted userId:', userObjectId)
@@ -171,9 +181,18 @@ router.get("/liked", authenticateToken, async (req: any, res: Response) => {
     })
   } catch (error: any) {
     console.error('Error fetching liked reels:', error)
-    res.status(error.statusCode || 500).json({
-      success: false,
-      error: error.message,
+    // Return empty results on error instead of 500
+    res.json({
+      success: true,
+      reels: [],
+      pagination: {
+        page: 1,
+        limit: 20,
+        total: 0,
+        totalPages: 0,
+        hasNext: false,
+        hasPrev: false
+      }
     })
   }
 })

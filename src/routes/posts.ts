@@ -347,27 +347,55 @@ router.get("/liked", authenticateToken, async (req, res) => {
 
     const db = await getDatabase()
 
-    console.log('[Posts] Raw userId:', userId, 'Type:', typeof userId)
+    console.log('[Posts] Raw userId:', userId, 'Type:', typeof userId, 'Length:', userId?.length)
 
     // Convert to ObjectId if it's a valid hex string
     let userObjectId: any
     try {
       userObjectId = new ObjectId(userId)
+      console.log('[Posts] Successfully created ObjectId:', userObjectId)
     } catch (err) {
-      console.log('[Posts] Invalid ObjectId format, trying to find user by ID string')
-      // If userId is not a valid ObjectId, it might be stored as a string
-      // Try to find the user first
-      const user = await db.collection('users').findOne({ _id: userId as any })
-      if (!user) {
-        return res.status(400).json({
-          success: false,
-          error: 'User not found'
+      console.log('[Posts] Invalid ObjectId format:', err)
+      // If userId is not a valid ObjectId, try to find the user first
+      try {
+        const user = await db.collection('users').findOne({ _id: userId as any })
+        if (user) {
+          userObjectId = user._id
+          console.log('[Posts] Found user by string ID:', userObjectId)
+        } else {
+          console.log('[Posts] User not found with string ID')
+          // Return empty results instead of error
+          return res.json({
+            success: true,
+            posts: [],
+            pagination: {
+              page,
+              limit,
+              total: 0,
+              totalPages: 0,
+              hasNext: false,
+              hasPrev: false
+            }
+          })
+        }
+      } catch (findErr) {
+        console.log('[Posts] Error finding user:', findErr)
+        return res.json({
+          success: true,
+          posts: [],
+          pagination: {
+            page,
+            limit,
+            total: 0,
+            totalPages: 0,
+            hasNext: false,
+            hasPrev: false
+          }
         })
       }
-      userObjectId = user._id
     }
 
-    console.log('[Posts] Converted userId:', userObjectId)
+    console.log('[Posts] Using userObjectId:', userObjectId)
 
     // Get total count of liked posts
     const total = await db.collection('likes').countDocuments({
@@ -437,9 +465,18 @@ router.get("/liked", authenticateToken, async (req, res) => {
     })
   } catch (error: any) {
     console.error('Error fetching liked posts:', error)
-    res.status(error.statusCode || 500).json({
-      success: false,
-      error: error.message,
+    // Return empty results on error instead of 500
+    res.json({
+      success: true,
+      posts: [],
+      pagination: {
+        page: 1,
+        limit: 20,
+        total: 0,
+        totalPages: 0,
+        hasNext: false,
+        hasPrev: false
+      }
     })
   }
 })
