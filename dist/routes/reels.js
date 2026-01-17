@@ -64,6 +64,7 @@ router.get("/", auth_1.optionalAuth, (req, res) => __awaiter(void 0, void 0, voi
 }));
 // Get user's liked reels
 router.get("/liked", auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
     try {
         let userId = req.userId;
         const page = Number.parseInt(req.query.page) || 1;
@@ -88,27 +89,37 @@ router.get("/liked", auth_1.authenticateToken, (req, res) => __awaiter(void 0, v
             });
         }
         console.log('[Reels/Liked] Using userObjectId:', userObjectId.toString());
-        // Get total count of liked reels
-        const total = yield db.collection('reel_likes').countDocuments({
-            user_id: userObjectId
-        });
-        console.log('[Reels/Liked] Total liked reels:', total);
-        // Get liked reels with full details
-        const likedReels = yield db.collection('reel_likes')
-            .aggregate([
-            { $match: { user_id: userObjectId } },
-            { $sort: { created_at: -1 } },
-            { $skip: skip },
-            { $limit: limit },
+        const likesCollection = db.collection('likes');
+        const likesFilter = {
+            $or: [
+                { user_id: userObjectId },
+                { user_id: userId }
+            ]
+        };
+        const basePipeline = [
+            { $match: likesFilter },
             {
                 $lookup: {
                     from: 'reels',
-                    localField: 'reel_id',
+                    localField: 'post_id',
                     foreignField: '_id',
                     as: 'reel'
                 }
             },
             { $unwind: { path: '$reel', preserveNullAndEmptyArrays: true } },
+            { $match: { 'reel._id': { $ne: null } } }
+        ];
+        const totalResult = yield likesCollection
+            .aggregate([...basePipeline, { $count: 'count' }])
+            .toArray();
+        const total = ((_a = totalResult[0]) === null || _a === void 0 ? void 0 : _a.count) || 0;
+        console.log('[Reels/Liked] Total liked reels:', total);
+        const likedReels = yield likesCollection
+            .aggregate([
+            ...basePipeline,
+            { $sort: { created_at: -1 } },
+            { $skip: skip },
+            { $limit: limit },
             {
                 $lookup: {
                     from: 'users',
@@ -137,9 +148,9 @@ router.get("/liked", auth_1.authenticateToken, (req, res) => __awaiter(void 0, v
                         avatar: '$author.avatar'
                     }
                 }
-            },
-            { $match: { _id: { $ne: null } } }
-        ]).toArray();
+            }
+        ])
+            .toArray();
         console.log('[Reels/Liked] Found liked reels:', likedReels.length);
         res.json({
             success: true,
@@ -156,6 +167,131 @@ router.get("/liked", auth_1.authenticateToken, (req, res) => __awaiter(void 0, v
     }
     catch (error) {
         console.error('[Reels/Liked] Error:', error);
+        // Return empty results on error instead of 500
+        res.json({
+            success: true,
+            reels: [],
+            pagination: {
+                page: 1,
+                limit: 20,
+                total: 0,
+                totalPages: 0,
+                hasNext: false,
+                hasPrev: false
+            }
+        });
+    }
+}));
+// Get user's saved reels
+router.get("/saved", auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        let userId = req.userId;
+        const page = Number.parseInt(req.query.page) || 1;
+        const limit = Number.parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        const { getDatabase } = require('../lib/database');
+        const { ObjectId } = require('mongodb');
+        const db = yield getDatabase();
+        console.log('[Reels/Saved] Raw userId:', userId, 'Type:', typeof userId);
+        // Always convert to ObjectId - userId from JWT should be a valid 24-char hex string
+        let userObjectId;
+        try {
+            userObjectId = new ObjectId(userId);
+            console.log('[Reels/Saved] Converted to ObjectId:', userObjectId.toString());
+        }
+        catch (err) {
+            console.error('[Reels/Saved] Failed to convert userId to ObjectId:', err);
+            return res.json({
+                success: true,
+                reels: [],
+                pagination: { page, limit, total: 0, totalPages: 0, hasNext: false, hasPrev: false }
+            });
+        }
+        console.log('[Reels/Saved] Using userObjectId:', userObjectId.toString());
+        // Get total count of saved reels
+        let total = 0;
+        try {
+            total = yield db.collection('reel_bookmarks').countDocuments({
+                user_id: userObjectId
+            });
+        }
+        catch (countErr) {
+            console.log('[Reels/Saved] Reel bookmarks collection may not exist yet, returning empty');
+            total = 0;
+        }
+        console.log('[Reels/Saved] Total saved reels:', total);
+        // Get saved reels with full details
+        let savedReels = [];
+        if (total > 0) {
+            try {
+                savedReels = yield db.collection('reel_bookmarks')
+                    .aggregate([
+                    { $match: { user_id: userObjectId } },
+                    { $sort: { created_at: -1 } },
+                    { $skip: skip },
+                    { $limit: limit },
+                    {
+                        $lookup: {
+                            from: 'reels',
+                            localField: 'reel_id',
+                            foreignField: '_id',
+                            as: 'reel'
+                        }
+                    },
+                    { $unwind: { path: '$reel', preserveNullAndEmptyArrays: true } },
+                    {
+                        $lookup: {
+                            from: 'users',
+                            localField: 'reel.user_id',
+                            foreignField: '_id',
+                            as: 'author'
+                        }
+                    },
+                    { $unwind: { path: '$author', preserveNullAndEmptyArrays: true } },
+                    {
+                        $project: {
+                            _id: '$reel._id',
+                            videoUrl: '$reel.video_url',
+                            thumbnail: '$reel.thumbnail_url',
+                            title: '$reel.title',
+                            description: '$reel.description',
+                            duration: '$reel.duration',
+                            createdAt: '$reel.created_at',
+                            likesCount: '$reel.likes_count',
+                            viewsCount: '$reel.views_count',
+                            commentsCount: '$reel.comments_count',
+                            sharesCount: '$reel.shares_count',
+                            author: {
+                                _id: '$author._id',
+                                username: '$author.username',
+                                avatar: '$author.avatar'
+                            }
+                        }
+                    },
+                    { $match: { _id: { $ne: null } } }
+                ]).toArray();
+            }
+            catch (aggErr) {
+                console.error('[Reels/Saved] Aggregation error:', aggErr);
+                savedReels = [];
+            }
+        }
+        console.log('[Reels/Saved] Found saved reels:', savedReels.length);
+        res.json({
+            success: true,
+            reels: savedReels,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit),
+                hasNext: page < Math.ceil(total / limit),
+                hasPrev: page > 1
+            }
+        });
+    }
+    catch (error) {
+        console.error('[Reels/Saved] Error:', error);
         // Return empty results on error instead of 500
         res.json({
             success: true,

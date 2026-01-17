@@ -370,24 +370,45 @@ router.get("/liked", authenticateToken, async (req, res) => {
       })
     }
 
-    // Get total count of liked posts
-    const total = await db.collection('likes').countDocuments({
-      user_id: userObjectId
-    })
+    const likesFilter = {
+      $or: [
+        { user_id: userObjectId },
+        { user_id: userId }
+      ]
+    }
+
+    const total = await db.collection('likes').countDocuments(likesFilter)
 
     console.log('[Posts/Liked] Total liked posts:', total)
 
-    // Get liked posts with full details
     const likedPosts = await db.collection('likes')
       .aggregate([
-        { $match: { user_id: userObjectId } },
+        { $match: likesFilter },
+        {
+          $addFields: {
+            normalizedPostId: {
+              $cond: [
+                { $eq: [{ $type: '$post_id' }, 'objectId'] },
+                '$post_id',
+                {
+                  $convert: {
+                    input: '$post_id',
+                    to: 'objectId',
+                    onError: null,
+                    onNull: null
+                  }
+                }
+              ]
+            }
+          }
+        },
         { $sort: { created_at: -1 } },
         { $skip: skip },
         { $limit: limit },
         {
           $lookup: {
             from: 'posts',
-            localField: 'post_id',
+            localField: 'normalizedPostId',
             foreignField: '_id',
             as: 'post'
           }
@@ -438,6 +459,139 @@ router.get("/liked", authenticateToken, async (req, res) => {
     })
   } catch (error: any) {
     console.error('[Posts/Liked] Error:', error)
+    // Return empty results on error instead of 500
+    res.json({
+      success: true,
+      posts: [],
+      pagination: {
+        page: 1,
+        limit: 20,
+        total: 0,
+        totalPages: 0,
+        hasNext: false,
+        hasPrev: false
+      }
+    })
+  }
+})
+
+// Get user's saved posts
+router.get("/saved", authenticateToken, async (req, res) => {
+  try {
+    let userId = req.userId!
+    const page = Number.parseInt(req.query.page as string) || 1
+    const limit = Number.parseInt(req.query.limit as string) || 20
+    const skip = (page - 1) * limit
+
+    const db = await getDatabase()
+
+    console.log('[Posts/Saved] Raw userId:', userId, 'Type:', typeof userId)
+
+    // Always convert to ObjectId - userId from JWT should be a valid 24-char hex string
+    let userObjectId: any
+    try {
+      userObjectId = new ObjectId(userId)
+      console.log('[Posts/Saved] Converted to ObjectId:', userObjectId.toString())
+    } catch (err) {
+      console.error('[Posts/Saved] Failed to convert userId to ObjectId:', err)
+      return res.json({
+        success: true,
+        posts: [],
+        pagination: {
+          page,
+          limit,
+          total: 0,
+          totalPages: 0,
+          hasNext: false,
+          hasPrev: false
+        }
+      })
+    }
+
+    console.log('[Posts/Saved] Using userObjectId:', userObjectId.toString())
+
+    // Get total count of saved posts
+    let total = 0
+    try {
+      total = await db.collection('bookmarks').countDocuments({
+        user_id: userObjectId
+      })
+    } catch (countErr) {
+      console.log('[Posts/Saved] Bookmarks collection may not exist yet, returning empty')
+      total = 0
+    }
+
+    console.log('[Posts/Saved] Total saved posts:', total)
+
+    // Get saved posts with full details
+    let savedPosts: any[] = []
+    if (total > 0) {
+      try {
+        savedPosts = await db.collection('bookmarks')
+          .aggregate([
+            { $match: { user_id: userObjectId } },
+            { $sort: { created_at: -1 } },
+            { $skip: skip },
+            { $limit: limit },
+            {
+              $lookup: {
+                from: 'posts',
+                localField: 'post_id',
+                foreignField: '_id',
+                as: 'post'
+              }
+            },
+            { $unwind: { path: '$post', preserveNullAndEmptyArrays: true } },
+            {
+              $lookup: {
+                from: 'users',
+                localField: 'post.user_id',
+                foreignField: '_id',
+                as: 'author'
+              }
+            },
+            { $unwind: { path: '$author', preserveNullAndEmptyArrays: true } },
+            {
+              $project: {
+                _id: '$post._id',
+                content: '$post.content',
+                media_urls: '$post.media_urls',
+                media_type: '$post.media_type',
+                createdAt: '$post.created_at',
+                likesCount: '$post.likes_count',
+                commentsCount: '$post.comments_count',
+                sharesCount: '$post.shares_count',
+                author: {
+                  _id: '$author._id',
+                  username: '$author.username',
+                  avatar: '$author.avatar'
+                }
+              }
+            },
+            { $match: { _id: { $ne: null } } }
+          ]).toArray()
+      } catch (aggErr) {
+        console.error('[Posts/Saved] Aggregation error:', aggErr)
+        savedPosts = []
+      }
+    }
+
+    console.log('[Posts/Saved] Found saved posts:', savedPosts.length)
+
+    res.json({
+      success: true,
+      posts: savedPosts,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        hasNext: page < Math.ceil(total / limit),
+        hasPrev: page > 1
+      }
+    })
+  } catch (error: any) {
+    console.error('[Posts/Saved] Error:', error)
     // Return empty results on error instead of 500
     res.json({
       success: true,

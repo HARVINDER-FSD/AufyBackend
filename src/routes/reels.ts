@@ -104,8 +104,15 @@ router.get("/liked", authenticateToken, async (req: any, res: Response) => {
 
     const likesCollection = db.collection('likes')
 
+    const likesFilter = {
+      $or: [
+        { user_id: userObjectId },
+        { user_id: userId }
+      ]
+    }
+
     const basePipeline = [
-      { $match: { user_id: userObjectId } },
+      { $match: likesFilter },
       {
         $lookup: {
           from: 'reels',
@@ -180,6 +187,137 @@ router.get("/liked", authenticateToken, async (req: any, res: Response) => {
     })
   } catch (error: any) {
     console.error('[Reels/Liked] Error:', error)
+    // Return empty results on error instead of 500
+    res.json({
+      success: true,
+      reels: [],
+      pagination: {
+        page: 1,
+        limit: 20,
+        total: 0,
+        totalPages: 0,
+        hasNext: false,
+        hasPrev: false
+      }
+    })
+  }
+})
+
+// Get user's saved reels
+router.get("/saved", authenticateToken, async (req: any, res: Response) => {
+  try {
+    let userId = req.userId!
+    const page = Number.parseInt(req.query.page as string) || 1
+    const limit = Number.parseInt(req.query.limit as string) || 20
+    const skip = (page - 1) * limit
+
+    const { getDatabase } = require('../lib/database')
+    const { ObjectId } = require('mongodb')
+    const db = await getDatabase()
+
+    console.log('[Reels/Saved] Raw userId:', userId, 'Type:', typeof userId)
+
+    // Always convert to ObjectId - userId from JWT should be a valid 24-char hex string
+    let userObjectId: any
+    try {
+      userObjectId = new ObjectId(userId)
+      console.log('[Reels/Saved] Converted to ObjectId:', userObjectId.toString())
+    } catch (err) {
+      console.error('[Reels/Saved] Failed to convert userId to ObjectId:', err)
+      return res.json({
+        success: true,
+        reels: [],
+        pagination: { page, limit, total: 0, totalPages: 0, hasNext: false, hasPrev: false }
+      })
+    }
+
+    console.log('[Reels/Saved] Using userObjectId:', userObjectId.toString())
+
+    // Get total count of saved reels
+    let total = 0
+    try {
+      total = await db.collection('reel_bookmarks').countDocuments({
+        user_id: userObjectId
+      })
+    } catch (countErr) {
+      console.log('[Reels/Saved] Reel bookmarks collection may not exist yet, returning empty')
+      total = 0
+    }
+
+    console.log('[Reels/Saved] Total saved reels:', total)
+
+    // Get saved reels with full details
+    let savedReels: any[] = []
+    if (total > 0) {
+      try {
+        savedReels = await db.collection('reel_bookmarks')
+          .aggregate([
+            { $match: { user_id: userObjectId } },
+            { $sort: { created_at: -1 } },
+            { $skip: skip },
+            { $limit: limit },
+            {
+              $lookup: {
+                from: 'reels',
+                localField: 'reel_id',
+                foreignField: '_id',
+                as: 'reel'
+              }
+            },
+            { $unwind: { path: '$reel', preserveNullAndEmptyArrays: true } },
+            {
+              $lookup: {
+                from: 'users',
+                localField: 'reel.user_id',
+                foreignField: '_id',
+                as: 'author'
+              }
+            },
+            { $unwind: { path: '$author', preserveNullAndEmptyArrays: true } },
+            {
+              $project: {
+                _id: '$reel._id',
+                videoUrl: '$reel.video_url',
+                thumbnail: '$reel.thumbnail_url',
+                title: '$reel.title',
+                description: '$reel.description',
+                duration: '$reel.duration',
+                createdAt: '$reel.created_at',
+                likesCount: '$reel.likes_count',
+                viewsCount: '$reel.views_count',
+                commentsCount: '$reel.comments_count',
+                sharesCount: '$reel.shares_count',
+                author: {
+                  _id: '$author._id',
+                  username: '$author.username',
+                  avatar: '$author.avatar'
+                }
+              }
+            },
+            { $match: { _id: { $ne: null } } }
+          ]).toArray()
+      } catch (aggErr) {
+        console.error('[Reels/Saved] Aggregation error:', aggErr)
+        savedReels = []
+      }
+    }
+
+    console.log('[Reels/Saved] Found saved reels:', savedReels.length)
+
+    res.json({
+      success: true,
+      reels: savedReels,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        hasNext: page < Math.ceil(total / limit),
+        hasPrev: page > 1
+      }
+    })
+  } catch (error: any) {
+    console.error('[Reels/Saved] Error:', error)
     // Return empty results on error instead of 500
     res.json({
       success: true,
