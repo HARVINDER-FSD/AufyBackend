@@ -75,7 +75,7 @@ router.get("/", optionalAuth, async (req: any, res: Response) => {
 // Get user's liked reels
 router.get("/liked", authenticateToken, async (req: any, res: Response) => {
   try {
-    const userId = req.userId!
+    let userId = req.userId!
     const page = Number.parseInt(req.query.page as string) || 1
     const limit = Number.parseInt(req.query.limit as string) || 20
     const skip = (page - 1) * limit
@@ -84,15 +84,35 @@ router.get("/liked", authenticateToken, async (req: any, res: Response) => {
     const { ObjectId } = require('mongodb')
     const db = await getDatabase()
 
+    console.log('[Reels] Raw userId:', userId, 'Type:', typeof userId)
+
+    // Convert to ObjectId if it's a valid hex string
+    let userObjectId: any
+    try {
+      userObjectId = new ObjectId(userId)
+    } catch (err) {
+      console.log('[Reels] Invalid ObjectId format, trying to find user by ID string')
+      const user = await db.collection('users').findOne({ _id: userId })
+      if (!user) {
+        return res.status(400).json({
+          success: false,
+          error: 'User not found'
+        })
+      }
+      userObjectId = user._id
+    }
+
+    console.log('[Reels] Converted userId:', userObjectId)
+
     // Get total count of liked reels
     const total = await db.collection('reel_likes').countDocuments({
-      user_id: new ObjectId(userId)
+      user_id: userObjectId
     })
 
     // Get liked reels with full details
     const likedReels = await db.collection('reel_likes')
       .aggregate([
-        { $match: { user_id: new ObjectId(userId) } },
+        { $match: { user_id: userObjectId } },
         { $sort: { created_at: -1 } },
         { $skip: skip },
         { $limit: limit },

@@ -44,7 +44,9 @@ router.get("/", async (req: any, res) => {
         const token = req.headers.authorization.split(' ')[1]
         const decoded = jwt.verify(token, JWT_SECRET) as any
         const userId = decoded.userId
-        const { db } = await connectToDatabase()
+        const { getDatabase } = require('../lib/database')
+        const { ObjectId } = require('mongodb')
+        const db = await getDatabase()
 
         // Add to search history
         await db.collection('search_history').insertOne({
@@ -97,13 +99,13 @@ router.get("/", async (req: any, res) => {
       console.log('[Search] User IDs to check:', userIds.map(id => id.toString()))
       
       const follows = await db.collection('follows').find({
-        follower_id: new ObjectId(currentUserId),  // Fixed: use follower_id instead of followerId
-        following_id: { $in: userIds }  // Fixed: use following_id instead of followingId
+        follower_id: new ObjectId(currentUserId),
+        following_id: { $in: userIds }
       }).toArray()
 
       console.log('[Search] Found follows:', follows.length)
       follows.forEach((follow: any) => {
-        const followingIdStr = follow.following_id.toString()  // Fixed: use following_id
+        const followingIdStr = follow.following_id.toString()
         followStatusMap[followingIdStr] = true
         console.log('[Search] User', followingIdStr, 'is followed')
       })
@@ -311,7 +313,9 @@ router.get("/history", async (req: any, res) => {
     const limit = Number.parseInt(req.query.limit as string) || 20
     const skip = (page - 1) * limit
 
-    const { db } = await connectToDatabase()
+    const { getDatabase } = require('../lib/database')
+    const { ObjectId } = require('mongodb')
+    const db = await getDatabase()
 
     // Get total count
     const total = await db.collection('search_history').countDocuments({
@@ -365,7 +369,9 @@ router.delete("/history/:itemId", async (req: any, res) => {
     const userId = decoded.userId
     const { itemId } = req.params
 
-    const { db } = await connectToDatabase()
+    const { getDatabase } = require('../lib/database')
+    const { ObjectId } = require('mongodb')
+    const db = await getDatabase()
 
     // Delete the search history item
     const result = await db.collection('search_history').deleteOne({
@@ -407,7 +413,9 @@ router.delete("/history", async (req: any, res) => {
     const decoded = jwt.verify(token, JWT_SECRET) as any
     const userId = decoded.userId
 
-    const { db } = await connectToDatabase()
+    const { getDatabase } = require('../lib/database')
+    const { ObjectId } = require('mongodb')
+    const db = await getDatabase()
 
     // Delete all search history for user
     await db.collection('search_history').deleteMany({
