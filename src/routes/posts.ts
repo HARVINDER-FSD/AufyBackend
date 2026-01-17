@@ -337,6 +337,87 @@ router.delete("/:postId/like", authenticateToken, async (req, res) => {
   }
 })
 
+// Get user's liked posts
+router.get("/liked", authenticateToken, async (req, res) => {
+  try {
+    const userId = req.userId!
+    const page = Number.parseInt(req.query.page as string) || 1
+    const limit = Number.parseInt(req.query.limit as string) || 20
+    const skip = (page - 1) * limit
+
+    const db = await getDatabase()
+
+    // Get total count of liked posts
+    const total = await db.collection('likes').countDocuments({
+      user_id: new ObjectId(userId)
+    })
+
+    // Get liked posts with full details
+    const likedPosts = await db.collection('likes')
+      .aggregate([
+        { $match: { user_id: new ObjectId(userId) } },
+        { $sort: { created_at: -1 } },
+        { $skip: skip },
+        { $limit: limit },
+        {
+          $lookup: {
+            from: 'posts',
+            localField: 'post_id',
+            foreignField: '_id',
+            as: 'post'
+          }
+        },
+        { $unwind: { path: '$post', preserveNullAndEmptyArrays: true } },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'post.user_id',
+            foreignField: '_id',
+            as: 'author'
+          }
+        },
+        { $unwind: { path: '$author', preserveNullAndEmptyArrays: true } },
+        {
+          $project: {
+            _id: '$post._id',
+            content: '$post.content',
+            media_urls: '$post.media_urls',
+            media_type: '$post.media_type',
+            createdAt: '$post.created_at',
+            likesCount: '$post.likes_count',
+            commentsCount: '$post.comments_count',
+            sharesCount: '$post.shares_count',
+            author: {
+              _id: '$author._id',
+              username: '$author.username',
+              avatar: '$author.avatar'
+            }
+          }
+        },
+        { $match: { _id: { $ne: null } } }
+      ]).toArray()
+
+    res.json({
+      success: true,
+      posts: likedPosts,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        hasNext: page < Math.ceil(total / limit),
+        hasPrev: page > 1
+      }
+    })
+  } catch (error: any) {
+    console.error('Error fetching liked posts:', error)
+    res.status(error.statusCode || 500).json({
+      success: false,
+      error: error.message,
+    })
+  }
+})
+
 // Get post likes
 router.get("/:postId/likes", optionalAuth, async (req, res) => {
   try {

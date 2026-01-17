@@ -72,6 +72,92 @@ router.get("/", optionalAuth, async (req: any, res: Response) => {
   }
 })
 
+// Get user's liked reels
+router.get("/liked", authenticateToken, async (req: any, res: Response) => {
+  try {
+    const userId = req.userId!
+    const page = Number.parseInt(req.query.page as string) || 1
+    const limit = Number.parseInt(req.query.limit as string) || 20
+    const skip = (page - 1) * limit
+
+    const { getDatabase } = require('../lib/database')
+    const { ObjectId } = require('mongodb')
+    const db = await getDatabase()
+
+    // Get total count of liked reels
+    const total = await db.collection('reel_likes').countDocuments({
+      user_id: new ObjectId(userId)
+    })
+
+    // Get liked reels with full details
+    const likedReels = await db.collection('reel_likes')
+      .aggregate([
+        { $match: { user_id: new ObjectId(userId) } },
+        { $sort: { created_at: -1 } },
+        { $skip: skip },
+        { $limit: limit },
+        {
+          $lookup: {
+            from: 'reels',
+            localField: 'reel_id',
+            foreignField: '_id',
+            as: 'reel'
+          }
+        },
+        { $unwind: { path: '$reel', preserveNullAndEmptyArrays: true } },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'reel.user_id',
+            foreignField: '_id',
+            as: 'author'
+          }
+        },
+        { $unwind: { path: '$author', preserveNullAndEmptyArrays: true } },
+        {
+          $project: {
+            _id: '$reel._id',
+            videoUrl: '$reel.video_url',
+            thumbnail: '$reel.thumbnail_url',
+            title: '$reel.title',
+            description: '$reel.description',
+            duration: '$reel.duration',
+            createdAt: '$reel.created_at',
+            likesCount: '$reel.likes_count',
+            viewsCount: '$reel.views_count',
+            commentsCount: '$reel.comments_count',
+            sharesCount: '$reel.shares_count',
+            author: {
+              _id: '$author._id',
+              username: '$author.username',
+              avatar: '$author.avatar'
+            }
+          }
+        },
+        { $match: { _id: { $ne: null } } }
+      ]).toArray()
+
+    res.json({
+      success: true,
+      reels: likedReels,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        hasNext: page < Math.ceil(total / limit),
+        hasPrev: page > 1
+      }
+    })
+  } catch (error: any) {
+    console.error('Error fetching liked reels:', error)
+    res.status(error.statusCode || 500).json({
+      success: false,
+      error: error.message,
+    })
+  }
+})
+
 // Get user's reels
 router.get("/user/:userId", optionalAuth, async (req: any, res: Response) => {
   try {

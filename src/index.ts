@@ -38,6 +38,7 @@ import reportsRoutes from './routes/reports'
 import searchRoutes from './routes/search'
 import analyticsRoutes from './routes/analytics'
 import bookmarksRoutes from './routes/bookmarks'
+import commentsRoutes from './routes/comments'
 import settingsRoutes from './routes/settings'
 import pushRoutes from './routes/push'
 import professionalRoutes from './routes/professional'
@@ -224,6 +225,7 @@ app.use('/api/reports', reportsRoutes)
 app.use('/api/search', searchRoutes)
 app.use('/api/analytics', analyticsRoutes)
 app.use('/api/bookmarks', bookmarksRoutes)
+app.use('/api/comments', commentsRoutes)
 app.use('/api/settings', settingsRoutes)
 app.use('/api/push', pushRoutes)
 app.use('/api/close-friends', closeFriendsRoutes)

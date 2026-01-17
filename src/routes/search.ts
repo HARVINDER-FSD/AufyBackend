@@ -25,7 +25,7 @@ const getCurrentUserId = (req: any): string | null => {
 }
 
 // Global search (root endpoint)
-router.get("/", async (req, res) => {
+router.get("/", async (req: any, res) => {
   try {
     const { q, limit = 20 } = req.query
 
@@ -37,6 +37,26 @@ router.get("/", async (req, res) => {
     }
 
     console.log('[Search] Query:', q)
+
+    // Track search in history if user is logged in
+    if (req.headers.authorization) {
+      try {
+        const token = req.headers.authorization.split(' ')[1]
+        const decoded = jwt.verify(token, JWT_SECRET) as any
+        const userId = decoded.userId
+        const { db } = await connectToDatabase()
+
+        // Add to search history
+        await db.collection('search_history').insertOne({
+          user_id: new ObjectId(userId),
+          query: q,
+          type: 'search',
+          created_at: new Date()
+        })
+      } catch (err) {
+        console.log('[Search] Could not track search history:', err)
+      }
+    }
 
     // Try cache first
     const cacheKey = `search:${q}:${limit}`
@@ -269,6 +289,140 @@ router.get("/trending", async (req, res) => {
     res.status(500).json({
       success: false,
       error: "Internal server error"
+    })
+  }
+})
+
+// Get search history
+router.get("/history", async (req: any, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1]
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        error: 'Unauthorized'
+      })
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET) as any
+    const userId = decoded.userId
+
+    const page = Number.parseInt(req.query.page as string) || 1
+    const limit = Number.parseInt(req.query.limit as string) || 20
+    const skip = (page - 1) * limit
+
+    const { db } = await connectToDatabase()
+
+    // Get total count
+    const total = await db.collection('search_history').countDocuments({
+      user_id: new ObjectId(userId)
+    })
+
+    // Get search history
+    const history = await db.collection('search_history')
+      .find({ user_id: new ObjectId(userId) })
+      .sort({ created_at: -1 })
+      .skip(skip)
+      .limit(limit)
+      .toArray()
+
+    res.json({
+      success: true,
+      history: history.map((item: any) => ({
+        _id: item._id.toString(),
+        query: item.query,
+        type: item.type || 'search',
+        createdAt: item.created_at
+      })),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit)
+      }
+    })
+  } catch (error: any) {
+    console.error('Error fetching search history:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message
+    })
+  }
+})
+
+// Delete search history item
+router.delete("/history/:itemId", async (req: any, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1]
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        error: 'Unauthorized'
+      })
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET) as any
+    const userId = decoded.userId
+    const { itemId } = req.params
+
+    const { db } = await connectToDatabase()
+
+    // Delete the search history item
+    const result = await db.collection('search_history').deleteOne({
+      _id: new ObjectId(itemId),
+      user_id: new ObjectId(userId)
+    })
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Search history item not found'
+      })
+    }
+
+    res.json({
+      success: true,
+      message: 'Search history item deleted'
+    })
+  } catch (error: any) {
+    console.error('Error deleting search history:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message
+    })
+  }
+})
+
+// Clear all search history
+router.delete("/history", async (req: any, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1]
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        error: 'Unauthorized'
+      })
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET) as any
+    const userId = decoded.userId
+
+    const { db } = await connectToDatabase()
+
+    // Delete all search history for user
+    await db.collection('search_history').deleteMany({
+      user_id: new ObjectId(userId)
+    })
+
+    res.json({
+      success: true,
+      message: 'All search history cleared'
+    })
+  } catch (error: any) {
+    console.error('Error clearing search history:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message
     })
   }
 })
