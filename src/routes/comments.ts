@@ -15,40 +15,30 @@ router.get("/my-comments", authenticateToken, async (req: any, res) => {
 
     const db = await getDatabase()
 
-    console.log('[Comments] Raw userId:', userId, 'Type:', typeof userId)
+    console.log('[Comments/MyComments] Raw userId:', userId, 'Type:', typeof userId)
 
-    // Convert to ObjectId if it's a valid hex string
+    // Always convert to ObjectId - userId from JWT should be a valid 24-char hex string
     let userObjectId: any
     try {
       userObjectId = new ObjectId(userId)
+      console.log('[Comments/MyComments] Converted to ObjectId:', userObjectId.toString())
     } catch (err) {
-      console.log('[Comments] Invalid ObjectId format, trying to find user by ID string')
-      try {
-        const user = await db.collection('users').findOne({ _id: userId as any })
-        if (user) {
-          userObjectId = user._id
-        } else {
-          return res.json({
-            success: true,
-            comments: [],
-            pagination: { page, limit, total: 0, totalPages: 0, hasNext: false, hasPrev: false }
-          })
-        }
-      } catch (findErr) {
-        return res.json({
-          success: true,
-          comments: [],
-          pagination: { page, limit, total: 0, totalPages: 0, hasNext: false, hasPrev: false }
-        })
-      }
+      console.error('[Comments/MyComments] Failed to convert userId to ObjectId:', err)
+      return res.json({
+        success: true,
+        comments: [],
+        pagination: { page, limit, total: 0, totalPages: 0, hasNext: false, hasPrev: false }
+      })
     }
 
-    console.log('[Comments] Converted userId:', userObjectId)
+    console.log('[Comments/MyComments] Using userObjectId:', userObjectId.toString())
 
     // Get total count of user's comments
     const total = await db.collection('comments').countDocuments({
       user_id: userObjectId
     })
+
+    console.log('[Comments/MyComments] Total comments:', total)
 
     // Get user's comments with post/reel details
     const comments = await db.collection('comments')
@@ -95,6 +85,8 @@ router.get("/my-comments", authenticateToken, async (req: any, res) => {
         }
       ]).toArray()
 
+    console.log('[Comments/MyComments] Found comments:', comments.length)
+
     res.json({
       success: true,
       comments,
@@ -108,7 +100,7 @@ router.get("/my-comments", authenticateToken, async (req: any, res) => {
       }
     })
   } catch (error: any) {
-    console.error('Error fetching user comments:', error)
+    console.error('[Comments/MyComments] Error:', error)
     // Return empty results on error instead of 500
     res.json({
       success: true,

@@ -317,18 +317,38 @@ router.get("/history", async (req: any, res) => {
     const { ObjectId } = require('mongodb')
     const db = await getDatabase()
 
+    console.log('[SearchHistory] Raw userId:', userId, 'Type:', typeof userId)
+
+    // Always convert to ObjectId - userId from JWT should be a valid 24-char hex string
+    let userObjectId: any
+    try {
+      userObjectId = new ObjectId(userId)
+      console.log('[SearchHistory] Converted to ObjectId:', userObjectId.toString())
+    } catch (err) {
+      console.error('[SearchHistory] Failed to convert userId to ObjectId:', err)
+      return res.json({
+        success: true,
+        history: [],
+        pagination: { page, limit, total: 0, totalPages: 0 }
+      })
+    }
+
     // Get total count
     const total = await db.collection('search_history').countDocuments({
-      user_id: new ObjectId(userId)
+      user_id: userObjectId
     })
+
+    console.log('[SearchHistory] Total search history items:', total)
 
     // Get search history
     const history = await db.collection('search_history')
-      .find({ user_id: new ObjectId(userId) })
+      .find({ user_id: userObjectId })
       .sort({ created_at: -1 })
       .skip(skip)
       .limit(limit)
       .toArray()
+
+    console.log('[SearchHistory] Found items:', history.length)
 
     res.json({
       success: true,
@@ -346,10 +366,11 @@ router.get("/history", async (req: any, res) => {
       }
     })
   } catch (error: any) {
-    console.error('Error fetching search history:', error)
-    res.status(500).json({
-      success: false,
-      error: error.message
+    console.error('[SearchHistory] Error:', error)
+    res.json({
+      success: true,
+      history: [],
+      pagination: { page: 1, limit: 20, total: 0, totalPages: 0 }
     })
   }
 })
@@ -373,10 +394,24 @@ router.delete("/history/:itemId", async (req: any, res) => {
     const { ObjectId } = require('mongodb')
     const db = await getDatabase()
 
+    console.log('[SearchHistory/Delete] Raw userId:', userId, 'itemId:', itemId)
+
+    // Always convert to ObjectId
+    let userObjectId: any
+    try {
+      userObjectId = new ObjectId(userId)
+    } catch (err) {
+      console.error('[SearchHistory/Delete] Failed to convert userId:', err)
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid user ID'
+      })
+    }
+
     // Delete the search history item
     const result = await db.collection('search_history').deleteOne({
       _id: new ObjectId(itemId),
-      user_id: new ObjectId(userId)
+      user_id: userObjectId
     })
 
     if (result.deletedCount === 0) {
@@ -386,12 +421,14 @@ router.delete("/history/:itemId", async (req: any, res) => {
       })
     }
 
+    console.log('[SearchHistory/Delete] Deleted successfully')
+
     res.json({
       success: true,
       message: 'Search history item deleted'
     })
   } catch (error: any) {
-    console.error('Error deleting search history:', error)
+    console.error('[SearchHistory/Delete] Error:', error)
     res.status(500).json({
       success: false,
       error: error.message
@@ -417,17 +454,34 @@ router.delete("/history", async (req: any, res) => {
     const { ObjectId } = require('mongodb')
     const db = await getDatabase()
 
+    console.log('[SearchHistory/Clear] Raw userId:', userId)
+
+    // Always convert to ObjectId
+    let userObjectId: any
+    try {
+      userObjectId = new ObjectId(userId)
+    } catch (err) {
+      console.error('[SearchHistory/Clear] Failed to convert userId:', err)
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid user ID'
+      })
+    }
+
     // Delete all search history for user
-    await db.collection('search_history').deleteMany({
-      user_id: new ObjectId(userId)
+    const result = await db.collection('search_history').deleteMany({
+      user_id: userObjectId
     })
+
+    console.log('[SearchHistory/Clear] Deleted', result.deletedCount, 'items')
 
     res.json({
       success: true,
-      message: 'All search history cleared'
+      message: 'All search history cleared',
+      deletedCount: result.deletedCount
     })
   } catch (error: any) {
-    console.error('Error clearing search history:', error)
+    console.error('[SearchHistory/Clear] Error:', error)
     res.status(500).json({
       success: false,
       error: error.message

@@ -84,40 +84,30 @@ router.get("/liked", authenticateToken, async (req: any, res: Response) => {
     const { ObjectId } = require('mongodb')
     const db = await getDatabase()
 
-    console.log('[Reels] Raw userId:', userId, 'Type:', typeof userId)
+    console.log('[Reels/Liked] Raw userId:', userId, 'Type:', typeof userId)
 
-    // Convert to ObjectId if it's a valid hex string
+    // Always convert to ObjectId - userId from JWT should be a valid 24-char hex string
     let userObjectId: any
     try {
       userObjectId = new ObjectId(userId)
+      console.log('[Reels/Liked] Converted to ObjectId:', userObjectId.toString())
     } catch (err) {
-      console.log('[Reels] Invalid ObjectId format, trying to find user by ID string')
-      try {
-        const user = await db.collection('users').findOne({ _id: userId as any })
-        if (user) {
-          userObjectId = user._id
-        } else {
-          return res.json({
-            success: true,
-            reels: [],
-            pagination: { page, limit, total: 0, totalPages: 0, hasNext: false, hasPrev: false }
-          })
-        }
-      } catch (findErr) {
-        return res.json({
-          success: true,
-          reels: [],
-          pagination: { page, limit, total: 0, totalPages: 0, hasNext: false, hasPrev: false }
-        })
-      }
+      console.error('[Reels/Liked] Failed to convert userId to ObjectId:', err)
+      return res.json({
+        success: true,
+        reels: [],
+        pagination: { page, limit, total: 0, totalPages: 0, hasNext: false, hasPrev: false }
+      })
     }
 
-    console.log('[Reels] Converted userId:', userObjectId)
+    console.log('[Reels/Liked] Using userObjectId:', userObjectId.toString())
 
     // Get total count of liked reels
     const total = await db.collection('reel_likes').countDocuments({
       user_id: userObjectId
     })
+
+    console.log('[Reels/Liked] Total liked reels:', total)
 
     // Get liked reels with full details
     const likedReels = await db.collection('reel_likes')
@@ -167,6 +157,8 @@ router.get("/liked", authenticateToken, async (req: any, res: Response) => {
         { $match: { _id: { $ne: null } } }
       ]).toArray()
 
+    console.log('[Reels/Liked] Found liked reels:', likedReels.length)
+
     res.json({
       success: true,
       reels: likedReels,
@@ -180,7 +172,7 @@ router.get("/liked", authenticateToken, async (req: any, res: Response) => {
       }
     })
   } catch (error: any) {
-    console.error('Error fetching liked reels:', error)
+    console.error('[Reels/Liked] Error:', error)
     // Return empty results on error instead of 500
     res.json({
       success: true,
