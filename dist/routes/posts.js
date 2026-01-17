@@ -108,8 +108,8 @@ router.post("/", auth_1.authenticateToken, content_filter_1.validateAgeAndConten
         });
     }
 }));
-// Get post by ID
-router.get("/:postId", auth_1.optionalAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+// Get post by ID (only valid MongoDB ObjectId, avoid conflicting with /liked, /saved, etc.)
+router.get("/:postId([0-9a-fA-F]{24})", auth_1.optionalAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a;
     try {
         const { postId } = req.params;

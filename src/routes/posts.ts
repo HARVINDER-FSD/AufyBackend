@@ -114,8 +114,8 @@ router.post("/", authenticateToken, validateAgeAndContent, validateBody(createPo
   }
 })
 
-// Get post by ID
-router.get("/:postId", optionalAuth, async (req, res) => {
+// Get post by ID (only valid MongoDB ObjectId, avoid conflicting with /liked, /saved, etc.)
+router.get("/:postId([0-9a-fA-F]{24})", optionalAuth, async (req, res) => {
   try {
     const { postId } = req.params
     const post = await PostService.getPostById(postId, req.user?.userId)
