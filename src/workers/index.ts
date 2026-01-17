@@ -8,13 +8,44 @@ import { ObjectId } from 'mongodb';
 
 const expo = new Expo();
 
-const connection = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
+let connection: Redis | null = null;
+let workersInitialized = false;
+
+try {
+  connection = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
     maxRetriesPerRequest: null,
+    connectTimeout: 5000,
+    retryStrategy: (times) => {
+      if (times > 3) {
+        logger.warn('⚠️  Workers Redis connection failed, workers disabled');
+        return null;
+      }
+      const delay = Math.min(times * 50, 2000);
+      return delay;
+    },
     tls: process.env.REDIS_URL?.startsWith('rediss://') ? {} : undefined,
-});
+    lazyConnect: true,
+  });
+
+  connection.on('connect', () => {
+    logger.info('✅ Workers Redis connected');
+    workersInitialized = true;
+  });
+
+  connection.on('error', (err) => {
+    logger.warn('⚠️  Workers Redis error:', err.message);
+  });
+
+  connection.connect().catch(() => {
+    logger.warn('⚠️  Workers Redis unavailable');
+  });
+} catch (error) {
+  logger.warn('⚠️  Failed to initialize Workers Redis:', error);
+  connection = null;
+}
 
 // 1. Notification Worker
-const notificationWorker = new Worker(QUEUE_NAMES.NOTIFICATIONS, async (job: Job) => {
+const notificationWorker = connection ? new Worker(QUEUE_NAMES.NOTIFICATIONS, async (job: Job) => {
     const { recipientId, title, body, data } = job.data;
 
     const db = await getDatabase();
@@ -47,7 +78,7 @@ const notificationWorker = new Worker(QUEUE_NAMES.NOTIFICATIONS, async (job: Job
     } catch (error) {
         logger.error(`Error sending push notification to ${recipientId}:`, error);
     }
-}, { connection });
+}, { connection }) : null;
 
 // 2. Feed Update Worker (Invalidates cache for followers)
 const feedUpdateWorker = new Worker(QUEUE_NAMES.FEED_UPDATES, async (job: Job) => {
