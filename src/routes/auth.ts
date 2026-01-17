@@ -1,21 +1,28 @@
 import { Router, Request, Response } from 'express'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
+import { ObjectId } from 'mongodb'
 import { getDatabase } from '../lib/database'
-import { 
-  bruteForceProtection, 
-  recordFailedAttempt, 
+import { authenticateToken } from '../middleware/auth'
+import {
+  bruteForceProtection,
+  recordFailedAttempt,
   clearFailedAttempts,
-  validatePasswordStrength 
+  validatePasswordStrength
 } from '../middleware/security'
 import { generatePasswordResetToken, hash } from '../utils/encryption'
 
 const router = Router()
 
-const JWT_SECRET = process.env.JWT_SECRET || '4d9f1c8c6b27a67e9f3a81d2e5b0f78c72d1e7a64d59c83fb20e5a72a8c4d192'
+const JWT_SECRET = process.env.JWT_SECRET;
+
+if (!JWT_SECRET) {
+  console.error('FATAL ERROR: JWT_SECRET is not defined in environment variables.');
+  process.exit(1);
+}
 
 // POST /api/auth/login
-router.post('/login', bruteForceProtection, async (req: Request, res: Response) => {
+router.post('/login', bruteForceProtection as any, async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body
 
@@ -68,7 +75,7 @@ router.post('/login', bruteForceProtection, async (req: Request, res: Response) 
         message: "Invalid email or password"
       })
     }
-    
+
     // Clear failed attempts on successful login
     clearFailedAttempts(email);
 
@@ -102,9 +109,25 @@ router.post('/login', bruteForceProtection, async (req: Request, res: Response) 
       secure: process.env.NODE_ENV === 'production',
     })
 
+    // Record login activity
+    try {
+      const userAgent = req.headers['user-agent'] || 'Unknown'
+      const ip = req.ip || '0.0.0.0'
+      await db.collection('login_activity').insertOne({
+        userId: user._id,
+        device: userAgent,
+        ip,
+        location: 'Unknown', // Could use geoip here
+        timestamp: new Date(),
+        status: 'active'
+      })
+    } catch (activityError) {
+      console.error('Failed to record login activity:', activityError)
+    }
+
     // Return user data and token
     const avatarUrl = user.avatar_url || user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username)}&background=0095f6&color=fff&size=128`;
-    
+
     return res.json({
       user: {
         _id: user._id.toString(),
@@ -133,12 +156,12 @@ router.post('/login', bruteForceProtection, async (req: Request, res: Response) 
 // POST /api/auth/register
 router.post('/register', async (req: Request, res: Response) => {
   try {
-    const { email, password, username, name } = req.body
+    const { email, password, username, name, dob } = req.body
 
     // Validate required fields
-    if (!email || !password || !username) {
+    if (!email || !password || !username || !dob) {
       return res.status(400).json({
-        message: "Email, password, and username are required"
+        message: "Email, password, username, and date of birth are required"
       })
     }
 
@@ -177,32 +200,32 @@ router.post('/register', async (req: Request, res: Response) => {
         // Username is taken - generate suggestions
         const suggestions: string[] = []
         const baseUsername = username.replace(/[0-9]+$/, '') // Remove trailing numbers
-        
+
         // Try adding random numbers
         for (let i = 0; i < 5; i++) {
           const randomNum = Math.floor(Math.random() * 9999) + 1
           const suggestion = `${baseUsername}${randomNum}`
-          
+
           // Check if suggestion is available
           const exists = await usersCollection.findOne({ username: suggestion })
           if (!exists && suggestion.length <= 30) {
             suggestions.push(suggestion)
           }
         }
-        
+
         // Try adding underscore and numbers
         if (suggestions.length < 5) {
           for (let i = 0; i < 3; i++) {
             const randomNum = Math.floor(Math.random() * 999) + 1
             const suggestion = `${baseUsername}_${randomNum}`
-            
+
             const exists = await usersCollection.findOne({ username: suggestion })
             if (!exists && suggestion.length <= 30 && !suggestions.includes(suggestion)) {
               suggestions.push(suggestion)
             }
           }
         }
-        
+
         return res.status(400).json({
           message: "Username already taken",
           error: 'USERNAME_TAKEN',
@@ -216,7 +239,7 @@ router.post('/register', async (req: Request, res: Response) => {
 
     // Create new user with proper avatar fields
     const defaultAvatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(username)}&background=0095f6&color=fff&size=128`;
-    
+
     const result = await usersCollection.insertOne({
       email,
       password: hashedPassword,
@@ -232,6 +255,10 @@ router.post('/register', async (req: Request, res: Response) => {
       following_count: 0,
       verified: false,
       is_verified: false,
+      dob: dob ? new Date(dob) : null,
+      contentWarnings: 0,
+      isBlocked: false,
+      blockedUntil: null,
       createdAt: new Date(),
       updatedAt: new Date()
     })
@@ -313,35 +340,46 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
 
     // Always return success to prevent email enumeration
     if (!user) {
-      return res.json({ 
-        message: 'If an account exists with this email, you will receive a password reset link.' 
+      return res.json({
+        message: 'If an account exists with this email, you will receive an OTP.'
       });
     }
 
-    // Generate secure reset token
-    const { token, hash: tokenHash, expires } = generatePasswordResetToken();
+    // Generate 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-    // Store reset token in database
+    // Store OTP in database
     await usersCollection.updateOne(
       { email },
       {
         $set: {
-          resetPasswordToken: tokenHash,
-          resetPasswordExpires: expires,
+          resetPasswordOTP: otp,
+          resetPasswordOTPExpires: otpExpires,
           updated_at: new Date()
         }
       }
     );
 
-    // Send password reset email asynchronously (don't wait for it)
-    const { sendPasswordResetEmail } = await import('../services/email-resend');
-    sendPasswordResetEmail(email, token, user.username || user.full_name).catch(err => {
-      console.error('[FORGOT PASSWORD] Email send error:', err);
-    });
+    console.log(`[FORGOT PASSWORD] OTP generated for ${email}: ${otp}`);
+    console.log(`[FORGOT PASSWORD] User: ${user.username}, Full Name: ${user.full_name}`);
+
+    // Send OTP email asynchronously (don't wait for it)
+    try {
+      const { sendPasswordResetOTPEmail } = await import('../services/email-resend');
+      console.log('[FORGOT PASSWORD] Calling sendPasswordResetOTPEmail...');
+      sendPasswordResetOTPEmail(email, otp, user.username || user.full_name).then(() => {
+        console.log('[FORGOT PASSWORD] Email sent successfully');
+      }).catch(err => {
+        console.error('[FORGOT PASSWORD] Email send error:', err);
+      });
+    } catch (importErr) {
+      console.error('[FORGOT PASSWORD] Import error:', importErr);
+    }
 
     // Respond immediately without waiting for email
-    res.json({ 
-      message: 'If an account exists with this email, you will receive a password reset link.'
+    res.json({
+      message: 'If an account exists with this email, you will receive an OTP.'
     });
 
   } catch (error) {
@@ -394,9 +432,9 @@ router.post('/reset-password', async (req: Request, res: Response) => {
     // Validate password strength
     const passwordValidation = validatePasswordStrength(newPassword);
     if (!passwordValidation.valid) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         message: 'Password does not meet requirements',
-        errors: passwordValidation.errors 
+        errors: passwordValidation.errors
       });
     }
 
@@ -467,15 +505,15 @@ router.post('/change-password', async (req: Request, res: Response) => {
     // Validate new password strength
     const passwordValidation = validatePasswordStrength(newPassword);
     if (!passwordValidation.valid) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         message: 'New password does not meet requirements',
-        errors: passwordValidation.errors 
+        errors: passwordValidation.errors
       });
     }
 
     // Verify JWT token
     const decoded = jwt.verify(token, JWT_SECRET) as any;
-    
+
     const db = await getDatabase();
     const usersCollection = db.collection('users');
 
@@ -525,6 +563,169 @@ router.post('/change-password', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('[CHANGE PASSWORD] Error:', error);
     res.status(500).json({ message: 'Failed to change password' });
+  }
+});
+
+// GET /api/auth/login-activity - Get user's login history
+router.get('/login-activity', authenticateToken, async (req: any, res) => {
+  try {
+    const userId = req.userId
+    const db = await getDatabase()
+
+    const activity = await db.collection('login_activity')
+      .find({ userId: new ObjectId(userId) })
+      .sort({ timestamp: -1 })
+      .limit(10)
+      .toArray()
+
+    res.json({
+      success: true,
+      activity: activity.map(a => ({
+        id: a._id,
+        device: a.device,
+        ip: a.ip,
+        location: a.location,
+        timestamp: a.timestamp,
+        status: a.status
+      }))
+    })
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
+export default router
+
+
+// POST /api/auth/verify-otp - Verify OTP for password reset
+router.post('/verify-otp', async (req: Request, res: Response) => {
+  try {
+    const { email, otp } = req.body;
+
+    if (!email || !otp) {
+      return res.status(400).json({ message: 'Email and OTP are required' });
+    }
+
+    const db = await getDatabase();
+    const usersCollection = db.collection('users');
+
+    const user = await usersCollection.findOne({ email });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Check if OTP matches and is not expired
+    if (user.resetPasswordOTP !== otp || !user.resetPasswordOTPExpires || new Date() > user.resetPasswordOTPExpires) {
+      return res.status(400).json({ message: 'Invalid or expired OTP' });
+    }
+
+    console.log(`[OTP VERIFY] OTP verified for user: ${email}`);
+
+    // OTP is valid, return success
+    res.json({ 
+      message: 'OTP verified successfully',
+      verified: true 
+    });
+
+  } catch (error) {
+    console.error('[OTP VERIFY] Error:', error);
+    res.status(500).json({ message: 'Failed to verify OTP' });
+  }
+});
+
+// POST /api/auth/reset-password-otp - Reset password using OTP
+router.post('/reset-password-otp', async (req: Request, res: Response) => {
+  try {
+    const { email, otp, newPassword } = req.body;
+
+    if (!email || !otp || !newPassword) {
+      return res.status(400).json({ message: 'Email, OTP, and new password are required' });
+    }
+
+    // Validate password strength
+    const passwordValidation = validatePasswordStrength(newPassword);
+    if (!passwordValidation.valid) {
+      return res.status(400).json({
+        message: 'Password does not meet requirements',
+        errors: passwordValidation.errors
+      });
+    }
+
+    const db = await getDatabase();
+    const usersCollection = db.collection('users');
+
+    const user = await usersCollection.findOne({ email });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Verify OTP
+    if (user.resetPasswordOTP !== otp || !user.resetPasswordOTPExpires || new Date() > user.resetPasswordOTPExpires) {
+      return res.status(400).json({ message: 'Invalid or expired OTP' });
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update password and clear OTP
+    await usersCollection.updateOne(
+      { _id: user._id },
+      {
+        $set: {
+          password: hashedPassword,
+          updated_at: new Date()
+        },
+        $unset: {
+          resetPasswordOTP: '',
+          resetPasswordOTPExpires: ''
+        }
+      }
+    );
+
+    console.log(`[RESET PASSWORD OTP] Password reset successful for user: ${email}`);
+
+    // Generate JWT token for auto-login
+    const token = jwt.sign(
+      {
+        userId: user._id.toString(),
+        email: user.email,
+        username: user.username,
+        name: user.name
+      },
+      JWT_SECRET,
+      { expiresIn: '90d' }
+    );
+
+    // Send confirmation email asynchronously
+    const { sendPasswordChangedEmail } = await import('../services/email-resend');
+    sendPasswordChangedEmail(email, user.username || user.full_name).catch(err => {
+      console.error('[RESET PASSWORD OTP] Email send error:', err);
+    });
+
+    // Return token for auto-login
+    res.json({ 
+      message: 'Password reset successful',
+      token: token,
+      user: {
+        _id: user._id.toString(),
+        id: user._id.toString(),
+        username: user.username,
+        email: user.email,
+        name: user.name || "",
+        fullName: user.name || "",
+        bio: user.bio || "",
+        avatar: user.avatar_url || user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username)}&background=0095f6&color=fff&size=128`,
+        followers: user.followers || 0,
+        following: user.following || 0,
+        verified: user.verified || false
+      }
+    });
+
+  } catch (error) {
+    console.error('[RESET PASSWORD OTP] Error:', error);
+    res.status(500).json({ message: 'Failed to reset password' });
   }
 });
 

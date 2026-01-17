@@ -18,8 +18,8 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const db = await getDatabase();
     const usersCollection = db.collection('users');
-    
-    const user = await usersCollection.findOne({ _id: new ObjectId(req.user?.userId) });
+
+    const user = await usersCollection.findOne({ _id: new ObjectId(req.userId) });
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -43,8 +43,8 @@ router.patch('/', authenticateToken, async (req: AuthRequest, res: Response) => 
   try {
     const db = await getDatabase();
     const usersCollection = db.collection('users');
-    
-    const user = await usersCollection.findOne({ _id: new ObjectId(req.user?.userId) });
+
+    const user = await usersCollection.findOne({ _id: new ObjectId(req.userId) });
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -54,31 +54,75 @@ router.patch('/', authenticateToken, async (req: AuthRequest, res: Response) => 
       ...user.settings,
       ...req.body
     };
-    
+
     // CRITICAL: Sync is_private field with privateAccount setting
     const updateFields: any = {
       settings: updatedSettings,
       updated_at: new Date()
     };
-    
+
     // If privateAccount is being updated, also update is_private
     if ('privateAccount' in req.body) {
       updateFields.is_private = req.body.privateAccount;
       console.log('[Settings] Syncing is_private =', req.body.privateAccount);
     }
-    
+
     await usersCollection.updateOne(
       { _id: user._id },
       { $set: updateFields }
     );
 
-    res.json({ 
+    res.json({
       message: 'Settings updated successfully',
-      settings: updatedSettings 
+      settings: updatedSettings
     });
   } catch (error) {
     console.error('Error updating settings:', error);
     res.status(500).json({ error: 'Failed to update settings' });
+  }
+});
+
+// Get AI settings
+router.get('/ai', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const db = await getDatabase();
+    const usersCollection = db.collection('users');
+    const user = await usersCollection.findOne({ _id: new ObjectId(req.userId) });
+
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const settings = user.settings || {};
+    res.json({
+      aiEnabled: settings.aiEnabled !== false,
+      personalizedResponses: settings.personalizedResponses !== false,
+      learningEnabled: settings.learningEnabled || false,
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch AI settings' });
+  }
+});
+
+// Update AI settings
+router.put('/ai', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const db = await getDatabase();
+    const usersCollection = db.collection('users');
+
+    const update = {
+      'settings.aiEnabled': req.body.aiEnabled,
+      'settings.personalizedResponses': req.body.personalizedResponses,
+      'settings.learningEnabled': req.body.learningEnabled,
+      updated_at: new Date()
+    };
+
+    await usersCollection.updateOne(
+      { _id: new ObjectId(req.userId) },
+      { $set: update }
+    );
+
+    res.json({ success: true, settings: req.body });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update AI settings' });
   }
 });
 
@@ -87,8 +131,8 @@ router.get('/:category', authenticateToken, async (req: AuthRequest, res: Respon
   try {
     const db = await getDatabase();
     const usersCollection = db.collection('users');
-    
-    const user = await usersCollection.findOne({ _id: new ObjectId(req.user?.userId) });
+
+    const user = await usersCollection.findOne({ _id: new ObjectId(req.userId) });
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -97,44 +141,48 @@ router.get('/:category', authenticateToken, async (req: AuthRequest, res: Respon
     const settings = user.settings || {};
 
     // Return category-specific settings
-    const categorySettings: any = {};
-    
+    let categorySettings: any = {};
+
     switch (category) {
       case 'privacy':
-        categorySettings.privateAccount = settings.privateAccount;
-        categorySettings.showOnlineStatus = settings.showOnlineStatus;
-        categorySettings.whoCanMessage = settings.whoCanMessage;
-        categorySettings.whoCanSeeStories = settings.whoCanSeeStories;
-        categorySettings.whoCanSeeFollowers = settings.whoCanSeeFollowers;
+        categorySettings = {
+          privateAccount: settings.privateAccount || false,
+          showOnlineStatus: settings.showOnlineStatus !== false,
+          allowTagging: settings.allowTagging !== false,
+          allowMentions: settings.allowMentions !== false,
+          showReadReceipts: settings.showReadReceipts !== false,
+          whoCanMessage: settings.whoCanMessage || 'everyone',
+          whoCanSeeStories: settings.whoCanSeeStories || 'everyone',
+          whoCanSeeFollowers: settings.whoCanSeeFollowers || 'everyone',
+        };
         break;
-      
-      case 'messages':
-        categorySettings.whoCanMessage = settings.whoCanMessage;
-        categorySettings.groupRequests = settings.groupRequests;
-        categorySettings.messageReplies = settings.messageReplies;
-        categorySettings.showActivityStatus = settings.showActivityStatus;
-        categorySettings.readReceipts = settings.readReceipts;
+
+      case 'notifications':
+        categorySettings = {
+          pauseAll: settings.pauseAll || false,
+          postsStoriesComments: settings.postsStoriesComments || true,
+          followingFollowers: settings.followingFollowers || true,
+          messagesCalls: settings.messagesCalls || true,
+          liveReels: settings.liveReels || true,
+          fundraisers: settings.fundraisers || true,
+          fromAnufy: settings.fromAnufy || true,
+        };
         break;
-      
-      case 'media':
-        categorySettings.saveOriginalPhotos = settings.saveOriginalPhotos;
-        categorySettings.uploadQuality = settings.uploadQuality;
-        categorySettings.autoPlayVideos = settings.autoPlayVideos;
-        categorySettings.useLessData = settings.useLessData;
-        break;
-      
+
       case 'wellbeing':
-        categorySettings.quietModeEnabled = settings.quietModeEnabled;
-        categorySettings.quietModeStart = settings.quietModeStart;
-        categorySettings.quietModeEnd = settings.quietModeEnd;
-        categorySettings.takeBreakEnabled = settings.takeBreakEnabled;
-        categorySettings.takeBreakInterval = settings.takeBreakInterval;
-        categorySettings.dailyLimitEnabled = settings.dailyLimitEnabled;
-        categorySettings.dailyLimitMinutes = settings.dailyLimitMinutes;
+        categorySettings = {
+          quietModeEnabled: settings.quietModeEnabled || false,
+          quietModeStart: settings.quietModeStart || '22:00',
+          quietModeEnd: settings.quietModeEnd || '07:00',
+          takeBreakEnabled: settings.takeBreakEnabled || false,
+          takeBreakInterval: settings.takeBreakInterval || 20,
+          dailyLimitEnabled: settings.dailyLimitEnabled || false,
+          dailyLimitMinutes: settings.dailyLimitMinutes || 60,
+        };
         break;
-      
+
       default:
-        return res.json({ settings: user.settings });
+        categorySettings = settings;
     }
 
     res.json({ settings: categorySettings });
@@ -143,5 +191,6 @@ router.get('/:category', authenticateToken, async (req: AuthRequest, res: Respon
     res.status(500).json({ error: 'Failed to fetch settings' });
   }
 });
+
 
 export default router;

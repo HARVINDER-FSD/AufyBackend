@@ -30,7 +30,7 @@ class CronScheduler {
         }
         const job = setInterval(() => __awaiter(this, void 0, void 0, function* () {
             try {
-                yield queue_1.queue.enqueue(taskType, data, 1);
+                yield (0, queue_1.addJob)(queue_1.QUEUE_NAMES.TASKS, taskType, data);
             }
             catch (error) {
                 console.error(`Error in scheduled job ${name}:`, error);
@@ -43,7 +43,7 @@ class CronScheduler {
     scheduleOnce(name, taskType, data, delayMs) {
         const job = setTimeout(() => __awaiter(this, void 0, void 0, function* () {
             try {
-                yield queue_1.queue.enqueue(taskType, data, 1);
+                yield (0, queue_1.addJob)(queue_1.QUEUE_NAMES.TASKS, taskType, data);
                 this.jobs.delete(name);
             }
             catch (error) {

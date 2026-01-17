@@ -3,6 +3,7 @@ import { connectToDatabase } from "../lib/database"
 import StoryModel from "../models/story"
 import { authenticateToken, optionalAuth } from "../middleware/auth"
 import mongoose, { Model } from "mongoose"
+import { validateAgeAndContent } from "../middleware/content-filter"
 
 // Type the Story model properly
 const Story = StoryModel as Model<any>
@@ -19,7 +20,7 @@ interface AuthRequest extends Request {
 router.get("/", optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
     await connectToDatabase()
-    
+
     const currentUserId = req.userId
 
     // Get following list if user is authenticated
@@ -29,11 +30,11 @@ router.get("/", optionalAuth, async (req: AuthRequest, res: Response) => {
       const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/socialmedia'
       const client = await MongoClient.connect(MONGODB_URI)
       const db = client.db()
-      
+
       const follows = await db.collection('follows').find({
         followerId: new ObjectId(currentUserId)
       }).toArray()
-      
+
       followingIds = follows.map((f: any) => f.followingId.toString())
       await client.close()
     }
@@ -51,15 +52,15 @@ router.get("/", optionalAuth, async (req: AuthRequest, res: Response) => {
     // Apply privacy filter - STRICT MODE (only following + own)
     const filteredStories = stories.filter((story: any) => {
       if (!story.user_id) return false
-      
+
       const storyUserId = story.user_id._id.toString()
-      
+
       // Always show own stories
       if (currentUserId && storyUserId === currentUserId) return true
-      
+
       // Show ONLY if following the user (Instagram behavior)
       if (followingIds.includes(storyUserId)) return true
-      
+
       // Hide all other stories (including public accounts)
       return false
     })
@@ -98,7 +99,7 @@ router.get("/", optionalAuth, async (req: AuthRequest, res: Response) => {
 })
 
 // Create story
-router.post("/", authenticateToken, async (req: AuthRequest, res: Response) => {
+router.post("/", authenticateToken, validateAgeAndContent, async (req: AuthRequest, res: Response) => {
   try {
     await connectToDatabase()
 
@@ -252,9 +253,9 @@ router.get("/user/:userId/all", async (req: Request, res: Response) => {
 
     res.json({
       success: true,
-      data: { 
+      data: {
         stories,
-        total: stories.length 
+        total: stories.length
       }
     })
   } catch (error: any) {
@@ -342,7 +343,7 @@ router.post("/:storyId/view", authenticateToken, async (req: AuthRequest, res: R
     )
 
     // Update view count (excluding owner)
-    const viewCount = await StoryView.countDocuments({ 
+    const viewCount = await StoryView.countDocuments({
       story_id: new mongoose.Types.ObjectId(storyId),
       viewer_id: { $ne: new mongoose.Types.ObjectId(story.user_id) }
     })

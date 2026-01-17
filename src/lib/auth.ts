@@ -17,12 +17,12 @@ async function connectToMongoDB() {
     if (mongoose.connection.readyState === 0) {
       await mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/socialmedia');
       console.log('Connected to MongoDB');
-      
+
       // Check if we have any users, if not create a default one
       const userCount = await UserModel.countDocuments();
       if (userCount === 0) {
         const hashedPassword = bcrypt.hashSync("password123", 10);
-        
+
         await UserModel.create({
           username: "testuser",
           email: "test@example.com",
@@ -36,7 +36,7 @@ async function connectToMongoDB() {
           last_seen: new Date(),
           bio: "This is a test user bio"
         });
-        
+
         console.log('Created default user');
       }
     }
@@ -80,12 +80,12 @@ export async function verifyAuth(req: NextRequest) {
       if (envSecret) {
         decoded = jsonwebtoken.verify(accessToken, envSecret);
       }
-    } catch {}
+    } catch { }
 
     if (!decoded) {
       try {
         decoded = token.verify(accessToken);
-      } catch {}
+      } catch { }
     }
 
     if (!decoded || !decoded.userId) {
@@ -136,7 +136,7 @@ export class AuthService {
     // Sanitize input
     const sanitizedUsername = sanitize.username(username)
     const sanitizedEmail = sanitize.email(email)
-    
+
     try {
       // Check if username or email already exists
       const existingUser = await UserModel.findOne({
@@ -156,7 +156,7 @@ export class AuthService {
       // Assuming User model might have pre-save or we hash it here.
       // The snippet showed `bcrypt.hashSync` in connectToMongoDB, so likely manual hashing is safe/expected.)
       const hashedPassword = bcrypt.hashSync(plainPassword, 10);
-      
+
       const newUser = await UserModel.create({
         username: sanitizedUsername,
         email: sanitizedEmail,
@@ -169,7 +169,7 @@ export class AuthService {
         last_seen: new Date(),
         bio: ""
       });
-      
+
       // Generate JWT token
       const accessToken = token.sign({
         userId: newUser._id.toString(),
@@ -207,17 +207,17 @@ export class AuthService {
     try {
       // Use in-memory user storage for demonstration
       const users = global.users || [];
-      
+
       // Find user by username or email
-      const foundUser = users.find(u => 
-        u.username.toLowerCase() === sanitizedUsername.toLowerCase() || 
+      const foundUser = users.find(u =>
+        u.username.toLowerCase() === sanitizedUsername.toLowerCase() ||
         u.email.toLowerCase() === sanitizedUsername.toLowerCase()
       );
-      
+
       if (!foundUser) {
         throw errors.unauthorized("Invalid credentials");
       }
-      
+
       user = foundUser;
     } catch (error) {
       console.error("Login error:", error);
@@ -226,7 +226,7 @@ export class AuthService {
 
     // Check password using bcrypt
     const isValidPassword = bcrypt.compareSync(plainPassword, user.password_hash);
-    
+
     if (!isValidPassword) {
       throw errors.unauthorized("Authentication failed");
     }
@@ -260,7 +260,7 @@ export class AuthService {
       is_private: user.is_private,
       last_seen: user.last_seen,
     }
-    
+
     try {
       if (redis) {
         await cache.set(`user:${user.id}`, userData, config.redis.ttl.user)
@@ -281,11 +281,11 @@ export class AuthService {
     // Store in Redis for quick access if available
     if (redis) {
       try {
-        await redis.set(`session:${userId}:${accessToken}`, JSON.stringify({
+        await cache.set(`session:${userId}:${accessToken}`, {
           userId,
           deviceInfo,
           createdAt: new Date().toISOString()
-        }), { ex: config.redis.ttl.session });
+        }, config.redis.ttl.session);
       } catch (error) {
         console.warn("Failed to cache session in Redis:", error);
         // Continue without Redis caching

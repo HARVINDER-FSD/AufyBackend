@@ -16,6 +16,8 @@ const express_1 = require("express");
 const mongodb_1 = require("mongodb");
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const redis_1 = require("../lib/redis");
+const validate_1 = require("../middleware/validate");
+const joi_1 = __importDefault(require("joi"));
 const router = (0, express_1.Router)();
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/socialmedia';
 const JWT_SECRET = process.env.JWT_SECRET || '4d9f1c8c6b27a67e9f3a81d2e5b0f78c72d1e7a64d59c83fb20e5a72a8c4d192';
@@ -51,32 +53,57 @@ const authenticate = (req, res, next) => {
     catch (error) {
         return res.status(403).json({ message: 'Invalid token' });
     }
+    // Register push token (Expo/FCM)
+    // Register push token (Expo/FCM) with validation
+    const pushTokenSchema = joi_1.default.object({
+        token: joi_1.default.string().required(),
+        platform: joi_1.default.string().optional().default('expo'),
+    });
+    router.post('/:id/push-token', (0, validate_1.validateBody)(pushTokenSchema), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { token, platform } = req.body;
+            const userId = req.params.id;
+            const db = yield getDb();
+            const result = yield db.collection('users').updateOne({ _id: new mongodb_1.ObjectId(userId) }, { $set: { pushToken: token, pushTokenPlatform: platform, pushTokenUpdatedAt: new Date() } });
+            if (result.matchedCount === 0)
+                return res.status(404).json({ message: 'User not found' });
+            res.json({ success: true, message: 'Push token saved' });
+        }
+        catch (e) {
+            console.error('Push token save error:', e);
+            res.status(500).json({ message: 'Server error' });
+        }
+    }));
 };
 // GET /api/users/me - Get current user (OPTIMIZED)
 router.get('/me', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const userId = req.userId;
+        const cacheKey = `userProfile:${userId}`;
+        // Try cache first
+        const cached = yield (0, redis_1.cacheGet)(cacheKey);
+        if (cached) {
+            return res.json(cached);
+        }
         const db = yield getDb();
-        const user = yield db.collection('users').findOne({ _id: new mongodb_1.ObjectId(userId) }, { projection: { password: 0 } } // Don't fetch password
-        );
+        const user = yield db.collection('users').findOne({ _id: new mongodb_1.ObjectId(userId) }, { projection: { password: 0 } });
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
         }
-        // Get actual follower/following counts from follows collection (ACCEPTED ONLY)
+        // Counts
         const followersCount = yield db.collection('follows').countDocuments({
             following_id: user._id,
-            status: 'accepted'
+            status: 'accepted',
         });
         const followingCount = yield db.collection('follows').countDocuments({
             follower_id: user._id,
-            status: 'accepted'
+            status: 'accepted',
         });
-        // Get actual posts count from posts collection
         const postsCount = yield db.collection('posts').countDocuments({
             user_id: user._id,
-            is_archived: { $ne: true }
+            is_archived: { $ne: true },
         });
-        return res.json({
+        const response = {
             id: user._id.toString(),
             username: user.username,
             email: user.email,
@@ -96,8 +123,11 @@ router.get('/me', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, 
             is_verified: user.is_verified || user.verified || false,
             badge_type: user.badge_type || user.verification_type || null,
             badgeType: user.badge_type || user.verification_type || null,
-            posts_count: postsCount
-        });
+            posts_count: postsCount,
+        };
+        // Cache for 5 minutes (300 seconds)
+        yield (0, redis_1.cacheSet)(cacheKey, response, 300);
+        return res.json(response);
     }
     catch (error) {
         console.error('Get user error:', error);
@@ -294,8 +324,7 @@ router.get('/username/:username', (req, res) => __awaiter(void 0, void 0, void 0
             posts_count: postsCount,
             isPrivate: user.is_private || false,
             is_private: user.is_private || false,
-            isPending,
-            followRequestStatus
+            // isPending and followRequestStatus already included earlier
         };
         // Cache for 5 minutes (300 seconds)
         yield (0, redis_1.cacheSet)(cacheKey, response, 300);

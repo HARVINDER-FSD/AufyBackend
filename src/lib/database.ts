@@ -1,6 +1,6 @@
 import { MongoClient, Db } from "mongodb"
 import mongoose from "mongoose"
-import { Redis } from "@upstash/redis"
+import { getRedis, cacheGet, cacheSet, cacheDel, cacheInvalidate } from "./redis"
 import dotenv from 'dotenv'
 import path from 'path'
 
@@ -88,13 +88,7 @@ export async function getDatabase(): Promise<Db> {
   return db;
 }
 
-export const redis =
-  process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
-    ? new Redis({
-      url: process.env.UPSTASH_REDIS_REST_URL,
-      token: process.env.UPSTASH_REDIS_REST_TOKEN,
-    })
-    : null
+export const redis = getRedis()
 
 export const redisPub = redis
 export const redisSub = redis
@@ -160,55 +154,8 @@ export async function transaction<T>(callback: (session: any) => Promise<T>): Pr
 }
 
 export const cache = {
-  async get(key: string) {
-    if (!redis) {
-      console.warn("Redis not available, skipping cache get")
-      return null
-    }
-    try {
-      const value = await redis.get(key)
-      return value ? (typeof value === "string" ? JSON.parse(value) : value) : null
-    } catch (error) {
-      console.error("Cache get error:", error)
-      return null
-    }
-  },
-
-  async set(key: string, value: any, ttl = 3600) {
-    if (!redis) {
-      console.warn("Redis not available, skipping cache set")
-      return
-    }
-    try {
-      await redis.setex(key, ttl, JSON.stringify(value))
-    } catch (error) {
-      console.error("Cache set error:", error)
-    }
-  },
-
-  async del(key: string) {
-    if (!redis) {
-      console.warn("Redis not available, skipping cache delete")
-      return
-    }
-    try {
-      await redis.del(key)
-    } catch (error) {
-      console.error("Cache delete error:", error)
-    }
-  },
-
-  async invalidatePattern(pattern: string) {
-    if (!redis) {
-      console.warn("Redis not available, skipping cache invalidate")
-      return
-    }
-    try {
-      // Note: Upstash Redis REST API doesn't support KEYS command
-      // For pattern invalidation, we'll need to track keys manually
-      console.warn("Pattern invalidation not supported with Upstash REST API")
-    } catch (error) {
-      console.error("Cache invalidate pattern error:", error)
-    }
-  },
+  get: cacheGet,
+  set: cacheSet,
+  del: cacheDel,
+  invalidatePattern: cacheInvalidate,
 }

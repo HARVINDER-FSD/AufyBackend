@@ -1,7 +1,11 @@
 import { Router, Request, Response } from 'express'
 import { MongoClient, ObjectId, Db } from 'mongodb'
+import { generateAnonymousPersona, maskAnonymousUser } from '../lib/anonymous-utils'
+import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
-import { cacheGet, cacheSet, cacheDel, cacheInvalidate } from '../lib/redis'
+import { cacheGet, cacheSet, cacheDel, cacheInvalidate } from '../lib/redis';
+import { validateBody } from '../middleware/validate';
+import Joi from 'joi';
 
 const router = Router()
 
@@ -43,40 +47,63 @@ const authenticate = (req: any, res: Response, next: any) => {
     } catch (error) {
         return res.status(403).json({ message: 'Invalid token' })
     }
+
+    // Register push token (Expo/FCM)
+    // Register push token (Expo/FCM) with validation
+    const pushTokenSchema = Joi.object({
+        token: Joi.string().required(),
+        platform: Joi.string().optional().default('expo'),
+    });
+    router.post('/:id/push-token', validateBody(pushTokenSchema), async (req: Request, res: Response) => {
+        try {
+            const { token, platform } = req.body;
+            const userId = req.params.id;
+            const db = await getDb();
+            const result = await db.collection('users').updateOne(
+                { _id: new ObjectId(userId) },
+                { $set: { pushToken: token, pushTokenPlatform: platform, pushTokenUpdatedAt: new Date() } }
+            );
+            if (result.matchedCount === 0) return res.status(404).json({ message: 'User not found' });
+            res.json({ success: true, message: 'Push token saved' });
+        } catch (e) {
+            console.error('Push token save error:', e);
+            res.status(500).json({ message: 'Server error' });
+        }
+    });
 }
 
 // GET /api/users/me - Get current user (OPTIMIZED)
 router.get('/me', authenticate, async (req: any, res: Response) => {
     try {
-        const userId = req.userId
-        const db = await getDb()
-
+        const userId = req.userId;
+        const cacheKey = `userProfile:${userId}`;
+        // Try cache first
+        const cached = await cacheGet(cacheKey);
+        if (cached) {
+            return res.json(cached);
+        }
+        const db = await getDb();
         const user = await db.collection('users').findOne(
             { _id: new ObjectId(userId) },
-            { projection: { password: 0 } } // Don't fetch password
-        )
-
+            { projection: { password: 0 } }
+        );
         if (!user) {
-            return res.status(404).json({ message: 'User not found' })
+            return res.status(404).json({ message: 'User not found' });
         }
-
-        // Get actual follower/following counts from follows collection (ACCEPTED ONLY)
+        // Counts
         const followersCount = await db.collection('follows').countDocuments({
             following_id: user._id,
-            status: 'accepted'
-        })
+            status: 'accepted',
+        });
         const followingCount = await db.collection('follows').countDocuments({
             follower_id: user._id,
-            status: 'accepted'
-        })
-        
-        // Get actual posts count from posts collection
+            status: 'accepted',
+        });
         const postsCount = await db.collection('posts').countDocuments({
             user_id: user._id,
-            is_archived: { $ne: true }
-        })
-
-        return res.json({
+            is_archived: { $ne: true },
+        });
+        const response = {
             id: user._id.toString(),
             username: user.username,
             email: user.email,
@@ -96,13 +123,18 @@ router.get('/me', authenticate, async (req: any, res: Response) => {
             is_verified: user.is_verified || user.verified || false,
             badge_type: user.badge_type || user.verification_type || null,
             badgeType: user.badge_type || user.verification_type || null,
-            posts_count: postsCount
-        })
+            posts_count: postsCount,
+            isAnonymousMode: user.isAnonymousMode || false,
+            anonymousPersona: user.anonymousPersona || null,
+        };
+        // Cache for 5 minutes (300 seconds)
+        await cacheSet(cacheKey, response, 300);
+        return res.json(response);
     } catch (error: any) {
-        console.error('Get user error:', error)
-        return res.status(500).json({ message: error.message || 'Failed to get user' })
+        console.error('Get user error:', error);
+        return res.status(500).json({ message: error.message || 'Failed to get user' });
     }
-})
+});
 
 // GET /api/users/list - List following users (for sharing, etc.)
 router.get('/list', authenticate, async (req: any, res: Response) => {
@@ -120,9 +152,9 @@ router.get('/list', authenticate, async (req: any, res: Response) => {
             const following = await db.collection('follows')
                 .find({ follower_id: currentUserId })
                 .toArray()
-            
+
             const followingIds = following.map(f => f.following_id)
-            
+
             if (followingIds.length === 0) {
                 // Not following anyone, no mutual followers
                 return res.json({
@@ -138,9 +170,9 @@ router.get('/list', authenticate, async (req: any, res: Response) => {
                     following_id: currentUserId
                 })
                 .toArray()
-            
+
             const mutualUserIds = mutualFollows.map(f => f.follower_id)
-            
+
             if (mutualUserIds.length === 0) {
                 // No mutual followers
                 return res.json({
@@ -286,7 +318,7 @@ router.get('/username/:username', async (req: any, res: Response) => {
             follower_id: user._id,
             status: 'accepted'
         })
-        
+
         // Get actual posts count from posts collection
         const postsCount = await db.collection('posts').countDocuments({
             user_id: user._id,
@@ -323,8 +355,7 @@ router.get('/username/:username', async (req: any, res: Response) => {
             posts_count: postsCount,
             isPrivate: user.is_private || false,
             is_private: user.is_private || false,
-            isPending,
-            followRequestStatus
+            // isPending and followRequestStatus already included earlier
         }
 
         // Cache for 5 minutes (300 seconds)
@@ -415,12 +446,12 @@ router.get('/:userId([0-9a-fA-F]{24})', async (req: Request, res: Response) => {
         }
 
         // Use avatar_url or avatar, with fallback - check all possible field names
-        const avatarUrl = user.avatar_url || 
-                         user.avatar || 
-                         user.profile_picture || 
-                         user.profileImage || 
-                         user.profilePicture ||
-                         `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username || 'User')}&background=0095f6&color=fff&size=128`;
+        const avatarUrl = user.avatar_url ||
+            user.avatar ||
+            user.profile_picture ||
+            user.profileImage ||
+            user.profilePicture ||
+            `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username || 'User')}&background=0095f6&color=fff&size=128`;
 
         console.log('👤 Fetching user:', user.username, 'Avatar:', avatarUrl);
 
@@ -508,7 +539,7 @@ router.get('/:username', async (req: any, res: Response) => {
             follower_id: user._id,
             status: 'accepted'
         })
-        
+
         // Get actual posts count from posts collection
         const postsCount = await db.collection('posts').countDocuments({
             user_id: user._id,
@@ -518,7 +549,7 @@ router.get('/:username', async (req: any, res: Response) => {
         await client.close()
 
         const avatarUrl = user.avatar_url || user.avatar || user.profile_picture || user.profileImage || '/placeholder-user.jpg';
-        
+
         return res.json({
             _id: user._id.toString(),
             id: user._id.toString(),
@@ -863,7 +894,7 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
                 requester_id: new ObjectId(currentUserId),
                 requested_id: new ObjectId(userId)
             })
-            
+
             // Update user document counts
             await db.collection('users').updateOne(
                 { _id: new ObjectId(userId) },
@@ -873,7 +904,7 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
                 { _id: new ObjectId(currentUserId) },
                 { $inc: { following_count: -1 } }
             )
-            
+
             // Delete follow notification (non-blocking)
             setImmediate(async () => {
                 try {
@@ -1138,16 +1169,16 @@ router.get('/:userId/followers', authenticate, async (req: any, res: Response) =
 
         const isPrivate = targetUser.is_private || false
         const isOwnProfile = currentUserId && (
-            currentUserId === userId || 
+            currentUserId === userId ||
             currentUserId.toString() === userId.toString() ||
             new ObjectId(currentUserId).equals(new ObjectId(userId))
         )
 
-        console.log('[FOLLOWERS] Privacy check:', { 
-            isPrivate, 
-            isOwnProfile, 
-            currentUserId: currentUserId?.toString(), 
-            userId: userId?.toString() 
+        console.log('[FOLLOWERS] Privacy check:', {
+            isPrivate,
+            isOwnProfile,
+            currentUserId: currentUserId?.toString(),
+            userId: userId?.toString()
         })
 
         // If private account, check if current user is following
@@ -1205,12 +1236,12 @@ router.get('/:userId/followers', authenticate, async (req: any, res: Response) =
         }))
 
         console.log('[FOLLOWERS] Returning', result.length, 'followers')
-        
+
         const response = { data: result }
-        
+
         // Cache for 10 minutes (600 seconds)
         await cacheSet(cacheKey, response, 600)
-        
+
         return res.json(response)
     } catch (error: any) {
         console.error('Get followers error:', error)
@@ -1287,16 +1318,16 @@ router.get('/:userId/following', authenticate, async (req: any, res: Response) =
 
         const isPrivate = targetUser.is_private || false
         const isOwnProfile = currentUserId && (
-            currentUserId === userId || 
+            currentUserId === userId ||
             currentUserId.toString() === userId.toString() ||
             new ObjectId(currentUserId).equals(new ObjectId(userId))
         )
 
-        console.log('[FOLLOWING] Privacy check:', { 
-            isPrivate, 
-            isOwnProfile, 
-            currentUserId: currentUserId?.toString(), 
-            userId: userId?.toString() 
+        console.log('[FOLLOWING] Privacy check:', {
+            isPrivate,
+            isOwnProfile,
+            currentUserId: currentUserId?.toString(),
+            userId: userId?.toString()
         })
 
         // If private account, check if current user is following
@@ -1385,9 +1416,7 @@ router.delete('/delete', authenticate, async (req: any, res: Response) => {
 router.get('/blocked', authenticate, async (req: any, res: Response) => {
     try {
         const userId = req.userId
-
-        const client = await MongoClient.connect(MONGODB_URI)
-        const db = client.db()
+        const db = await getDb()
 
         const blocks = await db.collection('blocked_users').find({
             userId: new ObjectId(userId)
@@ -1398,19 +1427,143 @@ router.get('/blocked', authenticate, async (req: any, res: Response) => {
             _id: { $in: blockedIds }
         }).toArray()
 
-        await client.close()
-
-        return res.json(blockedUsers.map(user => ({
-            id: user._id.toString(),
-            username: user.username,
-            name: user.name || '',
-            avatar: user.avatar || '/placeholder-user.jpg'
-        })))
+        return res.json({
+            blocked: blockedUsers.map(user => ({
+                id: user._id.toString(),
+                username: user.username,
+                name: user.full_name || user.name || '',
+                avatar: user.avatar_url || user.avatar || '/placeholder-user.jpg',
+                verified: user.is_verified || user.verified || false
+            }))
+        })
     } catch (error: any) {
         console.error('Get blocked users error:', error)
         return res.status(500).json({ message: error.message || 'Failed to get blocked users' })
     }
 })
+
+// POST /api/users/:userId/block - Block/Unblock user
+router.post('/:userId/block', authenticate, async (req: any, res: Response) => {
+    try {
+        const currentUserId = req.userId
+        const { userId } = req.params
+
+        if (currentUserId === userId) {
+            return res.status(400).json({ message: 'Cannot block yourself' })
+        }
+
+        const db = await getDb()
+        const targetUserId = new ObjectId(userId)
+
+        // Check if already blocked
+        const existingBlock = await db.collection('blocked_users').findOne({
+            userId: new ObjectId(currentUserId),
+            blockedUserId: targetUserId
+        })
+
+        if (existingBlock) {
+            // Unblock
+            await db.collection('blocked_users').deleteOne({
+                userId: new ObjectId(currentUserId),
+                blockedUserId: targetUserId
+            })
+            return res.json({ message: 'User unblocked', isBlocked: false })
+        } else {
+            // Block
+            await db.collection('blocked_users').insertOne({
+                userId: new ObjectId(currentUserId),
+                blockedUserId: targetUserId,
+                createdAt: new Date()
+            })
+
+            // Also unfollow automatically
+            await db.collection('follows').deleteMany({
+                $or: [
+                    { follower_id: new ObjectId(currentUserId), following_id: targetUserId },
+                    { follower_id: targetUserId, following_id: new ObjectId(currentUserId) }
+                ]
+            })
+
+            return res.json({ message: 'User blocked', isBlocked: true })
+        }
+    } catch (error: any) {
+        console.error('Block user error:', error)
+        return res.status(500).json({ message: error.message || 'Failed to block user' })
+    }
+})
+
+// GET /api/users/restricted - Get restricted users
+router.get('/restricted', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.userId
+        const db = await getDb()
+
+        const restrictions = await db.collection('restricted_users').find({
+            userId: new ObjectId(userId)
+        }).toArray()
+
+        const restrictedIds = restrictions.map(r => r.restrictedUserId)
+        const restrictedUsers = await db.collection('users').find({
+            _id: { $in: restrictedIds }
+        }).toArray()
+
+        return res.json({
+            restricted: restrictedUsers.map(user => ({
+                id: user._id.toString(),
+                username: user.username,
+                name: user.full_name || user.name || '',
+                avatar: user.avatar_url || user.avatar || '/placeholder-user.jpg',
+                verified: user.is_verified || user.verified || false
+            }))
+        })
+    } catch (error: any) {
+        console.error('Get restricted users error:', error)
+        return res.status(500).json({ message: error.message || 'Failed to get restricted users' })
+    }
+})
+
+// POST /api/users/:userId/restrict - Restrict/Unrestrict user
+router.post('/:userId/restrict', authenticate, async (req: any, res: Response) => {
+    try {
+        const currentUserId = req.userId
+        const { userId } = req.params
+
+        if (currentUserId === userId) {
+            return res.status(400).json({ message: 'Cannot restrict yourself' })
+        }
+
+        const db = await getDb()
+        const targetUserId = new ObjectId(userId)
+
+        // Check if already restricted
+        const existingRestriction = await db.collection('restricted_users').findOne({
+            userId: new ObjectId(currentUserId),
+            restrictedUserId: targetUserId
+        })
+
+        if (existingRestriction) {
+            // Unrestrict
+            await db.collection('restricted_users').deleteOne({
+                userId: new ObjectId(currentUserId),
+                restrictedUserId: targetUserId
+            })
+            return res.json({ message: 'User unrestricted', isRestricted: false })
+        } else {
+            // Restrict
+            await db.collection('restricted_users').insertOne({
+                userId: new ObjectId(currentUserId),
+                restrictedUserId: targetUserId,
+                createdAt: new Date()
+            })
+            return res.json({ message: 'User restricted', isRestricted: true })
+        }
+    } catch (error: any) {
+        console.error('Restrict user error:', error)
+        return res.status(500).json({ message: error.message || 'Failed to restrict user' })
+    }
+})
+
+
 
 // GET /api/users/:userId/posts - Get user's posts (supports both userId and username)
 router.get('/:userId/posts', async (req: any, res: Response) => {
@@ -1501,7 +1654,6 @@ router.get('/:userId/posts', async (req: any, res: Response) => {
             user_id: userObjectId,
             is_archived: { $ne: true }
         })
-
         // Get posts with user data
         const posts = await db.collection('posts').aggregate([
             {
@@ -2234,6 +2386,85 @@ router.delete('/fcm-token', authenticate, async (req: any, res: Response) => {
     }
 })
 
+// DELETE /api/users/delete - Delete account and all data
+router.delete('/delete', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.userId
+        const { password } = req.body
+        const db = await getDb()
+
+        // 1. Verify user exists and password is correct
+        const user = await db.collection('users').findOne({ _id: new ObjectId(userId) })
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' })
+        }
+
+        const isPasswordCorrect = await bcrypt.compare(password, user.password)
+        if (!isPasswordCorrect) {
+            return res.status(401).json({ message: 'Incorrect password' })
+        }
+
+        console.log(`[DELETE ACCOUNT] Starting cleanup for user: ${userId} (${user.username})`)
+
+        const userObjectId = new ObjectId(userId)
+
+        // 2. Delete all user-generated content and interactions
+        await Promise.all([
+            // Content
+            db.collection('posts').deleteMany({ userId: userObjectId }),
+            db.collection('stories').deleteMany({ userId: userObjectId }),
+            db.collection('reels').deleteMany({ userId: userObjectId }),
+
+            // Interactions
+            db.collection('likes').deleteMany({ userId: userObjectId }),
+            db.collection('comments').deleteMany({ userId: userObjectId }),
+            db.collection('bookmarks').deleteMany({ userId: userObjectId }),
+
+            // Relationships
+            db.collection('follows').deleteMany({
+                $or: [{ follower_id: userObjectId }, { following_id: userObjectId }]
+            }),
+            db.collection('blocked_users').deleteMany({
+                $or: [{ userId: userObjectId }, { blockedUserId: userObjectId }]
+            }),
+            db.collection('restricted_users').deleteMany({
+                $or: [{ userId: userObjectId }, { restrictedUserId: userObjectId }]
+            }),
+            db.collection('muted_users').deleteMany({
+                $or: [{ userId: userObjectId }, { mutedUserId: userObjectId }]
+            }),
+            db.collection('close_friends').deleteMany({ user_id: userObjectId }),
+
+            // Notifications
+            db.collection('notifications').deleteMany({
+                $or: [{ userId: userObjectId }, { senderId: userObjectId }]
+            }),
+
+            // Activity & Analytics
+            db.collection('login_activity').deleteMany({ userId: userObjectId }),
+            db.collection('user_time_spent').deleteMany({ userId: userObjectId }),
+
+            // Messages (This is complex, usually we mark them as "Deleted User")
+            db.collection('messages').deleteMany({
+                $or: [{ senderId: userObjectId }, { receiverId: userObjectId }]
+            }),
+            db.collection('message_requests').deleteMany({
+                $or: [{ senderId: userObjectId }, { recipientId: userObjectId }]
+            })
+        ])
+
+        // 3. Finally delete the user itself
+        await db.collection('users').deleteOne({ _id: userObjectId })
+
+        console.log(`[DELETE ACCOUNT] Cleanup complete for user: ${userId}`)
+
+        return res.json({ message: 'Account and all data deleted successfully' })
+    } catch (error: any) {
+        console.error('Delete account error:', error)
+        return res.status(500).json({ message: error.message || 'Failed to delete account' })
+    }
+})
+
 export default router
 
 
@@ -2418,6 +2649,12 @@ router.patch('/me', authenticate, async (req: any, res: Response) => {
         if (gender !== undefined) updateData.gender = gender
         if (birthday !== undefined) updateData.birthday = birthday
         if (location !== undefined) updateData.location = location
+        if (req.body.phone !== undefined) updateData.phone = req.body.phone
+        if (req.body.address !== undefined) {
+            updateData.address = req.body.address
+            updateData.location = req.body.address // Sync for compatibility
+        }
+
 
         await db.collection('users').updateOne(
             { _id: new ObjectId(userId) },
@@ -2440,11 +2677,55 @@ router.patch('/me', authenticate, async (req: any, res: Response) => {
             birthday: updatedUser?.birthday || '',
             location: updatedUser?.location || '',
             avatar: updatedUser?.avatar_url || updatedUser?.avatar || '/placeholder-user.jpg',
-            verified: updatedUser?.is_verified || updatedUser?.verified || false
+            verified: updatedUser?.is_verified || updatedUser?.verified || false,
+            isAnonymousMode: updatedUser?.isAnonymousMode || false,
+            anonymousPersona: updatedUser?.anonymousPersona || null
         })
     } catch (error: any) {
         console.error('Update user error:', error)
         return res.status(500).json({ message: error.message || 'Failed to update user' })
+    }
+})
+
+// POST /api/users/me/toggle-anonymous - Toggle anonymous mode
+router.post('/me/toggle-anonymous', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.userId;
+        const db = await getDb();
+
+        const user = await db.collection('users').findOne({ _id: new ObjectId(userId) });
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        const currentMode = user.isAnonymousMode || false;
+        const newMode = !currentMode;
+
+        const updateData: any = {
+            isAnonymousMode: newMode,
+            updatedAt: new Date()
+        };
+
+        // If turning ON and no persona exists, generate one
+        if (newMode && !user.anonymousPersona) {
+            updateData.anonymousPersona = generateAnonymousPersona();
+        }
+
+        await db.collection('users').updateOne(
+            { _id: new ObjectId(userId) },
+            { $set: updateData }
+        );
+
+        // Invalidate profile cache
+        await cacheInvalidate(`userProfile:${userId}`);
+
+        return res.json({
+            success: true,
+            isAnonymousMode: newMode,
+            anonymousPersona: updateData.anonymousPersona || user.anonymousPersona,
+            message: newMode ? 'Anonymous mode enabled' : 'Anonymous mode disabled'
+        });
+    } catch (error: any) {
+        console.error('Toggle anonymous error:', error);
+        return res.status(500).json({ message: error.message || 'Failed to toggle anonymous mode' });
     }
 })
 
@@ -2512,15 +2793,17 @@ router.get('/:username/posts', authenticate, async (req: any, res: Response) => 
         // Transform posts to include user info
         const transformedPosts = posts.map(post => ({
             id: post._id.toString(),
-            user: {
+            user: maskAnonymousUser({
                 id: targetUser._id.toString(),
                 username: targetUser.username,
                 avatar: targetUser.avatar_url || targetUser.avatar || '/placeholder-user.jpg',
                 avatar_url: targetUser.avatar_url || targetUser.avatar || '/placeholder-user.jpg',
                 verified: targetUser.is_verified || targetUser.verified || false,
                 is_verified: targetUser.is_verified || targetUser.verified || false,
-                badge_type: targetUser.badge_type || targetUser.verification_type || null
-            },
+                badge_type: targetUser.badge_type || targetUser.verification_type || null,
+                is_anonymous: post.is_anonymous
+            }),
+            is_anonymous: post.is_anonymous || false,
             content: post.content || '',
             caption: post.caption || post.content || '',
             media_type: post.media_type || 'text',

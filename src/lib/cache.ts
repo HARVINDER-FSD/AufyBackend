@@ -1,54 +1,26 @@
-import Redis from 'ioredis'
+import { cacheService, getRedis } from './redis';
 
-// Initialize Redis connection (will use Upstash when configured)
-const redis = process.env.REDIS_URL 
-  ? new Redis(process.env.REDIS_URL)
-  : null
+/**
+ * Legacy cache wrapper that uses the unified Redis instance.
+ * This provides backward compatibility for files importing from lib/cache.
+ */
 
-// Cache wrapper with fallback
+export const cache = cacheService;
+
 export async function cacheGet<T>(key: string): Promise<T | null> {
-  if (!redis) return null
-  
-  try {
-    const cached = await redis.get(key)
-    return cached ? JSON.parse(cached) : null
-  } catch (error) {
-    console.error('Cache get error:', error)
-    return null
-  }
+  return cacheService.get(key) as Promise<T | null>;
 }
 
 export async function cacheSet(key: string, value: any, ttlSeconds: number): Promise<void> {
-  if (!redis) return
-  
-  try {
-    await redis.setex(key, ttlSeconds, JSON.stringify(value))
-  } catch (error) {
-    console.error('Cache set error:', error)
-  }
+  await cacheService.set(key, value, ttlSeconds);
 }
 
 export async function cacheDelete(key: string): Promise<void> {
-  if (!redis) return
-  
-  try {
-    await redis.del(key)
-  } catch (error) {
-    console.error('Cache delete error:', error)
-  }
+  await cacheService.del(key);
 }
 
 export async function cacheDeletePattern(pattern: string): Promise<void> {
-  if (!redis) return
-  
-  try {
-    const keys = await redis.keys(pattern)
-    if (keys.length > 0) {
-      await redis.del(...keys)
-    }
-  } catch (error) {
-    console.error('Cache delete pattern error:', error)
-  }
+  await cacheService.invalidate(pattern);
 }
 
 // Cache key generators
@@ -85,15 +57,15 @@ export async function cacheWithTTL<T>(
   if (cached !== null) {
     return cached
   }
-  
+
   // Cache miss - fetch data
   const data = await fetchFn()
-  
+
   // Cache the result
   await cacheSet(key, data, ttl)
-  
+
   return data
 }
 
 // Export redis instance for advanced usage
-export { redis }
+export const redis = getRedis();

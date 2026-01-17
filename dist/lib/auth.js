@@ -299,11 +299,11 @@ class AuthService {
             // Store in Redis for quick access if available
             if (database_1.redis) {
                 try {
-                    yield database_1.redis.set(`session:${userId}:${accessToken}`, JSON.stringify({
+                    yield database_1.cache.set(`session:${userId}:${accessToken}`, {
                         userId,
                         deviceInfo,
                         createdAt: new Date().toISOString()
-                    }), { ex: config_1.config.redis.ttl.session });
+                    }, config_1.config.redis.ttl.session);
                 }
                 catch (error) {
                     console.warn("Failed to cache session in Redis:", error);

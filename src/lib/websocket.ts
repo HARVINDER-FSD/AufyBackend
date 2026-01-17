@@ -14,7 +14,7 @@ export class WebSocketService {
   private static instance: WebSocketService;
   private io: SocketIOServer | null = null;
 
-  private constructor() {}
+  private constructor() { }
 
   public static getInstance(): WebSocketService {
     if (!WebSocketService.instance) {
@@ -39,14 +39,14 @@ export class WebSocketService {
     this.io.use(async (socket, next) => {
       try {
         const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.replace('Bearer ', '');
-        
+
         if (!token) {
           return next(new Error('Authentication error: No token provided'));
         }
 
         const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
         socket.data.userId = decoded.userId;
-        
+
         console.log(`✅ User ${decoded.userId} authenticated`);
         next();
       } catch (error) {
@@ -108,24 +108,98 @@ export class WebSocketService {
           });
 
           await message.save();
-          
+
           // Populate sender info for real-time update
           await message.populate('sender_id', 'username full_name avatar_url');
           if (replyTo) {
-             await message.populate('reply_to_id');
+            await message.populate('reply_to_id');
           }
 
           // Emit to chat room
           this.io?.to(`chat:${chatId}`).emit('message:received', message);
-          
+
           // If 1-on-1 and recipient not in room, emit to their personal room
           if (recipientId) {
-             this.io?.to(`user:${recipientId}`).emit('message:new', message);
+            this.io?.to(`user:${recipientId}`).emit('message:new', message);
           }
 
         } catch (error) {
           console.error('Error sending message:', error);
           socket.emit('error', { message: 'Failed to send message' });
+        }
+      });
+
+      // --- WebRTC Signaling for Video & Voice Calls ---
+
+      socket.on('call:start', (data: { recipientId: string; isVideo: boolean }) => {
+        const { recipientId, isVideo } = data;
+        const recipientSocketId = activeUsers.get(recipientId);
+
+        if (recipientSocketId) {
+          console.log(`📞 Call started from ${userId} to ${recipientId}`);
+          this.io?.to(recipientSocketId).emit('call:incoming', {
+            callerId: userId,
+            isVideo
+          });
+        } else {
+          console.warn(`📞 User ${recipientId} is offline, cannot call`);
+        }
+      });
+
+      socket.on('call:accept', (data: { callerId: string }) => {
+        const { callerId } = data;
+        const callerSocketId = activeUsers.get(callerId);
+        if (callerSocketId) {
+          this.io?.to(callerSocketId).emit('call:accepted', { acceptorId: userId });
+        }
+      });
+
+      socket.on('call:reject', (data: { callerId: string }) => {
+        const { callerId } = data;
+        const callerSocketId = activeUsers.get(callerId);
+        if (callerSocketId) {
+          this.io?.to(callerSocketId).emit('call:rejected', { rejectorId: userId });
+        }
+      });
+
+      socket.on('call:offer', (data: { targetUserId: string; sdp: any }) => {
+        const { targetUserId, sdp } = data;
+        const targetSocketId = activeUsers.get(targetUserId);
+        if (targetSocketId) {
+          this.io?.to(targetSocketId).emit('call:offer', {
+            senderId: userId,
+            sdp
+          });
+        }
+      });
+
+      socket.on('call:answer', (data: { targetUserId: string; sdp: any }) => {
+        const { targetUserId, sdp } = data;
+        const targetSocketId = activeUsers.get(targetUserId);
+        if (targetSocketId) {
+          this.io?.to(targetSocketId).emit('call:answer', {
+            senderId: userId,
+            sdp
+          });
+        }
+      });
+
+      socket.on('call:ice-candidate', (data: { targetUserId: string; candidate: any }) => {
+        const { targetUserId, candidate } = data;
+        const targetSocketId = activeUsers.get(targetUserId);
+        if (targetSocketId) {
+          this.io?.to(targetSocketId).emit('call:ice-candidate', {
+            senderId: userId,
+            candidate
+          });
+        }
+      });
+
+      socket.on('call:end', (data: { targetUserId: string }) => {
+        const { targetUserId } = data;
+        const targetSocketId = activeUsers.get(targetUserId);
+        if (targetSocketId) {
+          this.io?.to(targetSocketId).emit('call:ended', { userId });
         }
       });
 

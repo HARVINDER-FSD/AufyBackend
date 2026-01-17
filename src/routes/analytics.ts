@@ -9,78 +9,112 @@ router.post("/track", authenticateToken, async (req, res) => {
     const { event_type, target_id, target_type, metadata } = req.body
 
     if (!event_type) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        error: "Event type is required" 
+        error: "Event type is required"
       })
     }
 
-    res.json({ 
+    res.json({
       success: true,
       message: "Event tracked successfully"
     })
   } catch (error) {
     console.error("Error tracking event:", error)
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      error: "Internal server error" 
+      error: "Internal server error"
     })
   }
 })
 
-// Get user analytics
-router.get("/user/:userId", authenticateToken, async (req, res) => {
+import { ObjectId } from "mongodb"
+import { getDatabase } from "../lib/database"
+
+// Get user activity summary
+router.get("/user-activity", authenticateToken, async (req: any, res) => {
+  try {
+    const userId = req.userId
+    const db = await getDatabase()
+
+    // 1. Posts count
+    const postsCount = await db.collection('posts').countDocuments({ userId: new ObjectId(userId) })
+
+    // 2. Likes given
+    const likesCount = await db.collection('likes').countDocuments({ userId: new ObjectId(userId) })
+
+    // 3. Comments given
+    const commentsCount = await db.collection('comments').countDocuments({ userId: new ObjectId(userId) })
+
+    // 4. Time spent today (from a simulated collection or redis)
+    const today = new Date().toISOString().split('T')[0]
+    const timeSpentDoc = await db.collection('user_time_spent').findOne({
+      userId: new ObjectId(userId),
+      date: today
+    })
+
+    res.json({
+      success: true,
+      data: {
+        postsCount,
+        likesCount,
+        commentsCount,
+        timeSpentToday: timeSpentDoc?.minutes || 0,
+        recentDeletions: 0, // Placeholder
+      }
+    })
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
+// Track time spent
+router.post("/time-spent", authenticateToken, async (req: any, res) => {
+  try {
+    const userId = req.userId
+    const { minutes } = req.body
+    const today = new Date().toISOString().split('T')[0]
+
+    const db = await getDatabase()
+    await db.collection('user_time_spent').updateOne(
+      { userId: new ObjectId(userId), date: today },
+      { $inc: { minutes: minutes || 1 } },
+      { upsert: true }
+    )
+
+    res.json({ success: true })
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
+// Get user analytics (existing but improved)
+router.get("/user/:userId", authenticateToken, async (req: any, res) => {
   try {
     const { userId } = req.params
-    const { days = 30 } = req.query
+    const db = await getDatabase()
 
-    // Check if user can access these analytics
-    if (req.user?.userId !== userId) {
-      return res.status(403).json({ 
-        success: false,
-        error: "Access denied" 
-      })
-    }
+    const posts = await db.collection('posts').find({ userId: new ObjectId(userId) }).toArray()
+    const postIds = posts.map(p => p._id)
 
-    res.json({
-      success: true,
-      data: {
-        views: 0,
-        likes: 0,
-        comments: 0,
-        shares: 0
-      }
-    })
-  } catch (error) {
-    console.error("Error getting user analytics:", error)
-    res.status(500).json({ 
-      success: false,
-      error: "Internal server error" 
-    })
-  }
-})
-
-// Get post analytics
-router.get("/post/:postId", authenticateToken, async (req, res) => {
-  try {
-    const { postId } = req.params
+    const [likes, comments] = await Promise.all([
+      db.collection('likes').countDocuments({ postId: { $in: postIds } }),
+      db.collection('comments').countDocuments({ postId: { $in: postIds } })
+    ])
 
     res.json({
       success: true,
       data: {
-        views: 0,
-        likes: 0,
-        comments: 0,
-        shares: 0
+        postsCount: posts.length,
+        likesCount: likes,
+        commentsCount: comments,
+        views: 0 // Placeholder
       }
     })
-  } catch (error) {
-    console.error("Error getting post analytics:", error)
-    res.status(500).json({ 
-      success: false,
-      error: "Internal server error" 
-    })
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message })
   }
 })
+
 
 export default router

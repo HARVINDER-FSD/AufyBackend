@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -11,17 +44,22 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
-var _a;
+var _a, _b;
 Object.defineProperty(exports, "__esModule", { value: true });
 // Load environment variables FIRST before any other imports
 const dotenv_1 = __importDefault(require("dotenv"));
 const path_1 = __importDefault(require("path"));
-// When running with tsx, __dirname is api-server/src, so go up one level to api-server
-dotenv_1.default.config({ path: path_1.default.resolve(__dirname, '..', '.env') });
-console.log('Loaded .env from:', path_1.default.resolve(__dirname, '..', '.env'));
-console.log('MONGODB_URI exists:', !!process.env.MONGODB_URI);
-console.log('MONGODB_URI value:', (_a = process.env.MONGODB_URI) === null || _a === void 0 ? void 0 : _a.substring(0, 50));
+// Load .env from api-server directory
+const envPath = path_1.default.resolve(process.cwd(), '.env');
+const result = dotenv_1.default.config({ path: envPath });
+// Manually set MONGODB_URI from parsed result if dotenv didn't set it correctly
+if (((_a = result.parsed) === null || _a === void 0 ? void 0 : _a.MONGODB_URI) && !((_b = process.env.MONGODB_URI) === null || _b === void 0 ? void 0 : _b.includes('mongodb+srv'))) {
+    process.env.MONGODB_URI = result.parsed.MONGODB_URI;
+}
 const express_1 = __importDefault(require("express"));
+require("express-async-errors");
+const logger_1 = require("./middleware/logger");
+const errorHandler_1 = require("./middleware/errorHandler");
 const http_1 = require("http");
 const cors_1 = __importDefault(require("cors"));
 const cookie_parser_1 = __importDefault(require("cookie-parser"));
@@ -55,6 +93,9 @@ const secret_crush_1 = __importDefault(require("./routes/secret-crush"));
 const premium_1 = __importDefault(require("./routes/premium"));
 const demo_1 = __importDefault(require("./routes/demo"));
 const ai_1 = __importDefault(require("./routes/ai"));
+const express_prom_bundle_1 = __importDefault(require("express-prom-bundle"));
+const swagger_ui_express_1 = __importDefault(require("swagger-ui-express"));
+const yamljs_1 = __importDefault(require("yamljs"));
 const firebase_messaging_1 = require("./services/firebase-messaging");
 const app = (0, express_1.default)();
 const httpServer = (0, http_1.createServer)(app);
@@ -110,9 +151,23 @@ app.use((0, security_1.rateLimiter)(100, 60000)); // 100 requests per minute
 app.use(security_1.validateRequestSignature);
 app.use(security_1.csrfProtection);
 app.use(security_1.secureSession);
+// Prometheus Metrics Middleware
+const metricsMiddleware = (0, express_prom_bundle_1.default)({
+    includeMethod: true,
+    includePath: true,
+    includeStatusCode: true,
+    includeUp: true,
+    customLabels: { project_name: 'anufy_api' },
+    promClient: {
+        collectDefaultMetrics: {}
+    }
+});
+app.use(metricsMiddleware);
 app.use(express_1.default.json({ limit: '50mb' }));
 app.use(express_1.default.urlencoded({ extended: true, limit: '50mb' }));
 app.use((0, cookie_parser_1.default)());
+app.use(logger_1.httpLogger);
+app.use(logger_1.requestId);
 // Performance Monitoring Middleware
 app.use((req, res, next) => {
     const start = Date.now();
@@ -123,12 +178,38 @@ app.use((req, res, next) => {
     });
     next();
 });
+// Swagger Documentation
+const swaggerPath = path_1.default.resolve(process.cwd(), 'src', 'docs', 'swagger.yaml');
+const swaggerDocument = yamljs_1.default.load(swaggerPath);
+app.use('/api-docs', swagger_ui_express_1.default.serve, swagger_ui_express_1.default.setup(swaggerDocument));
 // Serve static files (for password reset redirect page)
 app.use(express_1.default.static(path_1.default.join(__dirname, '..', 'public')));
 // Health check
-app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', message: 'Anufy API Server is running' });
-});
+app.get('/health', (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const dbStatus = mongoose_1.default.connection.readyState === 1;
+    let redisStatus = false;
+    try {
+        const { getRedis } = yield Promise.resolve().then(() => __importStar(require('./lib/redis')));
+        const redis = getRedis();
+        if (redis) {
+            // @ts-ignore
+            yield redis.ping();
+            redisStatus = true;
+        }
+    }
+    catch (err) {
+        logger_1.logger.warn('Health check Redis Error:', err);
+    }
+    const status = dbStatus && redisStatus ? 'ok' : 'degraded';
+    res.status(status === 'ok' ? 200 : 503).json({
+        status,
+        timestamp: new Date().toISOString(),
+        services: {
+            database: dbStatus ? 'connected' : 'disconnected',
+            redis: redisStatus ? 'connected' : 'disconnected'
+        }
+    });
+}));
 // Password reset redirect page
 app.get('/reset-password', (_req, res) => {
     res.sendFile(path_1.default.join(__dirname, '..', 'public', 'reset-redirect.html'));
@@ -167,13 +248,8 @@ app.get('/api/metrics', (_req, res) => {
         violations: (0, performance_monitor_1.checkPerformanceTargets)()
     });
 });
-// Error handling
-app.use((err, _req, res, _next) => {
-    console.error('Error:', err);
-    res.status(err.status || 500).json({
-        error: err.message || 'Internal server error'
-    });
-});
+// Global Error Handler (must be last)
+app.use(errorHandler_1.errorHandler);
 // Start server with WebSocket support
 httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Anufy API Server running on port ${PORT}`);
@@ -197,21 +273,44 @@ httpServer.listen(PORT, '0.0.0.0', () => {
     // Keep service awake on Render free tier (prevents sleeping after 15 min)
     if (process.env.NODE_ENV === 'production') {
         const BACKEND_URL = 'https://aufybackend.onrender.com';
-        console.log('🔄 Self-ping enabled - keeping service awake');
+        logger_1.logger.info('🔄 Self-ping enabled - keeping service awake');
         setInterval(() => __awaiter(void 0, void 0, void 0, function* () {
             try {
                 const response = yield fetch(`${BACKEND_URL}/health`);
                 if (response.ok) {
-                    console.log('✅ Self-ping successful');
+                    logger_1.logger.info('✅ Self-ping successful');
                 }
                 else {
-                    console.log('⚠️  Self-ping returned:', response.status);
+                    logger_1.logger.warn('⚠️  Self-ping returned:', response.status);
                 }
             }
             catch (error) {
-                console.log('⚠️  Self-ping failed:', error.message);
+                logger_1.logger.warn('⚠️  Self-ping failed:', error.message);
             }
         }), 10 * 60 * 1000); // Ping every 10 minutes
     }
 });
+// Graceful Shutdown
+const shutdown = (signal) => __awaiter(void 0, void 0, void 0, function* () {
+    logger_1.logger.info(`收到 ${signal}。正在优雅关闭...`);
+    // Close HTTP server
+    httpServer.close(() => {
+        logger_1.logger.info('HTTP 服务器已关闭。');
+    });
+    // Close MongoDB connection
+    try {
+        yield mongoose_1.default.connection.close();
+        logger_1.logger.info('MongoDB 连接已关闭。');
+    }
+    catch (err) {
+        logger_1.logger.error('关闭 MongoDB 时出错:', err);
+    }
+    // Final exit
+    setTimeout(() => {
+        logger_1.logger.info('进程退出。');
+        process.exit(0);
+    }, 1000);
+});
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 exports.default = app;

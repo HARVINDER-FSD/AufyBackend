@@ -8,74 +8,37 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.cache = exports.redis = exports.cacheTTL = exports.cacheKeys = void 0;
+exports.redis = exports.cacheTTL = exports.cacheKeys = exports.cache = void 0;
 exports.cacheGet = cacheGet;
 exports.cacheSet = cacheSet;
 exports.cacheDelete = cacheDelete;
 exports.cacheDeletePattern = cacheDeletePattern;
 exports.cacheWithTTL = cacheWithTTL;
-const ioredis_1 = __importDefault(require("ioredis"));
-// Initialize Redis connection (will use Upstash when configured)
-const redis = process.env.REDIS_URL
-    ? new ioredis_1.default(process.env.REDIS_URL)
-    : null;
-exports.redis = redis;
-// Cache wrapper with fallback
+const redis_1 = require("./redis");
+/**
+ * Legacy cache wrapper that uses the unified Redis instance.
+ * This provides backward compatibility for files importing from lib/cache.
+ */
+exports.cache = redis_1.cacheService;
 function cacheGet(key) {
     return __awaiter(this, void 0, void 0, function* () {
-        if (!redis)
-            return null;
-        try {
-            const cached = yield redis.get(key);
-            return cached ? JSON.parse(cached) : null;
-        }
-        catch (error) {
-            console.error('Cache get error:', error);
-            return null;
-        }
+        return redis_1.cacheService.get(key);
     });
 }
 function cacheSet(key, value, ttlSeconds) {
     return __awaiter(this, void 0, void 0, function* () {
-        if (!redis)
-            return;
-        try {
-            yield redis.setex(key, ttlSeconds, JSON.stringify(value));
-        }
-        catch (error) {
-            console.error('Cache set error:', error);
-        }
+        yield redis_1.cacheService.set(key, value, ttlSeconds);
     });
 }
 function cacheDelete(key) {
     return __awaiter(this, void 0, void 0, function* () {
-        if (!redis)
-            return;
-        try {
-            yield redis.del(key);
-        }
-        catch (error) {
-            console.error('Cache delete error:', error);
-        }
+        yield redis_1.cacheService.del(key);
     });
 }
 function cacheDeletePattern(pattern) {
     return __awaiter(this, void 0, void 0, function* () {
-        if (!redis)
-            return;
-        try {
-            const keys = yield redis.keys(pattern);
-            if (keys.length > 0) {
-                yield redis.del(...keys);
-            }
-        }
-        catch (error) {
-            console.error('Cache delete pattern error:', error);
-        }
+        yield redis_1.cacheService.invalidate(pattern);
     });
 }
 // Cache key generators
@@ -114,19 +77,5 @@ function cacheWithTTL(key, ttl, fetchFn) {
         return data;
     });
 }
-exports.cache = {
-    get: cacheGet,
-    set: cacheSet,
-    del: cacheDelete,
-    deletePattern: cacheDeletePattern,
-    clear: () => __awaiter(void 0, void 0, void 0, function* () {
-        if (!redis)
-            return;
-        try {
-            yield redis.flushdb();
-        }
-        catch (error) {
-            console.error('Cache clear error:', error);
-        }
-    })
-};
+// Export redis instance for advanced usage
+exports.redis = (0, redis_1.getRedis)();

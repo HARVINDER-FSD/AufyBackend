@@ -1,12 +1,25 @@
-import { Server as SocketIOServer } from 'socket.io';
+import { Server as SocketIOServer, Socket } from 'socket.io';
 import { Server as HTTPServer } from 'http';
 import jwt from 'jsonwebtoken';
 import { MongoClient, ObjectId } from 'mongodb';
+import express, { Request, Response, NextFunction } from 'express';
+import 'express-async-errors'; // enables async error propagation
+
+// Middleware imports
+import { requestId, httpLogger } from '../middleware/logger';
+import { errorHandler } from '../middleware/errorHandler';
+import { securityHeaders, corsOptions } from '../middleware/security';
+import { apiLimiter } from '../middleware/rateLimiter';
+
+// Route imports (add more as needed)
+import usersRouter from '../routes/users';
+import chatRouter from '../routes/chat';
+import reelsRouter from '../routes/reels';
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/socialmedia';
 const JWT_SECRET = process.env.JWT_SECRET || '4d9f1c8c6b27a67e9f3a81d2e5b0f78c72d1e7a64d59c83fb20e5a72a8c4d192';
 
-interface AuthenticatedSocket extends SocketIOServer.Socket {
+interface AuthenticatedSocket extends Socket {
   userId?: string;
   username?: string;
 }
@@ -14,8 +27,34 @@ interface AuthenticatedSocket extends SocketIOServer.Socket {
 export class SocketService {
   private io: SocketIOServer;
   private connectedUsers = new Map<string, Set<string>>(); // userId -> Set of socketIds
+  private app: express.Application; // Express app for HTTP routes
 
   constructor(server: HTTPServer) {
+    // Initialize Express app
+    this.app = express();
+
+    // Apply global middlewares (order matters)
+    this.app.use(corsOptions);
+    this.app.use(securityHeaders);
+    this.app.use(express.json({ limit: '2mb' }));
+    this.app.use(requestId);
+    this.app.use(httpLogger);
+    this.app.use(apiLimiter as any);
+
+    // Health check endpoint
+    this.app.get('/health', (_req: Request, res: Response) => {
+      res.json({ status: 'ok', ts: Date.now() });
+    });
+
+    // Mount API routers
+    this.app.use('/api/users', usersRouter);
+    this.app.use('/api/chat', chatRouter);
+    this.app.use('/api/reels', reelsRouter);
+
+    // Global error handler (must be last)
+    this.app.use(errorHandler);
+
+    // Initialize Socket.IO server
     this.io = new SocketIOServer(server, {
       cors: {
         origin: process.env.NODE_ENV === 'production' ? false : "*",
@@ -33,8 +72,8 @@ export class SocketService {
     // Authentication middleware
     this.io.use((socket: AuthenticatedSocket, next) => {
       try {
-        const authToken = socket.handshake.auth.token || 
-                         socket.handshake.headers.authorization?.split(" ")[1];
+        const authToken = socket.handshake.auth.token ||
+          socket.handshake.headers.authorization?.split(" ")[1];
 
         if (!authToken) {
           return next(new Error("Authentication token required"));
@@ -128,7 +167,7 @@ export class SocketService {
       socket.on("mark_messages_read", async (data: { conversationId: string; messageIds: string[] }) => {
         try {
           await this.markMessagesAsRead(data.messageIds, socket.userId!);
-          
+
           // Broadcast read receipt to other participants
           socket.to(`conversation:${data.conversationId}`).emit("messages_read", {
             userId: socket.userId,
@@ -146,9 +185,10 @@ export class SocketService {
       socket.on("add_reaction", async (data: { messageId: string; emoji: string }) => {
         try {
           const message = await this.addReaction(data.messageId, socket.userId!, data.emoji);
-          
+
           // Broadcast reaction to conversation
-          this.io.to(`conversation:${message.conversation_id}`).emit("message_reaction", {
+          const convId = (message as any).conversation_id;
+          this.io.to(`conversation:${convId}`).emit("message_reaction", {
             messageId: data.messageId,
             userId: socket.userId,
             emoji: data.emoji,
@@ -203,7 +243,7 @@ export class SocketService {
     }
 
     // Find recipient (other participant)
-    const recipientId = conversation.participants.find((p: any) => 
+    const recipientId = conversation.participants.find((p: any) =>
       p.toString() !== data.senderId
     );
 
@@ -221,7 +261,7 @@ export class SocketService {
     };
 
     const result = await db.collection('messages').insertOne(message);
-    
+
     // Update conversation's updated_at
     await db.collection('conversations').updateOne(
       { _id: new ObjectId(data.conversationId) },
@@ -265,14 +305,14 @@ export class SocketService {
 
     const message = await db.collection('messages').findOne({
       _id: new ObjectId(messageId)
-    });
+    }) as any;
 
     if (!message) {
       throw new Error("Message not found");
     }
 
     // Remove existing reaction from this user
-    const updatedReactions = message.reactions.filter((reaction: any) => 
+    const updatedReactions = message.reactions.filter((reaction: any) =>
       reaction.user_id.toString() !== userId
     );
 
@@ -336,3 +376,10 @@ export function getSocketService(): SocketService {
   return socketService;
 }
 
+// Expose the Express app for external use (e.g., for testing or adding more routes later)
+export function getExpressApp(): express.Application {
+  if (!socketService) {
+    throw new Error('Socket service not initialized');
+  }
+  return socketService['app']; // access private app via bracket notation
+}

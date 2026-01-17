@@ -4,6 +4,7 @@ import Note from '../models/note'
 import CloseFriend from '../models/close-friend'
 import CrushList from '../models/crush-list'
 import mongoose from 'mongoose'
+import { validateAgeAndContent } from '../middleware/content-filter'
 
 const router = Router()
 
@@ -131,7 +132,7 @@ router.get('/user/:userId', async (req: Request, res: Response) => {
 })
 
 // Create new note
-router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.post('/', authenticateToken, validateAgeAndContent, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.userId!
     const {
@@ -234,7 +235,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
 })
 
 // Update note
-router.put('/:noteId', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.put('/:noteId', authenticateToken, validateAgeAndContent, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.userId!
     const { noteId } = req.params

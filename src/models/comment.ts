@@ -34,6 +34,10 @@ const commentSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  is_anonymous: {
+    type: Boolean,
+    default: false
+  },
   created_at: {
     type: Date,
     default: Date.now
@@ -50,7 +54,7 @@ commentSchema.index({ user_id: 1 });
 commentSchema.index({ parent_comment_id: 1 });
 
 // Pre-save middleware to update the updated_at field
-commentSchema.pre('save', function(next) {
+commentSchema.pre('save', function (next) {
   this.updated_at = new Date();
   next();
 });

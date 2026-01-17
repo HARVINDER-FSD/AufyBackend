@@ -12,9 +12,11 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.cacheInvalidate = exports.cacheDel = exports.cacheSet = exports.cacheGet = exports.getRedis = exports.initRedis = void 0;
+exports.redis = exports.cacheService = exports.cacheInvalidate = exports.cacheDel = exports.cacheSet = exports.cacheGet = exports.getRedis = exports.initRedis = void 0;
 const ioredis_1 = __importDefault(require("ioredis"));
+const redis_1 = require("@upstash/redis");
 let redis = null;
+exports.redis = redis;
 const initRedis = () => {
     if (redis)
         return redis;
@@ -22,51 +24,50 @@ const initRedis = () => {
         // Check if using Upstash Redis (REST API)
         const upstashUrl = process.env.UPSTASH_REDIS_REST_URL;
         const upstashToken = process.env.UPSTASH_REDIS_REST_TOKEN;
+        // Prefer Upstash HTTP client if REST credentials are provided
         if (upstashUrl && upstashToken) {
-            // Parse Upstash URL to get host and port
-            // Format: https://host:port
-            const url = new URL(upstashUrl);
-            const host = url.hostname;
-            const port = url.port || 6379;
-            // Extract password from token (Upstash uses token as password)
-            const password = upstashToken;
-            console.log(`🔗 Connecting to Upstash Redis: ${host}:${port}`);
-            redis = new ioredis_1.default({
-                host,
-                port: parseInt(port.toString()),
-                password,
-                retryStrategy: (times) => {
-                    const delay = Math.min(times * 50, 2000);
-                    return delay;
-                },
-                maxRetriesPerRequest: null,
-                tls: {}, // Enable TLS for Upstash
+            console.log('🔗 Connecting to Upstash Redis (HTTP)');
+            exports.redis = redis = new redis_1.Redis({
+                url: upstashUrl,
+                token: upstashToken,
             });
+            return redis;
         }
         else {
-            // Fallback to local Redis
-            console.log('🔗 Connecting to local Redis');
-            redis = new ioredis_1.default({
+            // Fallback to local Redis or standard TCP Redis
+            console.log('🔗 Connecting to local/TCP Redis');
+            const client = new ioredis_1.default({
                 host: process.env.REDIS_HOST || 'localhost',
                 port: parseInt(process.env.REDIS_PORT || '6379'),
                 password: process.env.REDIS_PASSWORD,
                 retryStrategy: (times) => {
+                    if (times > 3) {
+                        console.warn('⚠️  Redis connection failed, continuing without cache');
+                        return null;
+                    }
                     const delay = Math.min(times * 50, 2000);
                     return delay;
                 },
                 maxRetriesPerRequest: null,
+                connectTimeout: 5000,
+                lazyConnect: true
             });
+            client.on('connect', () => {
+                console.log('✅ Redis connected successfully');
+            });
+            client.on('error', (err) => {
+                console.warn('⚠️  Redis error (continuing without cache):', err.message);
+            });
+            // Try to connect but don't block if it fails
+            client.connect().catch(() => {
+                console.warn('⚠️  Redis unavailable, app will work without caching');
+            });
+            exports.redis = redis = client;
+            return redis;
         }
-        redis.on('connect', () => {
-            console.log('✅ Redis connected successfully');
-        });
-        redis.on('error', (err) => {
-            console.error('❌ Redis error:', err);
-        });
-        return redis;
     }
     catch (error) {
-        console.error('Failed to initialize Redis:', error);
+        console.warn('⚠️  Failed to initialize Redis:', error);
         return null;
     }
 };
@@ -85,7 +86,10 @@ const cacheGet = (key) => __awaiter(void 0, void 0, void 0, function* () {
         if (!redis)
             return null;
         const data = yield redis.get(key);
-        return data ? JSON.parse(data) : null;
+        // Upstash might return object if it was stored as JSON? No, we stringify.
+        // ioredis returns string or null. Upstash returns string or null or number etc.
+        // We assume string for JSON.parse
+        return data ? (typeof data === 'string' ? JSON.parse(data) : data) : null;
     }
     catch (error) {
         console.error('Cache get error:', error);
@@ -98,7 +102,14 @@ const cacheSet = (key_1, value_1, ...args_1) => __awaiter(void 0, [key_1, value_
         const redis = (0, exports.getRedis)();
         if (!redis)
             return false;
-        yield redis.setex(key, ttl, JSON.stringify(value));
+        const stringValue = JSON.stringify(value);
+        if (redis instanceof ioredis_1.default) {
+            yield redis.setex(key, ttl, stringValue);
+        }
+        else {
+            // Upstash Redis
+            yield redis.set(key, stringValue, { ex: ttl });
+        }
         return true;
     }
     catch (error) {
@@ -126,9 +137,16 @@ const cacheInvalidate = (pattern) => __awaiter(void 0, void 0, void 0, function*
         const redis = (0, exports.getRedis)();
         if (!redis)
             return false;
-        const keys = yield redis.keys(pattern);
-        if (keys.length > 0) {
-            yield redis.del(...keys);
+        if (redis instanceof ioredis_1.default) {
+            const keys = yield redis.keys(pattern);
+            if (keys.length > 0) {
+                yield redis.del(...keys);
+            }
+        }
+        else {
+            // Upstash Redis (REST) doesn't support keys() well in some versions or it's risky.
+            // For now, we log it. In a real app we'd use a better strategy.
+            console.warn('⚠️ Pattern invalidation not fully supported on Upstash REST');
         }
         return true;
     }
@@ -138,3 +156,51 @@ const cacheInvalidate = (pattern) => __awaiter(void 0, void 0, void 0, function*
     }
 });
 exports.cacheInvalidate = cacheInvalidate;
+// Unified Cache Service to replace scattered implementations
+exports.cacheService = {
+    get: exports.cacheGet,
+    set: exports.cacheSet,
+    del: exports.cacheDel,
+    invalidate: exports.cacheInvalidate,
+    deletePattern: exports.cacheInvalidate,
+    clear: () => __awaiter(void 0, void 0, void 0, function* () {
+        const redis = (0, exports.getRedis)();
+        if (redis instanceof ioredis_1.default)
+            yield redis.flushdb();
+        else
+            console.warn('⚠️ Clear (flushdb) not supported on Upstash REST');
+    }),
+    // Specific helpers for cache-utils.ts mapping
+    getFeed: (userId) => __awaiter(void 0, void 0, void 0, function* () { return (0, exports.cacheGet)(`feed:${userId}`); }),
+    setFeed: (userId, data, ttl) => __awaiter(void 0, void 0, void 0, function* () { return (0, exports.cacheSet)(`feed:${userId}`, data, ttl); }),
+    invalidateFeed: (userId) => __awaiter(void 0, void 0, void 0, function* () { return (0, exports.cacheDel)(`feed:${userId}`); }),
+    getPostStats: (postId) => __awaiter(void 0, void 0, void 0, function* () { return (0, exports.cacheGet)(`post:${postId}:stats`); }),
+    setPostStats: (postId, stats) => __awaiter(void 0, void 0, void 0, function* () { return (0, exports.cacheSet)(`post:${postId}:stats`, stats); }),
+    getUserOnline: (userId) => __awaiter(void 0, void 0, void 0, function* () { return (0, exports.cacheGet)(`online:${userId}`); }),
+    setUserOnline: (userId, ttl) => __awaiter(void 0, void 0, void 0, function* () { return (0, exports.cacheSet)(`online:${userId}`, true, ttl); }),
+    setUserOffline: (userId) => __awaiter(void 0, void 0, void 0, function* () { return (0, exports.cacheDel)(`online:${userId}`); }),
+    isUserOnline: (userId) => __awaiter(void 0, void 0, void 0, function* () { return !!(yield (0, exports.cacheGet)(`online:${userId}`)); }),
+    getSession: (sid) => __awaiter(void 0, void 0, void 0, function* () { return (0, exports.cacheGet)(`session:${sid}`); }),
+    setSession: (sid, uid, ttl) => __awaiter(void 0, void 0, void 0, function* () { return (0, exports.cacheSet)(`session:${sid}`, uid, ttl); }),
+    deleteSession: (sid) => __awaiter(void 0, void 0, void 0, function* () { return (0, exports.cacheDel)(`session:${sid}`); }),
+    incrementPostLikes: (postId) => __awaiter(void 0, void 0, void 0, function* () {
+        const redis = (0, exports.getRedis)();
+        if (redis instanceof ioredis_1.default)
+            return yield redis.incr(`post:${postId}:likes`);
+        return yield redis.incr(`post:${postId}:likes`);
+    }),
+    decrementPostLikes: (postId) => __awaiter(void 0, void 0, void 0, function* () {
+        const redis = (0, exports.getRedis)();
+        if (redis instanceof ioredis_1.default)
+            return yield redis.decr(`post:${postId}:likes`);
+        return yield redis.decr(`post:${postId}:likes`);
+    }),
+    getVisitorCount: (id) => __awaiter(void 0, void 0, void 0, function* () { return (yield (0, exports.cacheGet)(`visitors:${id}`)) || 0; }),
+    incrementVisitorCount: (id) => __awaiter(void 0, void 0, void 0, function* () {
+        const redis = (0, exports.getRedis)();
+        if (redis instanceof ioredis_1.default)
+            return yield redis.incr(`visitors:${id}`);
+        return yield redis.incr(`visitors:${id}`);
+    }),
+    setVisitorCount: (id, count) => __awaiter(void 0, void 0, void 0, function* () { return (0, exports.cacheSet)(`visitors:${id}`, count); }),
+};

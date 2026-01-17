@@ -5,18 +5,54 @@ import { authenticateToken, optionalAuth } from "../middleware/auth"
 import { getDatabase } from "../lib/database"
 import { ObjectId } from "mongodb"
 import { cacheGet, cacheSet, cacheDel, cacheInvalidate } from "../lib/redis"
+import { validateBody } from "../middleware/validate"
+import { paginate } from "../middleware/pagination"
+import { addJob, QUEUE_NAMES } from "../lib/queue"
+import Joi from "joi"
+import { validateAgeAndContent } from "../middleware/content-filter"
 
 const router = Router()
 
+// Schemas
+const createPostSchema = Joi.object({
+  content: Joi.string().max(2000).required(),
+  media_urls: Joi.array().items(Joi.string().uri()).max(10).optional(),
+  media_type: Joi.string().valid('image', 'video', 'text', 'carousel').default('text'),
+  location: Joi.object({
+    name: Joi.string().allow(''),
+    lat: Joi.number(),
+    lng: Joi.number()
+  }).optional()
+})
+
+const updatePostSchema = Joi.object({
+  content: Joi.string().max(2000).optional(),
+  location: Joi.object({
+    name: Joi.string().allow(''),
+    lat: Joi.number(),
+    lng: Joi.number()
+  }).optional()
+})
+
+const postReactionSchema = Joi.object({
+  reaction: Joi.string().max(50).optional()
+})
+
+const createCommentSchema = Joi.object({
+  content: Joi.string().max(1000).required(),
+  parent_comment_id: Joi.string().regex(/^[0-9a-fA-F]{24}$/).optional()
+})
+
 // Get user feed
-router.get("/feed", authenticateToken, async (req, res) => {
+router.get("/feed", authenticateToken, paginate, async (req, res) => {
   try {
-    const { page, limit } = req.query
-    const pageNum = Number.parseInt(page as string) || 1
-    const limitNum = Number.parseInt(limit as string) || 20
+    const { page, limit } = req.pagination; // Use req.pagination
+    const pageNum = page || 1;
+    const limitNum = limit || 20;
 
     // Try cache first
     const cacheKey = `feed:${req.userId}:${pageNum}:${limitNum}`
+
     const cached = await cacheGet(cacheKey)
     if (cached) {
       console.log(`✅ Cache hit for feed page ${pageNum}`)
@@ -42,7 +78,7 @@ router.get("/feed", authenticateToken, async (req, res) => {
 })
 
 // Create post
-router.post("/", authenticateToken, async (req, res) => {
+router.post("/", authenticateToken, validateAgeAndContent, validateBody(createPostSchema), async (req, res) => {
   try {
     const { content, media_urls, media_type, location } = req.body
 
@@ -54,9 +90,16 @@ router.post("/", authenticateToken, async (req, res) => {
       location,
     })
 
-    // Invalidate all caches when new post is created
+    // Invalidate local caches
     await cacheInvalidate(`feed:${req.userId}:*`)
     await cacheInvalidate(`user_posts:${req.userId}:*`)
+
+    // Trigger background feed update for followers
+    await addJob(QUEUE_NAMES.FEED_UPDATES, 'post-created', {
+      userId: req.userId,
+      type: 'new_post'
+    });
+
 
     res.status(201).json({
       success: true,
@@ -90,7 +133,7 @@ router.get("/:postId", optionalAuth, async (req, res) => {
 })
 
 // Update post
-router.put("/:postId", authenticateToken, async (req, res) => {
+router.put("/:postId", authenticateToken, validateAgeAndContent, validateBody(updatePostSchema), async (req, res) => {
   try {
     const { postId } = req.params
     const updates = req.body
@@ -129,24 +172,24 @@ router.delete("/:postId", authenticateToken, async (req, res) => {
 })
 
 // Like post (toggle behavior with reactions)
-router.post("/:postId/like", authenticateToken, async (req, res) => {
+router.post("/:postId/like", authenticateToken, validateBody(postReactionSchema), async (req, res) => {
   try {
     const { postId } = req.params
     const { reaction } = req.body // Get reaction from request body
     const userId = req.userId!
-    
+
     const db = await getDatabase()
     const likesCollection = db.collection('likes')
-    
+
     // Check if already liked
     const existingLike = await likesCollection.findOne({
       user_id: new ObjectId(userId),
       post_id: new ObjectId(postId)
     })
-    
+
     let isLiked: boolean
     let userReaction: string | null = null
-    
+
     if (existingLike && !reaction) {
       // Unlike - delete the like (only if no reaction provided)
       await likesCollection.deleteOne({
@@ -154,7 +197,7 @@ router.post("/:postId/like", authenticateToken, async (req, res) => {
         post_id: new ObjectId(postId)
       })
       isLiked = false
-      
+
       // Delete like notification
       try {
         const { deleteLikeNotification } = require('../lib/notifications');
@@ -182,31 +225,44 @@ router.post("/:postId/like", authenticateToken, async (req, res) => {
       isLiked = true
       userReaction = reaction
     } else {
+      // Check if user is anonymous
+      const user = await db.collection('users').findOne({ _id: new ObjectId(userId) });
+      const isAnonymous = user?.isAnonymousMode === true;
+
       // Like - insert new like with reaction
       await likesCollection.insertOne({
         user_id: new ObjectId(userId),
         post_id: new ObjectId(postId),
-        reaction: reaction || '❤️', // Default to heart if no reaction specified
+        reaction: reaction || '❤️',
+        is_anonymous: isAnonymous,
         created_at: new Date()
       })
       isLiked = true
       userReaction = reaction || '❤️'
-      
-      // Create like notification (with deduplication)
+
+      // Create like notification via Background Queue
       try {
-        const { notifyLike } = require('../lib/notifications');
         const post = await db.collection('posts').findOne({ _id: new ObjectId(postId) });
         if (post && post.user_id && post.user_id.toString() !== userId) {
-          await notifyLike(post.user_id.toString(), userId, postId);
+          // Fetch sender username for the notification body
+          const sender = await db.collection('users').findOne({ _id: new ObjectId(userId) });
+
+          await addJob(QUEUE_NAMES.NOTIFICATIONS, 'like-notification', {
+            recipientId: post.user_id.toString(),
+            title: 'New Like! ❤️',
+            body: isAnonymous ? 'A Ghost User 👻 liked your post.' : `${sender?.username || 'Someone'} liked your post.`,
+            data: { postId, type: 'like' }
+          });
         }
       } catch (err) {
-        console.error('[LIKE] Notification creation error:', err);
+        console.error('[LIKE] Queue error:', err);
       }
     }
-    
+
+
     // Get updated like count
     const likeCount = await likesCollection.countDocuments({ post_id: new ObjectId(postId) })
-    
+
     // Get users who liked (for "liked by" display)
     const recentLikes = await likesCollection.aggregate([
       { $match: { post_id: new ObjectId(postId) } },
@@ -221,10 +277,10 @@ router.post("/:postId/like", authenticateToken, async (req, res) => {
         }
       },
       { $unwind: '$user' },
-      { $project: { 'user.username': 1 } }
+      { $project: { 'user.username': 1, 'is_anonymous': 1 } }
     ]).toArray()
-    
-    const likedBy = recentLikes.map((like: any) => like.user.username)
+
+    const likedBy = recentLikes.map((like: any) => like.is_anonymous ? 'Ghost User' : like.user.username)
 
     // Get reaction summary (count of each reaction type)
     const reactionSummary = await likesCollection.aggregate([
@@ -236,7 +292,7 @@ router.post("/:postId/like", authenticateToken, async (req, res) => {
         }
       }
     ]).toArray()
-    
+
     // Convert to object format: { "❤️": 10, "😍": 5, ... }
     const reactions: { [emoji: string]: number } = {}
     reactionSummary.forEach((item: any) => {
@@ -383,7 +439,7 @@ router.get("/:postId/comments", optionalAuth, async (req, res) => {
 })
 
 // Create comment
-router.post("/:postId/comments", authenticateToken, async (req, res) => {
+router.post("/:postId/comments", authenticateToken, validateAgeAndContent, validateBody(createCommentSchema), async (req, res) => {
   try {
     const { postId } = req.params
     const { content, parent_comment_id } = req.body

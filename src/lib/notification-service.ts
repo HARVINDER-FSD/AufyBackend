@@ -1,6 +1,6 @@
 // Notification Service - Helper functions to create notifications
-import Notification from '@/models/notification';
-
+import Notification from '../models/notification';
+import { Expo } from 'expo-server-sdk';
 export interface CreateNotificationParams {
   recipientId: string;
   senderId: string;

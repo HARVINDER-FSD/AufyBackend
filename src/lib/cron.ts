@@ -1,4 +1,4 @@
-import { queue } from './queue';
+import { addJob, QUEUE_NAMES } from './queue';
 
 // Cron job scheduler
 class CronScheduler {
@@ -6,7 +6,7 @@ class CronScheduler {
   private jobs: Map<string, NodeJS.Timeout> = new Map();
   private isRunning = false;
 
-  private constructor() {}
+  private constructor() { }
 
   public static getInstance(): CronScheduler {
     if (!CronScheduler.instance) {
@@ -23,7 +23,7 @@ class CronScheduler {
 
     const job = setInterval(async () => {
       try {
-        await queue.enqueue(taskType, data, 1);
+        await addJob(QUEUE_NAMES.TASKS, taskType, data);
       } catch (error) {
         console.error(`Error in scheduled job ${name}:`, error);
       }
@@ -37,12 +37,13 @@ class CronScheduler {
   scheduleOnce(name: string, taskType: string, data: any, delayMs: number) {
     const job = setTimeout(async () => {
       try {
-        await queue.enqueue(taskType, data, 1);
+        await addJob(QUEUE_NAMES.TASKS, taskType, data);
         this.jobs.delete(name);
       } catch (error) {
         console.error(`Error in one-time job ${name}:`, error);
       }
     }, delayMs);
+
 
     this.jobs.set(name, job);
     console.log(`Scheduled one-time job ${name} to run in ${delayMs}ms`);
@@ -62,7 +63,7 @@ class CronScheduler {
   // Start all default scheduled jobs
   start() {
     if (this.isRunning) return;
-    
+
     this.isRunning = true;
     console.log('Starting cron scheduler...');
 

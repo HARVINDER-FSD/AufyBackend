@@ -15,14 +15,46 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.SocketService = void 0;
 exports.initializeSocket = initializeSocket;
 exports.getSocketService = getSocketService;
+exports.getExpressApp = getExpressApp;
 const socket_io_1 = require("socket.io");
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const mongodb_1 = require("mongodb");
+const express_1 = __importDefault(require("express"));
+require("express-async-errors"); // enables async error propagation
+// Middleware imports
+const logger_1 = require("../middleware/logger");
+const errorHandler_1 = require("../middleware/errorHandler");
+const security_1 = require("../middleware/security");
+const rateLimiter_1 = require("../middleware/rateLimiter");
+// Route imports (add more as needed)
+const users_1 = __importDefault(require("../routes/users"));
+const chat_1 = __importDefault(require("../routes/chat"));
+const reels_1 = __importDefault(require("../routes/reels"));
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/socialmedia';
 const JWT_SECRET = process.env.JWT_SECRET || '4d9f1c8c6b27a67e9f3a81d2e5b0f78c72d1e7a64d59c83fb20e5a72a8c4d192';
 class SocketService {
     constructor(server) {
         this.connectedUsers = new Map(); // userId -> Set of socketIds
+        // Initialize Express app
+        this.app = (0, express_1.default)();
+        // Apply global middlewares (order matters)
+        this.app.use(security_1.corsOptions);
+        this.app.use(security_1.securityHeaders);
+        this.app.use(express_1.default.json({ limit: '2mb' }));
+        this.app.use(logger_1.requestId);
+        this.app.use(logger_1.httpLogger);
+        this.app.use(rateLimiter_1.apiLimiter);
+        // Health check endpoint
+        this.app.get('/health', (_req, res) => {
+            res.json({ status: 'ok', ts: Date.now() });
+        });
+        // Mount API routers
+        this.app.use('/api/users', users_1.default);
+        this.app.use('/api/chat', chat_1.default);
+        this.app.use('/api/reels', reels_1.default);
+        // Global error handler (must be last)
+        this.app.use(errorHandler_1.errorHandler);
+        // Initialize Socket.IO server
         this.io = new socket_io_1.Server(server, {
             cors: {
                 origin: process.env.NODE_ENV === 'production' ? false : "*",
@@ -134,7 +166,8 @@ class SocketService {
                 try {
                     const message = yield this.addReaction(data.messageId, socket.userId, data.emoji);
                     // Broadcast reaction to conversation
-                    this.io.to(`conversation:${message.conversation_id}`).emit("message_reaction", {
+                    const convId = message.conversation_id;
+                    this.io.to(`conversation:${convId}`).emit("message_reaction", {
                         messageId: data.messageId,
                         userId: socket.userId,
                         emoji: data.emoji,
@@ -270,4 +303,11 @@ function getSocketService() {
         throw new Error("Socket service not initialized");
     }
     return socketService;
+}
+// Expose the Express app for external use (e.g., for testing or adding more routes later)
+function getExpressApp() {
+    if (!socketService) {
+        throw new Error('Socket service not initialized');
+    }
+    return socketService['app']; // access private app via bracket notation
 }

@@ -157,24 +157,24 @@ const userSchema = new mongoose.Schema({
       whoCanMessage: 'everyone',
       whoCanSeeStories: 'everyone',
       whoCanSeeFollowers: 'everyone',
-      
+
       // Message Privacy
       groupRequests: true,
       messageReplies: 'everyone',
       showActivityStatus: true,
       readReceipts: true,
-      
+
       // Message Requests Filters
       filterOffensive: true,
       filterLowQuality: true,
       filterUnknown: false,
-      
+
       // Media Settings
       saveOriginalPhotos: false,
       uploadQuality: 'normal',
       autoPlayVideos: true,
       useLessData: false,
-      
+
       // Notifications
       pushNotifications: true,
       emailNotifications: false,
@@ -188,7 +188,7 @@ const userSchema = new mongoose.Schema({
       posts: true,
       marketing: false,
       security: true,
-      
+
       // Well-being
       quietModeEnabled: false,
       quietModeStart: '22:00',
@@ -197,23 +197,23 @@ const userSchema = new mongoose.Schema({
       takeBreakInterval: 30,
       dailyLimitEnabled: false,
       dailyLimitMinutes: 60,
-      
+
       // Limits
       limitComments: false,
       limitMessages: false,
       limitTags: false,
-      
+
       // AI & Personalization
       suggestedReels: true,
       adsPersonalization: true,
       dataSharing: false,
-      
+
       // Sharing to Other Apps
       shareToFacebook: false,
       shareToThreads: false,
       shareToTwitter: false,
       shareToTumblr: false,
-      
+
       // Device Permissions
       cameraPermission: true,
       microphonePermission: true,
@@ -236,14 +236,22 @@ const userSchema = new mongoose.Schema({
   updated_at: {
     type: Date,
     default: Date.now
+  },
+  isAnonymousMode: {
+    type: Boolean,
+    default: false
+  },
+  anonymousPersona: {
+    type: Object,
+    default: null
   }
 });
 
 // Pre-save middleware to hash password
-userSchema.pre('save', async function(next) {
+userSchema.pre('save', async function (next) {
   // Only hash the password if it's modified or new
   if (!this.isModified('password')) return next();
-  
+
   try {
     // Generate salt and hash password
     const salt = await bcrypt.genSalt(10);
@@ -292,19 +300,21 @@ export interface IUser extends Document {
   resetPasswordExpires?: Date;
   created_at: Date;
   updated_at: Date;
+  isAnonymousMode?: boolean;
+  anonymousPersona?: any;
 
   comparePassword(candidatePassword: string): Promise<boolean>;
 }
 
-export interface IUserModel extends Model<IUser> {}
+export interface IUserModel extends Model<IUser> { }
 
 // Method to compare password for login
-userSchema.methods.comparePassword = async function(candidatePassword: string): Promise<boolean> {
+userSchema.methods.comparePassword = async function (candidatePassword: string): Promise<boolean> {
   return bcrypt.compare(candidatePassword, this.password);
 };
 
 // Method to return user data without password
-userSchema.methods.toJSON = function() {
+userSchema.methods.toJSON = function () {
   const userObject = this.toObject();
   delete userObject.password;
   return userObject;

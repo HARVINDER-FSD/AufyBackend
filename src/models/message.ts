@@ -27,7 +27,7 @@ const MessageSchema = new Schema({
     type: String,
   },
   media_type: {
-      type: String // image, video etc.
+    type: String // image, video etc.
   },
   reply_to_id: {
     type: Schema.Types.ObjectId,
@@ -47,6 +47,10 @@ const MessageSchema = new Schema({
     read_at: { type: Date, default: Date.now }
   }],
   is_deleted: {
+    type: Boolean,
+    default: false,
+  },
+  is_anonymous: {
     type: Boolean,
     default: false,
   },
@@ -78,7 +82,7 @@ export interface IMessage extends Document {
   updated_at: Date;
 }
 
-export interface IMessageModel extends Model<IMessage> {}
+export interface IMessageModel extends Model<IMessage> { }
 
 const Message = (mongoose.models.Message as IMessageModel) || mongoose.model<IMessage, IMessageModel>('Message', MessageSchema);
 

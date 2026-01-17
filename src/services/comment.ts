@@ -1,6 +1,7 @@
 import { cache } from "../lib/database"
 import type { Comment, CreateCommentRequest, PaginatedResponse } from "../lib/types"
 import { pagination, errors, cacheKeys } from "../lib/utils"
+import { maskAnonymousUser } from "../lib/anonymous-utils"
 import { config } from "../lib/config"
 import CommentModel from "../models/comment"
 import PostModel from "../models/post"
@@ -46,6 +47,17 @@ export class CommentService {
         }
       }
 
+      // Get user data
+      console.log('[COMMENT CREATE] Fetching user data...')
+      const user: any = await User.findById(userId)
+        .select('username full_name avatar_url is_verified badge_type isAnonymousMode anonymousPersona')
+        .lean()
+        .exec()
+
+      if (!user) {
+        throw errors.notFound('User not found')
+      }
+
       // Create comment
       console.log('[COMMENT CREATE] Creating comment...')
       const newComment = await Comment.create({
@@ -54,21 +66,12 @@ export class CommentService {
         parent_comment_id: parent_comment_id || null,
         content: content.trim(),
         is_deleted: false,
+        is_anonymous: user.isAnonymousMode === true,
         likes_count: 0,
         replies_count: 0,
       })
       console.log('[COMMENT CREATE] Comment created:', newComment._id)
 
-      // Get user data
-      console.log('[COMMENT CREATE] Fetching user data...')
-      const user: any = await User.findById(userId)
-        .select('username full_name avatar_url is_verified badge_type')
-        .lean()
-        .exec()
-
-      if (!user) {
-        console.warn('[COMMENT CREATE] User not found, using minimal data')
-      }
 
       const comment: any = {
         id: newComment._id.toString(),
@@ -82,7 +85,7 @@ export class CommentService {
         is_deleted: newComment.is_deleted,
         created_at: newComment.created_at,
         updated_at: newComment.updated_at,
-        user: user || { username: 'Unknown', full_name: 'Unknown User' }
+        user: maskAnonymousUser({ ...user, is_anonymous: newComment.is_anonymous })
       }
 
       console.log('[COMMENT CREATE] Success!')
@@ -133,7 +136,7 @@ export class CommentService {
     const commentsWithData = await Promise.all(
       comments.map(async (comment: any) => {
         const user = users.find((u: any) => u._id.toString() === comment.user_id.toString())
-        
+
         // Get replies for this comment
         const replies = await Comment.find({
           parent_comment_id: comment._id,
@@ -154,17 +157,13 @@ export class CommentService {
           const replyUser = replyUsers.find((u: any) => u._id.toString() === reply.user_id.toString())
           return {
             ...reply,
-            user: replyUser || null,
-            username: replyUser?.username || 'Unknown',
-            user_avatar: replyUser?.avatar_url || null
+            user: maskAnonymousUser({ ...replyUser, is_anonymous: reply.is_anonymous })
           }
         })
 
         return {
           ...comment,
-          user: user || null,
-          username: user?.username || 'Unknown',
-          user_avatar: user?.avatar_url || null,
+          user: maskAnonymousUser({ ...user, is_anonymous: comment.is_anonymous }),
           replies: repliesWithUsers
         }
       }),
@@ -216,7 +215,7 @@ export class CommentService {
       const user = users.find((u: any) => u._id.toString() === reply.user_id.toString())
       return {
         ...reply,
-        user: user
+        user: maskAnonymousUser({ ...user, is_anonymous: reply.is_anonymous })
       }
     })
 
@@ -264,7 +263,7 @@ export class CommentService {
 
     const updatedComment: any = {
       ...comment,
-      user: user
+      user: maskAnonymousUser({ ...user, is_anonymous: comment.is_anonymous })
     }
 
     // Clear comments cache
@@ -344,7 +343,7 @@ export class CommentService {
 
     return {
       ...comment,
-      user: user
+      user: maskAnonymousUser({ ...user, is_anonymous: comment.is_anonymous })
     }
   }
 }

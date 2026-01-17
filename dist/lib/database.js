@@ -19,7 +19,7 @@ exports.query = query;
 exports.transaction = transaction;
 const mongodb_1 = require("mongodb");
 const mongoose_1 = __importDefault(require("mongoose"));
-const redis_1 = require("@upstash/redis");
+const redis_1 = require("./redis");
 const dotenv_1 = __importDefault(require("dotenv"));
 const path_1 = __importDefault(require("path"));
 // Load environment variables if not already loaded
@@ -103,12 +103,7 @@ function getDatabase() {
         return db;
     });
 }
-exports.redis = process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
-    ? new redis_1.Redis({
-        url: process.env.UPSTASH_REDIS_REST_URL,
-        token: process.env.UPSTASH_REDIS_REST_TOKEN,
-    })
-    : null;
+exports.redis = (0, redis_1.getRedis)();
 exports.redisPub = exports.redis;
 exports.redisSub = exports.redis;
 // Check if Redis is available
@@ -169,64 +164,8 @@ function transaction(callback) {
     });
 }
 exports.cache = {
-    get(key) {
-        return __awaiter(this, void 0, void 0, function* () {
-            if (!exports.redis) {
-                console.warn("Redis not available, skipping cache get");
-                return null;
-            }
-            try {
-                const value = yield exports.redis.get(key);
-                return value ? (typeof value === "string" ? JSON.parse(value) : value) : null;
-            }
-            catch (error) {
-                console.error("Cache get error:", error);
-                return null;
-            }
-        });
-    },
-    set(key_1, value_1) {
-        return __awaiter(this, arguments, void 0, function* (key, value, ttl = 3600) {
-            if (!exports.redis) {
-                console.warn("Redis not available, skipping cache set");
-                return;
-            }
-            try {
-                yield exports.redis.setex(key, ttl, JSON.stringify(value));
-            }
-            catch (error) {
-                console.error("Cache set error:", error);
-            }
-        });
-    },
-    del(key) {
-        return __awaiter(this, void 0, void 0, function* () {
-            if (!exports.redis) {
-                console.warn("Redis not available, skipping cache delete");
-                return;
-            }
-            try {
-                yield exports.redis.del(key);
-            }
-            catch (error) {
-                console.error("Cache delete error:", error);
-            }
-        });
-    },
-    invalidatePattern(pattern) {
-        return __awaiter(this, void 0, void 0, function* () {
-            if (!exports.redis) {
-                console.warn("Redis not available, skipping cache invalidate");
-                return;
-            }
-            try {
-                // Note: Upstash Redis REST API doesn't support KEYS command
-                // For pattern invalidation, we'll need to track keys manually
-                console.warn("Pattern invalidation not supported with Upstash REST API");
-            }
-            catch (error) {
-                console.error("Cache invalidate pattern error:", error);
-            }
-        });
-    },
+    get: redis_1.cacheGet,
+    set: redis_1.cacheSet,
+    del: redis_1.cacheDel,
+    invalidatePattern: redis_1.cacheInvalidate,
 };

@@ -8,6 +8,9 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const post_1 = require("../services/post");
@@ -16,13 +19,43 @@ const auth_1 = require("../middleware/auth");
 const database_1 = require("../lib/database");
 const mongodb_1 = require("mongodb");
 const redis_1 = require("../lib/redis");
+const validate_1 = require("../middleware/validate");
+const pagination_1 = require("../middleware/pagination");
+const queue_1 = require("../lib/queue");
+const joi_1 = __importDefault(require("joi"));
 const router = (0, express_1.Router)();
+// Schemas
+const createPostSchema = joi_1.default.object({
+    content: joi_1.default.string().max(2000).required(),
+    media_urls: joi_1.default.array().items(joi_1.default.string().uri()).max(10).optional(),
+    media_type: joi_1.default.string().valid('image', 'video', 'text', 'carousel').default('text'),
+    location: joi_1.default.object({
+        name: joi_1.default.string().allow(''),
+        lat: joi_1.default.number(),
+        lng: joi_1.default.number()
+    }).optional()
+});
+const updatePostSchema = joi_1.default.object({
+    content: joi_1.default.string().max(2000).optional(),
+    location: joi_1.default.object({
+        name: joi_1.default.string().allow(''),
+        lat: joi_1.default.number(),
+        lng: joi_1.default.number()
+    }).optional()
+});
+const postReactionSchema = joi_1.default.object({
+    reaction: joi_1.default.string().max(50).optional()
+});
+const createCommentSchema = joi_1.default.object({
+    content: joi_1.default.string().max(1000).required(),
+    parent_comment_id: joi_1.default.string().regex(/^[0-9a-fA-F]{24}$/).optional()
+});
 // Get user feed
-router.get("/feed", auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+router.get("/feed", auth_1.authenticateToken, pagination_1.paginate, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        const { page, limit } = req.query;
-        const pageNum = Number.parseInt(page) || 1;
-        const limitNum = Number.parseInt(limit) || 20;
+        const { page, limit } = req.pagination; // Use req.pagination
+        const pageNum = page || 1;
+        const limitNum = limit || 20;
         // Try cache first
         const cacheKey = `feed:${req.userId}:${pageNum}:${limitNum}`;
         const cached = yield (0, redis_1.cacheGet)(cacheKey);
@@ -43,7 +76,7 @@ router.get("/feed", auth_1.authenticateToken, (req, res) => __awaiter(void 0, vo
     }
 }));
 // Create post
-router.post("/", auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+router.post("/", auth_1.authenticateToken, (0, validate_1.validateBody)(createPostSchema), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { content, media_urls, media_type, location } = req.body;
         // Use req.userId instead of req.user.userId
@@ -53,9 +86,14 @@ router.post("/", auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 
             media_type,
             location,
         });
-        // Invalidate all caches when new post is created
+        // Invalidate local caches
         yield (0, redis_1.cacheInvalidate)(`feed:${req.userId}:*`);
         yield (0, redis_1.cacheInvalidate)(`user_posts:${req.userId}:*`);
+        // Trigger background feed update for followers
+        yield (0, queue_1.addJob)(queue_1.QUEUE_NAMES.FEED_UPDATES, 'post-created', {
+            userId: req.userId,
+            type: 'new_post'
+        });
         res.status(201).json({
             success: true,
             data: { post },
@@ -88,7 +126,7 @@ router.get("/:postId", auth_1.optionalAuth, (req, res) => __awaiter(void 0, void
     }
 }));
 // Update post
-router.put("/:postId", auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+router.put("/:postId", auth_1.authenticateToken, (0, validate_1.validateBody)(updatePostSchema), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { postId } = req.params;
         const updates = req.body;
@@ -124,7 +162,7 @@ router.delete("/:postId", auth_1.authenticateToken, (req, res) => __awaiter(void
     }
 }));
 // Like post (toggle behavior with reactions)
-router.post("/:postId/like", auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+router.post("/:postId/like", auth_1.authenticateToken, (0, validate_1.validateBody)(postReactionSchema), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { postId } = req.params;
         const { reaction } = req.body; // Get reaction from request body
@@ -181,16 +219,22 @@ router.post("/:postId/like", auth_1.authenticateToken, (req, res) => __awaiter(v
             });
             isLiked = true;
             userReaction = reaction || '❤️';
-            // Create like notification (with deduplication)
+            // Create like notification via Background Queue
             try {
-                const { notifyLike } = require('../lib/notifications');
                 const post = yield db.collection('posts').findOne({ _id: new mongodb_1.ObjectId(postId) });
                 if (post && post.user_id && post.user_id.toString() !== userId) {
-                    yield notifyLike(post.user_id.toString(), userId, postId);
+                    // Fetch sender username for the notification body
+                    const sender = yield db.collection('users').findOne({ _id: new mongodb_1.ObjectId(userId) });
+                    yield (0, queue_1.addJob)(queue_1.QUEUE_NAMES.NOTIFICATIONS, 'like-notification', {
+                        recipientId: post.user_id.toString(),
+                        title: 'New Like! ❤️',
+                        body: `${(sender === null || sender === void 0 ? void 0 : sender.username) || 'Someone'} liked your post.`,
+                        data: { postId, type: 'like' }
+                    });
                 }
             }
             catch (err) {
-                console.error('[LIKE] Notification creation error:', err);
+                console.error('[LIKE] Queue error:', err);
             }
         }
         // Get updated like count
@@ -279,6 +323,48 @@ router.get("/:postId/likes", auth_1.optionalAuth, (req, res) => __awaiter(void 0
         });
     }
 }));
+// Share post (track share count)
+router.post("/:postId/share", auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { postId } = req.params;
+        const userId = req.userId;
+        const db = yield (0, database_1.getDatabase)();
+        const sharesCollection = db.collection('shares');
+        // Check if already shared
+        const existingShare = yield sharesCollection.findOne({
+            user_id: new mongodb_1.ObjectId(userId),
+            post_id: new mongodb_1.ObjectId(postId)
+        });
+        if (existingShare) {
+            return res.json({
+                success: true,
+                message: "Post already shared",
+                shared: true
+            });
+        }
+        // Record the share
+        yield sharesCollection.insertOne({
+            user_id: new mongodb_1.ObjectId(userId),
+            post_id: new mongodb_1.ObjectId(postId),
+            created_at: new Date()
+        });
+        // Get updated share count
+        const shareCount = yield sharesCollection.countDocuments({ post_id: new mongodb_1.ObjectId(postId) });
+        res.json({
+            success: true,
+            message: "Post shared successfully",
+            shared: true,
+            shareCount
+        });
+    }
+    catch (error) {
+        console.error('Share error:', error);
+        res.status(error.statusCode || 500).json({
+            success: false,
+            error: error.message,
+        });
+    }
+}));
 // Get post comments
 router.get("/:postId/comments", auth_1.optionalAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
@@ -305,7 +391,7 @@ router.get("/:postId/comments", auth_1.optionalAuth, (req, res) => __awaiter(voi
     }
 }));
 // Create comment
-router.post("/:postId/comments", auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+router.post("/:postId/comments", auth_1.authenticateToken, (0, validate_1.validateBody)(createCommentSchema), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { postId } = req.params;
         const { content, parent_comment_id } = req.body;

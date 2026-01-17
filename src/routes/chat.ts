@@ -3,6 +3,7 @@ import auth from '../middleware/auth';
 import Message from '../models/message';
 import Conversation from '../models/conversation';
 import mongoose from 'mongoose';
+import { ChatService } from '../services/chat';
 
 const router = express.Router();
 
@@ -26,7 +27,7 @@ router.get('/conversations', auth, async (req, res) => {
 router.post('/conversations', auth, async (req, res) => {
   try {
     const { userId } = req.body;
-    
+
     // Check if conversation already exists
     let conversation = await Conversation.findOne({
       participants: { $all: [req.user!._id, userId] }
@@ -39,7 +40,7 @@ router.post('/conversations', auth, async (req, res) => {
       conversation = await Conversation.create({
         participants: [req.user!._id, userId]
       });
-      
+
       conversation = await conversation.populate('participants', 'username fullName profileImage');
     }
 
@@ -55,19 +56,17 @@ router.get('/conversations/:conversationId/messages', auth, async (req, res) => 
     const { conversationId } = req.params;
     const { limit = 50, before } = req.query;
 
-    const query: any = { conversation: conversationId };
-    if (before) {
-      query.createdAt = { $lt: new Date(before as string) };
-    }
+    const messages = await ChatService.getConversationMessages(
+      conversationId,
+      req.user!._id,
+      1, // page (not strictly used if using before cursor, but kept for signature)
+      Number(limit),
+      before as string
+    );
 
-    const messages = await Message.find(query)
-      .populate('sender', 'username fullName profileImage')
-      .sort({ createdAt: -1 })
-      .limit(Number(limit));
-
-    res.json(messages.reverse());
-  } catch (error) {
-    res.status(500).json({ message: 'Server error' });
+    res.json(messages);
+  } catch (error: any) {
+    res.status(error.statusCode || 500).json({ message: error.message || 'Server error' });
   }
 });
 
@@ -77,74 +76,20 @@ router.post('/conversations/:conversationId/messages', auth, async (req, res) =>
     const { conversationId } = req.params;
     const { content, image, recipientId } = req.body;
 
-    const message = await Message.create({
-      conversation_id: conversationId,
-      sender_id: req.user!._id,
-      content,
-      media_url: image,
-      media_type: image ? 'image' : undefined,
-      message_type: image ? 'image' : 'text'
-    });
-
-    // Update conversation's last message
-    await Conversation.findByIdAndUpdate(conversationId, {
-      lastMessage: message._id,
-      updatedAt: new Date()
-    });
-
-    // Check if this should create a message request
-    if (recipientId) {
-      const db = mongoose.connection.db;
-      if (!db) {
-        console.error('Database connection not available');
-      } else {
-        // Check mutual follow
-        const [userFollowsRecipient, recipientFollowsUser] = await Promise.all([
-          db.collection('follows').findOne({
-            followerId: new mongoose.Types.ObjectId(req.user!._id),
-            followingId: new mongoose.Types.ObjectId(recipientId)
-          }),
-          db.collection('follows').findOne({
-            followerId: new mongoose.Types.ObjectId(recipientId),
-            followingId: new mongoose.Types.ObjectId(req.user!._id)
-          })
-        ]);
-
-        const isMutualFollow = !!userFollowsRecipient && !!recipientFollowsUser;
-
-        // If not mutual follow, create/update message request
-        if (!isMutualFollow) {
-          await db.collection('message_requests').updateOne(
-            {
-              senderId: new mongoose.Types.ObjectId(req.user!._id),
-              recipientId: new mongoose.Types.ObjectId(recipientId)
-            },
-            {
-              $set: {
-                conversationId,
-                lastMessage: {
-                  content,
-                  image,
-                  timestamp: new Date()
-                },
-                updatedAt: new Date()
-              },
-              $setOnInsert: {
-                status: 'pending',
-                createdAt: new Date()
-              }
-            },
-            { upsert: true }
-          );
-        }
+    const message = await ChatService.sendMessage(
+      req.user!._id,
+      conversationId,
+      {
+        content,
+        media_url: image, // mapping image to media_url
+        media_type: image ? 'image' : undefined,
+        message_type: image ? 'image' : 'text'
       }
-    }
+    );
 
-    const populatedMessage = await message.populate('sender', 'username fullName profileImage');
-
-    res.json(populatedMessage);
-  } catch (error) {
-    res.status(500).json({ message: 'Server error' });
+    res.json(message);
+  } catch (error: any) {
+    res.status(error.statusCode || 500).json({ message: error.message || 'Server error' });
   }
 });
 
@@ -177,7 +122,7 @@ router.delete('/messages/:messageId', auth, async (req, res) => {
       return res.status(404).json({ message: 'Message not found' });
     }
 
-    if (message.sender.toString() !== req.user!._id.toString()) {
+    if (message.sender_id.toString() !== req.user!._id.toString()) {
       return res.status(403).json({ message: 'Not authorized' });
     }
 

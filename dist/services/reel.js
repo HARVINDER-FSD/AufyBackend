@@ -21,12 +21,6 @@ class ReelService {
             if (!video_url) {
                 throw utils_1.errors.badRequest("Video URL is required for reels");
             }
-            if (title && title.length > 255) {
-                throw utils_1.errors.badRequest("Title too long (max 255 characters)");
-            }
-            if (description && description.length > 2200) {
-                throw utils_1.errors.badRequest("Description too long (max 2200 characters)");
-            }
             const db = yield (0, database_1.getDatabase)();
             const reelsCollection = db.collection('reels');
             const usersCollection = db.collection('users');
@@ -40,6 +34,7 @@ class ReelService {
                 view_count: 0,
                 is_public: true,
                 is_deleted: false,
+                is_archived: false,
                 created_at: new Date(),
                 updated_at: new Date()
             };
@@ -53,85 +48,129 @@ class ReelService {
                 id: result.insertedId.toString(),
                 user_id: userId,
                 video_url,
-                thumbnail_url: thumbnail_url || null,
-                title: title || null,
-                description: description || null,
+                thumbnail_url: thumbnail_url || '',
+                title: title || '',
+                description: description || '',
                 duration: duration || 0,
                 view_count: 0,
                 is_public: true,
-                created_at: reelDoc.created_at,
-                updated_at: reelDoc.updated_at,
+                created_at: new Date(),
+                updated_at: new Date(),
                 user: {
                     id: user._id.toString(),
                     username: user.username,
                     full_name: user.full_name,
-                    avatar_url: user.avatar_url,
+                    avatar_url: user.avatar_url || '',
                     is_verified: user.is_verified || false,
+                    is_following: false
                 },
                 likes_count: 0,
                 comments_count: 0,
                 is_liked: false,
+                is_following: false
             };
         });
     }
-    // Get reel by ID
-    static getReelById(reelId, currentUserId) {
-        return __awaiter(this, void 0, void 0, function* () {
-            const db = yield (0, database_1.getDatabase)();
-            const reelsCollection = db.collection('reels');
-            const usersCollection = db.collection('users');
-            const likesCollection = db.collection('likes');
-            const commentsCollection = db.collection('comments');
-            const reel = yield reelsCollection.findOne({
-                _id: new mongodb_1.ObjectId(reelId),
-                is_deleted: { $ne: true }
-            });
-            if (!reel) {
-                throw utils_1.errors.notFound("Reel not found");
-            }
-            // Get user data
-            const user = yield usersCollection.findOne({ _id: reel.user_id });
-            if (!user) {
-                throw utils_1.errors.notFound("User not found");
-            }
-            // Get likes and comments count
-            const likesCount = yield likesCollection.countDocuments({ post_id: reel._id });
-            const commentsCount = yield commentsCollection.countDocuments({
-                post_id: reel._id,
-                is_deleted: { $ne: true }
-            });
-            // Check if current user liked
-            let is_liked = false;
-            if (currentUserId) {
-                const like = yield likesCollection.findOne({
-                    user_id: new mongodb_1.ObjectId(currentUserId),
-                    post_id: reel._id
+    // Get reels feed (discover/explore)
+    static getReelsFeed(currentUserId_1) {
+        return __awaiter(this, arguments, void 0, function* (currentUserId, page = 1, limit = 20) {
+            try {
+                const { page: validPage, limit: validLimit } = utils_1.pagination.validateParams(page.toString(), limit.toString());
+                const offset = utils_1.pagination.getOffset(validPage, validLimit);
+                const db = yield (0, database_1.getDatabase)();
+                const reelsCollection = db.collection('reels');
+                // Build match query
+                const matchQuery = {
+                    is_archived: { $ne: true },
+                    is_deleted: { $ne: true }
+                };
+                if (currentUserId && mongodb_1.ObjectId.isValid(currentUserId)) {
+                    matchQuery.user_id = { $ne: new mongodb_1.ObjectId(currentUserId) };
+                }
+                // Get total count
+                const total = yield reelsCollection.countDocuments(matchQuery);
+                // Simple aggregation
+                const reels = yield reelsCollection.aggregate([
+                    { $match: matchQuery },
+                    {
+                        $lookup: {
+                            from: 'users',
+                            localField: 'user_id',
+                            foreignField: '_id',
+                            as: 'user'
+                        }
+                    },
+                    { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+                    { $sort: { created_at: -1 } },
+                    { $skip: offset },
+                    { $limit: validLimit },
+                    {
+                        $project: {
+                            _id: 1,
+                            user_id: 1,
+                            video_url: 1,
+                            thumbnail_url: 1,
+                            title: 1,
+                            description: 1,
+                            duration: 1,
+                            view_count: 1,
+                            is_public: 1,
+                            created_at: 1,
+                            updated_at: 1,
+                            user: {
+                                _id: '$user._id',
+                                username: '$user.username',
+                                full_name: '$user.full_name',
+                                avatar_url: '$user.avatar_url'
+                            }
+                        }
+                    }
+                ]).toArray();
+                const transformedReels = reels.map((reel) => {
+                    var _a, _b, _c, _d, _e;
+                    return ({
+                        id: reel._id.toString(),
+                        user_id: reel.user_id.toString(),
+                        video_url: reel.video_url,
+                        thumbnail_url: reel.thumbnail_url || '',
+                        title: reel.title || '',
+                        description: reel.description || '',
+                        duration: reel.duration || 0,
+                        view_count: reel.view_count || 0,
+                        is_public: reel.is_public || true,
+                        created_at: reel.created_at,
+                        updated_at: reel.updated_at,
+                        user: {
+                            id: ((_b = (_a = reel.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString()) || '',
+                            username: ((_c = reel.user) === null || _c === void 0 ? void 0 : _c.username) || '',
+                            full_name: ((_d = reel.user) === null || _d === void 0 ? void 0 : _d.full_name) || '',
+                            avatar_url: ((_e = reel.user) === null || _e === void 0 ? void 0 : _e.avatar_url) || '',
+                            is_verified: false,
+                            is_following: false
+                        },
+                        likes_count: 0,
+                        comments_count: 0,
+                        is_liked: false,
+                        is_following: false
+                    });
                 });
-                is_liked = !!like;
+                return {
+                    success: true,
+                    data: transformedReels,
+                    pagination: {
+                        page: validPage,
+                        limit: validLimit,
+                        total,
+                        totalPages: Math.ceil(total / validLimit),
+                        hasNext: validPage < Math.ceil(total / validLimit),
+                        hasPrev: validPage > 1
+                    }
+                };
             }
-            return {
-                id: reel._id.toString(),
-                user_id: reel.user_id.toString(),
-                video_url: reel.video_url,
-                thumbnail_url: reel.thumbnail_url,
-                title: reel.title,
-                description: reel.description,
-                duration: reel.duration,
-                view_count: reel.view_count || 0,
-                is_public: reel.is_public,
-                created_at: reel.created_at,
-                updated_at: reel.updated_at,
-                user: {
-                    id: user._id.toString(),
-                    username: user.username,
-                    full_name: user.full_name,
-                    avatar_url: user.avatar_url,
-                    is_verified: user.is_verified || false,
-                },
-                likes_count: likesCount,
-                comments_count: commentsCount,
-                is_liked
-            };
+            catch (error) {
+                console.error('[ReelService] getReelsFeed error:', error);
+                throw error;
+            }
         });
     }
     // Get user's reels
@@ -141,9 +180,6 @@ class ReelService {
             const offset = utils_1.pagination.getOffset(validPage, validLimit);
             const db = yield (0, database_1.getDatabase)();
             const reelsCollection = db.collection('reels');
-            const usersCollection = db.collection('users');
-            const likesCollection = db.collection('likes');
-            const commentsCollection = db.collection('comments');
             const matchQuery = {
                 user_id: new mongodb_1.ObjectId(userId),
                 is_deleted: { $ne: true }
@@ -159,291 +195,116 @@ class ReelService {
                         as: 'user'
                     }
                 },
-                { $unwind: '$user' },
-                {
-                    $lookup: {
-                        from: 'likes',
-                        let: { reelId: '$_id' },
-                        pipeline: [
-                            { $match: { $expr: { $eq: ['$post_id', '$$reelId'] } } }
-                        ],
-                        as: 'likes'
-                    }
-                },
-                {
-                    $lookup: {
-                        from: 'comments',
-                        let: { reelId: '$_id' },
-                        pipeline: [
-                            {
-                                $match: {
-                                    $expr: { $eq: ['$post_id', '$$reelId'] },
-                                    is_deleted: { $ne: true }
-                                }
-                            }
-                        ],
-                        as: 'comments'
-                    }
-                },
-                {
-                    $addFields: {
-                        likes_count: { $size: '$likes' },
-                        comments_count: { $size: '$comments' }
-                    }
-                },
+                { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
                 { $sort: { created_at: -1 } },
                 { $skip: offset },
-                { $limit: validLimit },
-                {
-                    $project: {
-                        likes: 0,
-                        comments: 0
-                    }
-                }
+                { $limit: validLimit }
             ]).toArray();
-            const transformedReels = yield Promise.all(reels.map((reel) => __awaiter(this, void 0, void 0, function* () {
-                let is_liked = false;
-                if (currentUserId) {
-                    const like = yield likesCollection.findOne({
-                        user_id: new mongodb_1.ObjectId(currentUserId),
-                        post_id: reel._id
-                    });
-                    is_liked = !!like;
-                }
-                return {
+            const transformedReels = reels.map((reel) => {
+                var _a, _b, _c, _d, _e;
+                return ({
                     id: reel._id.toString(),
                     user_id: reel.user_id.toString(),
                     video_url: reel.video_url,
-                    thumbnail_url: reel.thumbnail_url,
-                    title: reel.title,
-                    description: reel.description,
-                    duration: reel.duration,
-                    view_count: reel.view_count || 0,
-                    is_public: reel.is_public,
-                    created_at: reel.created_at,
-                    updated_at: reel.updated_at,
-                    user: {
-                        id: reel.user._id.toString(),
-                        username: reel.user.username,
-                        full_name: reel.user.full_name,
-                        avatar_url: reel.user.avatar_url,
-                        is_verified: reel.user.is_verified || false,
-                    },
-                    likes_count: reel.likes_count,
-                    comments_count: reel.comments_count,
-                    is_liked
-                };
-            })));
-            const paginationMeta = utils_1.pagination.getMetadata(validPage, validLimit, total);
-            return {
-                success: true,
-                data: transformedReels,
-                pagination: paginationMeta,
-            };
-        });
-    }
-    // Get reels feed (discover/explore)
-    static getReelsFeed(currentUserId_1) {
-        return __awaiter(this, arguments, void 0, function* (currentUserId, page = 1, limit = 20) {
-            const { page: validPage, limit: validLimit } = utils_1.pagination.validateParams(page.toString(), limit.toString());
-            const offset = utils_1.pagination.getOffset(validPage, validLimit);
-            console.log('[ReelService] getReelsFeed called with:', { currentUserId, page, limit });
-            const db = yield (0, database_1.getDatabase)();
-            const reelsCollection = db.collection('reels');
-            const likesCollection = db.collection('likes');
-            // Build match query - exclude current user's reels if userId provided
-            // Note: Using is_archived instead of is_deleted to match actual schema
-            const matchQuery = {
-                is_archived: { $ne: true }
-            };
-            if (currentUserId) {
-                matchQuery.user_id = { $ne: new mongodb_1.ObjectId(currentUserId) };
-            }
-            console.log('[ReelService] Match query:', matchQuery);
-            // Get total count
-            const total = yield reelsCollection.countDocuments(matchQuery);
-            console.log('[ReelService] Total reels found with filters:', total);
-            // Aggregate reels with user info, likes, and comments count
-            const reels = yield reelsCollection.aggregate([
-                { $match: matchQuery },
-                {
-                    $lookup: {
-                        from: 'users',
-                        localField: 'user_id',
-                        foreignField: '_id',
-                        as: 'user'
-                    }
-                },
-                { $unwind: '$user' },
-                {
-                    $lookup: {
-                        from: 'likes',
-                        let: { reelId: '$_id' },
-                        pipeline: [
-                            { $match: { $expr: { $eq: ['$post_id', '$$reelId'] } } }
-                        ],
-                        as: 'likes'
-                    }
-                },
-                {
-                    $lookup: {
-                        from: 'comments',
-                        let: { reelId: '$_id' },
-                        pipeline: [
-                            {
-                                $match: {
-                                    $expr: { $eq: ['$post_id', '$$reelId'] },
-                                    is_deleted: { $ne: true }
-                                }
-                            }
-                        ],
-                        as: 'comments'
-                    }
-                },
-                {
-                    $addFields: {
-                        likes_count: { $size: '$likes' },
-                        comments_count: { $size: '$comments' },
-                        // Scoring algorithm for feed ranking
-                        score: {
-                            $add: [
-                                // Recency factor (newer = higher score)
-                                {
-                                    $multiply: [
-                                        {
-                                            $divide: [
-                                                { $subtract: [new Date(), '$created_at'] },
-                                                3600000 // milliseconds to hours
-                                            ]
-                                        },
-                                        -0.1
-                                    ]
-                                },
-                                // View count factor
-                                { $multiply: [{ $divide: [{ $ifNull: ['$view_count', 0] }, 1000] }, 0.3] },
-                                // Likes factor
-                                { $multiply: [{ $size: '$likes' }, 0.5] },
-                                // Comments factor
-                                { $multiply: [{ $size: '$comments' }, 0.3] }
-                            ]
-                        }
-                    }
-                },
-                { $sort: { score: -1, created_at: -1 } },
-                { $skip: offset },
-                { $limit: validLimit },
-                {
-                    $project: {
-                        likes: 0,
-                        comments: 0
-                    }
-                }
-            ]).toArray();
-            // Transform to Reel type and check if current user liked each reel
-            const transformedReels = yield Promise.all(reels.map((reel) => __awaiter(this, void 0, void 0, function* () {
-                let is_liked = false;
-                let is_following = false;
-                if (currentUserId) {
-                    const like = yield likesCollection.findOne({
-                        user_id: new mongodb_1.ObjectId(currentUserId),
-                        post_id: reel._id
-                    });
-                    is_liked = !!like;
-                    // Check if current user is following the reel creator
-                    const followsCollection = db.collection('follows');
-                    const follow = yield followsCollection.findOne({
-                        follower_id: new mongodb_1.ObjectId(currentUserId),
-                        following_id: reel.user._id
-                    });
-                    is_following = !!follow;
-                }
-                return {
-                    id: reel._id.toString(),
-                    user_id: reel.user_id.toString(),
-                    video_url: reel.video_url,
-                    thumbnail_url: reel.thumbnail_url,
-                    title: reel.title || null,
-                    description: reel.caption || reel.description || '',
+                    thumbnail_url: reel.thumbnail_url || '',
+                    title: reel.title || '',
+                    description: reel.description || '',
                     duration: reel.duration || 0,
-                    view_count: reel.views_count || reel.view_count || 0,
-                    is_public: true, // Default to true since field doesn't exist in schema
+                    view_count: reel.view_count || 0,
+                    is_public: reel.is_public || true,
                     created_at: reel.created_at,
                     updated_at: reel.updated_at,
                     user: {
-                        id: reel.user._id.toString(),
-                        username: reel.user.username,
-                        full_name: reel.user.full_name,
-                        avatar_url: reel.user.avatar_url,
-                        is_verified: reel.user.is_verified || false,
-                        is_following: is_following, // Add follow state to user object
+                        id: ((_b = (_a = reel.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString()) || '',
+                        username: ((_c = reel.user) === null || _c === void 0 ? void 0 : _c.username) || '',
+                        full_name: ((_d = reel.user) === null || _d === void 0 ? void 0 : _d.full_name) || '',
+                        avatar_url: ((_e = reel.user) === null || _e === void 0 ? void 0 : _e.avatar_url) || '',
+                        is_verified: false,
+                        is_following: false
                     },
-                    likes_count: reel.likes_count,
-                    comments_count: reel.comments_count,
-                    is_liked,
-                    is_following, // Add follow state to reel object
-                };
-            })));
-            const paginationMeta = utils_1.pagination.getMetadata(validPage, validLimit, total);
-            console.log('[ReelService] Returning', transformedReels.length, 'reels');
+                    likes_count: 0,
+                    comments_count: 0,
+                    is_liked: false,
+                    is_following: false
+                });
+            });
             return {
                 success: true,
                 data: transformedReels,
-                pagination: paginationMeta,
+                pagination: {
+                    page: validPage,
+                    limit: validLimit,
+                    total,
+                    totalPages: Math.ceil(total / validLimit),
+                    hasNext: validPage < Math.ceil(total / validLimit),
+                    hasPrev: validPage > 1
+                }
             };
         });
     }
-    // Delete reel
-    static deleteReel(reelId, userId) {
+    // Get reel by ID
+    static getReelById(reelId, currentUserId) {
         return __awaiter(this, void 0, void 0, function* () {
+            var _a;
             const db = yield (0, database_1.getDatabase)();
             const reelsCollection = db.collection('reels');
             const reel = yield reelsCollection.findOne({
-                _id: new mongodb_1.ObjectId(reelId)
+                _id: new mongodb_1.ObjectId(reelId),
+                is_deleted: { $ne: true }
             });
             if (!reel) {
                 throw utils_1.errors.notFound("Reel not found");
             }
-            if (reel.user_id.toString() !== userId) {
-                throw utils_1.errors.forbidden("You can only delete your own reels");
-            }
-            // Soft delete
-            yield reelsCollection.updateOne({ _id: new mongodb_1.ObjectId(reelId) }, {
-                $set: {
-                    is_deleted: true,
-                    updated_at: new Date()
-                }
-            });
-            // Clear cache
-            yield database_1.cache.del(`reel:${reelId}`);
+            // Get user info
+            const usersCollection = db.collection('users');
+            const user = yield usersCollection.findOne({ _id: reel.user_id });
+            return {
+                id: reel._id.toString(),
+                user_id: reel.user_id.toString(),
+                video_url: reel.video_url,
+                thumbnail_url: reel.thumbnail_url || '',
+                title: reel.title || '',
+                description: reel.description || '',
+                duration: reel.duration || 0,
+                view_count: reel.view_count || 0,
+                is_public: reel.is_public || true,
+                created_at: reel.created_at,
+                updated_at: reel.updated_at,
+                user: {
+                    id: ((_a = user === null || user === void 0 ? void 0 : user._id) === null || _a === void 0 ? void 0 : _a.toString()) || '',
+                    username: (user === null || user === void 0 ? void 0 : user.username) || '',
+                    full_name: (user === null || user === void 0 ? void 0 : user.full_name) || '',
+                    avatar_url: (user === null || user === void 0 ? void 0 : user.avatar_url) || '',
+                    is_verified: (user === null || user === void 0 ? void 0 : user.is_verified) || false,
+                    is_following: false
+                },
+                likes_count: 0,
+                comments_count: 0,
+                is_liked: false,
+                is_following: false
+            };
         });
     }
     // Like reel
     static likeReel(userId, reelId) {
         return __awaiter(this, void 0, void 0, function* () {
             const db = yield (0, database_1.getDatabase)();
-            const reelsCollection = db.collection('reels');
             const likesCollection = db.collection('likes');
-            const reel = yield reelsCollection.findOne({
-                _id: new mongodb_1.ObjectId(reelId),
-                is_public: true,
-                is_deleted: { $ne: true }
-            });
-            if (!reel) {
-                throw utils_1.errors.notFound("Reel not found");
-            }
+            const reelsCollection = db.collection('reels');
             const existingLike = yield likesCollection.findOne({
                 user_id: new mongodb_1.ObjectId(userId),
                 post_id: new mongodb_1.ObjectId(reelId)
             });
             if (existingLike) {
-                throw utils_1.errors.conflict("Reel already liked");
+                return { liked: true, likes_count: 0 };
             }
             yield likesCollection.insertOne({
                 user_id: new mongodb_1.ObjectId(userId),
                 post_id: new mongodb_1.ObjectId(reelId),
                 created_at: new Date()
             });
-            yield database_1.cache.del(`reel:${reelId}`);
+            const likeCount = yield likesCollection.countDocuments({ post_id: new mongodb_1.ObjectId(reelId) });
+            return { liked: true, likes_count: likeCount };
         });
     }
     // Unlike reel
@@ -451,75 +312,55 @@ class ReelService {
         return __awaiter(this, void 0, void 0, function* () {
             const db = yield (0, database_1.getDatabase)();
             const likesCollection = db.collection('likes');
-            const result = yield likesCollection.deleteOne({
+            yield likesCollection.deleteOne({
                 user_id: new mongodb_1.ObjectId(userId),
                 post_id: new mongodb_1.ObjectId(reelId)
             });
-            if (result.deletedCount === 0) {
-                throw utils_1.errors.notFound("Like not found");
-            }
-            yield database_1.cache.del(`reel:${reelId}`);
+            const likeCount = yield likesCollection.countDocuments({ post_id: new mongodb_1.ObjectId(reelId) });
+            return { liked: false, likes_count: likeCount };
         });
     }
-    // Toggle like reel (like if not liked, unlike if already liked)
-    static toggleLikeReel(userId, reelId) {
+    // Delete reel (soft delete)
+    static deleteReel(reelId, userId) {
         return __awaiter(this, void 0, void 0, function* () {
             const db = yield (0, database_1.getDatabase)();
             const reelsCollection = db.collection('reels');
-            const likesCollection = db.collection('likes');
-            const reel = yield reelsCollection.findOne({
-                _id: new mongodb_1.ObjectId(reelId)
-            });
-            if (!reel) {
-                throw utils_1.errors.notFound("Reel not found");
+            const result = yield reelsCollection.updateOne({ _id: new mongodb_1.ObjectId(reelId), user_id: new mongodb_1.ObjectId(userId) }, { $set: { is_deleted: true, updated_at: new Date() } });
+            if (result.matchedCount === 0) {
+                throw utils_1.errors.notFound('Reel not found or you are not the owner');
             }
-            const existingLike = yield likesCollection.findOne({
-                user_id: new mongodb_1.ObjectId(userId),
-                post_id: new mongodb_1.ObjectId(reelId)
-            });
-            let liked;
-            if (existingLike) {
-                // Unlike
-                yield likesCollection.deleteOne({
-                    user_id: new mongodb_1.ObjectId(userId),
-                    post_id: new mongodb_1.ObjectId(reelId)
-                });
-                liked = false;
-            }
-            else {
-                // Like
-                yield likesCollection.insertOne({
-                    user_id: new mongodb_1.ObjectId(userId),
-                    post_id: new mongodb_1.ObjectId(reelId),
-                    created_at: new Date()
-                });
-                liked = true;
-            }
-            // Get updated like count
-            const likeCount = yield likesCollection.countDocuments({ post_id: new mongodb_1.ObjectId(reelId) });
-            yield database_1.cache.del(`reel:${reelId}`);
-            return { liked, likes: likeCount };
         });
     }
-    // Increment share count
+    // Toggle like/unlike reel
+    static toggleLikeReel(userId, reelId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const db = yield (0, database_1.getDatabase)();
+            const likesCollection = db.collection('likes');
+            const existing = yield likesCollection.findOne({ user_id: new mongodb_1.ObjectId(userId), post_id: new mongodb_1.ObjectId(reelId) });
+            if (existing) {
+                // unlike
+                yield likesCollection.deleteOne({ _id: existing._id });
+                const count = yield likesCollection.countDocuments({ post_id: new mongodb_1.ObjectId(reelId) });
+                return { liked: false, likes: count };
+            }
+            else {
+                // like
+                yield likesCollection.insertOne({ user_id: new mongodb_1.ObjectId(userId), post_id: new mongodb_1.ObjectId(reelId), created_at: new Date() });
+                const count = yield likesCollection.countDocuments({ post_id: new mongodb_1.ObjectId(reelId) });
+                return { liked: true, likes: count };
+            }
+        });
+    }
+    // Increment share count (soft counter)
     static incrementShareCount(reelId) {
         return __awaiter(this, void 0, void 0, function* () {
             const db = yield (0, database_1.getDatabase)();
             const reelsCollection = db.collection('reels');
-            const reel = yield reelsCollection.findOne({
-                _id: new mongodb_1.ObjectId(reelId)
-            });
-            if (!reel) {
-                throw utils_1.errors.notFound("Reel not found");
-            }
-            yield reelsCollection.updateOne({ _id: new mongodb_1.ObjectId(reelId) }, {
-                $inc: { shares_count: 1 },
-                $set: { updated_at: new Date() }
-            });
-            yield database_1.cache.del(`reel:${reelId}`);
+            // Use $inc on a field that may not exist yet
+            yield reelsCollection.updateOne({ _id: new mongodb_1.ObjectId(reelId) }, { $inc: { share_count: 1 }, $set: { updated_at: new Date() } });
         });
     }
-    // Get reel likes
+    // Get reel likes with pagination
     static getReelLikes(reelId_1) {
         return __awaiter(this, arguments, void 0, function* (reelId, page = 1, limit = 20) {
             const { page: validPage, limit: validLimit } = utils_1.pagination.validateParams(page.toString(), limit.toString());
@@ -529,6 +370,9 @@ class ReelService {
             const total = yield likesCollection.countDocuments({ post_id: new mongodb_1.ObjectId(reelId) });
             const likes = yield likesCollection.aggregate([
                 { $match: { post_id: new mongodb_1.ObjectId(reelId) } },
+                { $sort: { created_at: -1 } },
+                { $skip: offset },
+                { $limit: validLimit },
                 {
                     $lookup: {
                         from: 'users',
@@ -538,26 +382,18 @@ class ReelService {
                     }
                 },
                 { $unwind: '$user' },
-                { $sort: { created_at: -1 } },
-                { $skip: offset },
-                { $limit: validLimit },
                 {
                     $project: {
                         id: '$user._id',
                         username: '$user.username',
                         full_name: '$user.full_name',
                         avatar_url: '$user.avatar_url',
-                        is_verified: '$user.is_verified',
                         liked_at: '$created_at'
                     }
                 }
             ]).toArray();
             const paginationMeta = utils_1.pagination.getMetadata(validPage, validLimit, total);
-            return {
-                success: true,
-                data: likes,
-                pagination: paginationMeta,
-            };
+            return { success: true, data: likes, pagination: paginationMeta };
         });
     }
 }

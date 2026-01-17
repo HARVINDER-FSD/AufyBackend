@@ -1,6 +1,7 @@
 // Notifications API Routes
 import express, { Response } from 'express';
 import { MongoClient, ObjectId } from 'mongodb';
+import { maskAnonymousUser } from '../lib/anonymous-utils';
 import authenticateToken from '../middleware/auth';
 
 const authenticate = authenticateToken;
@@ -54,6 +55,7 @@ router.get('/', authenticate, async (req: any, res: Response) => {
             postId: 1,
             conversationId: 1,
             isRead: 1,
+            is_anonymous: 1, // Include anonymous flag
             createdAt: 1,
             'actor._id': 1,
             'actor.username': 1,
@@ -82,12 +84,15 @@ router.get('/', authenticate, async (req: any, res: Response) => {
     const formattedNotifications = notifications.map(notif => ({
       id: notif._id.toString(),
       type: notif.type,
-      user: {
+      user: maskAnonymousUser({
         id: notif.actor._id.toString(),
         username: notif.actor.username,
         avatar: notif.actor.avatar_url || notif.actor.avatar || '/placeholder-user.jpg',
-        verified: notif.actor.is_verified || notif.actor.verified || false
-      },
+        avatar_url: notif.actor.avatar_url || notif.actor.avatar || '/placeholder-user.jpg',
+        verified: notif.actor.is_verified || notif.actor.verified || false,
+        is_verified: notif.actor.is_verified || notif.actor.verified || false,
+        is_anonymous: notif.is_anonymous
+      }),
       content: notif.content,
       post: notif.post?._id ? {
         id: notif.post._id.toString(),

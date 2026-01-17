@@ -12,6 +12,10 @@ if (result.parsed?.MONGODB_URI && !process.env.MONGODB_URI?.includes('mongodb+sr
 }
 
 import express from 'express'
+import 'express-async-errors'
+import { requestId, httpLogger, logger } from './middleware/logger'
+import { errorHandler } from './middleware/errorHandler'
+
 import { createServer } from 'http'
 import cors from 'cors'
 import cookieParser from 'cookie-parser'
@@ -36,6 +40,8 @@ import analyticsRoutes from './routes/analytics'
 import bookmarksRoutes from './routes/bookmarks'
 import settingsRoutes from './routes/settings'
 import pushRoutes from './routes/push'
+import professionalRoutes from './routes/professional'
+import verificationRoutes from './routes/verification'
 import closeFriendsRoutes from './routes/close-friends'
 import highlightsRoutes from './routes/highlights'
 import storiesCloseFriendsRoutes from './routes/stories-close-friends'
@@ -45,6 +51,11 @@ import secretCrushRoutes from './routes/secret-crush'
 import premiumRoutes from './routes/premium'
 import demoRoutes from './routes/demo'
 import aiRoutes from './routes/ai'
+import promBundle from 'express-prom-bundle'
+import swaggerUi from 'swagger-ui-express'
+import YAML from 'yamljs'
+
+
 import { initializeFirebase } from './services/firebase-messaging'
 
 const app = express()
@@ -109,39 +120,88 @@ app.use(cors({
 }))
 
 // Security layers
-app.use(xssProtection)
-app.use(ipFilter)
-app.use(detectSuspiciousActivity)
-app.use(sanitizeInput)
-app.use(rateLimiter(100, 60000)) // 100 requests per minute
-app.use(validateRequestSignature)
-app.use(csrfProtection)
-app.use(secureSession)
+app.use(xssProtection as any)
+app.use(ipFilter as any)
+app.use(detectSuspiciousActivity as any)
+app.use(sanitizeInput as any)
+app.use(rateLimiter(100, 60000) as any) // 100 requests per minute
+app.use(validateRequestSignature as any)
+app.use(csrfProtection as any)
+app.use(secureSession as any)
+
+
+// Prometheus Metrics Middleware
+const metricsMiddleware = promBundle({
+  includeMethod: true,
+  includePath: true,
+  includeStatusCode: true,
+  includeUp: true,
+  customLabels: { project_name: 'anufy_api' },
+  promClient: {
+    collectDefaultMetrics: {}
+  }
+});
+app.use(metricsMiddleware as any);
+
 
 app.use(express.json({ limit: '50mb' }))
+
 app.use(express.urlencoded({ extended: true, limit: '50mb' }))
 app.use(cookieParser())
+
+app.use(httpLogger)
+app.use(requestId)
 
 // Performance Monitoring Middleware
 app.use((req, res, next) => {
   const start = Date.now();
-  
+
   res.on('finish', () => {
     const duration = Date.now() - start;
     const userId = (req as any).userId;
     recordMetric(req.path, req.method, duration, res.statusCode, userId);
   });
-  
+
   next();
 });
 
+// Swagger Documentation
+const swaggerPath = path.resolve(process.cwd(), 'src', 'docs', 'swagger.yaml')
+const swaggerDocument = YAML.load(swaggerPath)
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument))
+
+
 // Serve static files (for password reset redirect page)
+
 app.use(express.static(path.join(__dirname, '..', 'public')))
 
 // Health check
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', message: 'Anufy API Server is running' })
+app.get('/health', async (_req, res) => {
+  const dbStatus = mongoose.connection.readyState === 1;
+  let redisStatus = false;
+  try {
+    const { getRedis } = await import('./lib/redis');
+    const redis = getRedis();
+    if (redis) {
+      // @ts-ignore
+      await (redis as any).ping();
+      redisStatus = true;
+    }
+  } catch (err) {
+    logger.warn('Health check Redis Error:', err);
+  }
+
+  const status = dbStatus && redisStatus ? 'ok' : 'degraded';
+  res.status(status === 'ok' ? 200 : 503).json({
+    status,
+    timestamp: new Date().toISOString(),
+    services: {
+      database: dbStatus ? 'connected' : 'disconnected',
+      redis: redisStatus ? 'connected' : 'disconnected'
+    }
+  });
 })
+
 
 // Password reset redirect page
 app.get('/reset-password', (_req, res) => {
@@ -175,6 +235,8 @@ app.use('/api/secret-crush', secretCrushRoutes)
 app.use('/api/premium', premiumRoutes)
 app.use('/api/demo', demoRoutes)
 app.use('/api/ai', aiRoutes)
+app.use('/api/professional', professionalRoutes)
+app.use('/api/verification', verificationRoutes)
 
 // Performance Metrics Endpoint (Admin only)
 app.get('/api/metrics', (_req, res) => {
@@ -184,13 +246,9 @@ app.get('/api/metrics', (_req, res) => {
   });
 });
 
-// Error handling
-app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error('Error:', err)
-  res.status(err.status || 500).json({
-    error: err.message || 'Internal server error'
-  })
-})
+// Global Error Handler (must be last)
+app.use(errorHandler)
+
 
 // Start server with WebSocket support
 httpServer.listen(PORT, '0.0.0.0', () => {
@@ -217,21 +275,49 @@ httpServer.listen(PORT, '0.0.0.0', () => {
   if (process.env.NODE_ENV === 'production') {
     const BACKEND_URL = 'https://aufybackend.onrender.com';
 
-    console.log('🔄 Self-ping enabled - keeping service awake');
+    logger.info('🔄 Self-ping enabled - keeping service awake');
 
     setInterval(async () => {
       try {
         const response = await fetch(`${BACKEND_URL}/health`);
         if (response.ok) {
-          console.log('✅ Self-ping successful');
+          logger.info('✅ Self-ping successful');
         } else {
-          console.log('⚠️  Self-ping returned:', response.status);
+          logger.warn('⚠️  Self-ping returned:', response.status);
         }
       } catch (error: any) {
-        console.log('⚠️  Self-ping failed:', error.message);
+        logger.warn('⚠️  Self-ping failed:', error.message);
       }
     }, 10 * 60 * 1000); // Ping every 10 minutes
   }
 })
+
+// Graceful Shutdown
+const shutdown = async (signal: string) => {
+  logger.info(`收到 ${signal}。正在优雅关闭...`);
+
+  // Close HTTP server
+  httpServer.close(() => {
+    logger.info('HTTP 服务器已关闭。');
+  });
+
+  // Close MongoDB connection
+  try {
+    await mongoose.connection.close();
+    logger.info('MongoDB 连接已关闭。');
+  } catch (err) {
+    logger.error('关闭 MongoDB 时出错:', err);
+  }
+
+  // Final exit
+  setTimeout(() => {
+    logger.info('进程退出。');
+    process.exit(0);
+  }, 1000);
+};
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
 
 export default app
