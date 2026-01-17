@@ -594,9 +594,6 @@ router.get('/login-activity', authenticateToken, async (req: any, res) => {
   }
 })
 
-export default router
-
-
 // POST /api/auth/verify-otp - Verify OTP for password reset
 router.post('/verify-otp', async (req: Request, res: Response) => {
   try {
