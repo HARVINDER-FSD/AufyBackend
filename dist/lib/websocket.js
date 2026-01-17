@@ -115,6 +115,79 @@ class WebSocketService {
                     socket.emit('error', { message: 'Failed to send message' });
                 }
             }));
+            // --- WebRTC Signaling for Video & Voice Calls ---
+            socket.on('call:start', (data) => {
+                var _a;
+                const { recipientId, isVideo } = data;
+                const recipientSocketId = activeUsers.get(recipientId);
+                if (recipientSocketId) {
+                    console.log(`📞 Call started from ${userId} to ${recipientId}`);
+                    (_a = this.io) === null || _a === void 0 ? void 0 : _a.to(recipientSocketId).emit('call:incoming', {
+                        callerId: userId,
+                        isVideo
+                    });
+                }
+                else {
+                    console.warn(`📞 User ${recipientId} is offline, cannot call`);
+                }
+            });
+            socket.on('call:accept', (data) => {
+                var _a;
+                const { callerId } = data;
+                const callerSocketId = activeUsers.get(callerId);
+                if (callerSocketId) {
+                    (_a = this.io) === null || _a === void 0 ? void 0 : _a.to(callerSocketId).emit('call:accepted', { acceptorId: userId });
+                }
+            });
+            socket.on('call:reject', (data) => {
+                var _a;
+                const { callerId } = data;
+                const callerSocketId = activeUsers.get(callerId);
+                if (callerSocketId) {
+                    (_a = this.io) === null || _a === void 0 ? void 0 : _a.to(callerSocketId).emit('call:rejected', { rejectorId: userId });
+                }
+            });
+            socket.on('call:offer', (data) => {
+                var _a;
+                const { targetUserId, sdp } = data;
+                const targetSocketId = activeUsers.get(targetUserId);
+                if (targetSocketId) {
+                    (_a = this.io) === null || _a === void 0 ? void 0 : _a.to(targetSocketId).emit('call:offer', {
+                        senderId: userId,
+                        sdp
+                    });
+                }
+            });
+            socket.on('call:answer', (data) => {
+                var _a;
+                const { targetUserId, sdp } = data;
+                const targetSocketId = activeUsers.get(targetUserId);
+                if (targetSocketId) {
+                    (_a = this.io) === null || _a === void 0 ? void 0 : _a.to(targetSocketId).emit('call:answer', {
+                        senderId: userId,
+                        sdp
+                    });
+                }
+            });
+            socket.on('call:ice-candidate', (data) => {
+                var _a;
+                const { targetUserId, candidate } = data;
+                const targetSocketId = activeUsers.get(targetUserId);
+                if (targetSocketId) {
+                    (_a = this.io) === null || _a === void 0 ? void 0 : _a.to(targetSocketId).emit('call:ice-candidate', {
+                        senderId: userId,
+                        candidate
+                    });
+                }
+            });
+            socket.on('call:end', (data) => {
+                var _a;
+                const { targetUserId } = data;
+                const targetSocketId = activeUsers.get(targetUserId);
+                if (targetSocketId) {
+                    (_a = this.io) === null || _a === void 0 ? void 0 : _a.to(targetSocketId).emit('call:ended', { userId });
+                }
+            });
             // Handle disconnect
             socket.on('disconnect', () => {
                 console.log(`User disconnected: ${userId}`);

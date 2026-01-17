@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.secureSession = exports.csrfProtection = exports.validateRequestSignature = exports.rateLimiter = exports.sanitizeInput = exports.detectSuspiciousActivity = exports.ipFilter = exports.xssProtection = exports.validatePasswordStrength = exports.bruteForceProtection = exports.clearFailedAttempts = exports.recordFailedAttempt = exports.corsOptions = exports.securityHeaders = void 0;
+exports.secureSession = exports.csrfProtection = exports.validateRequestSignature = exports.rateLimiter = exports.detectSuspiciousActivity = exports.ipFilter = exports.sanitizeInput = exports.xssProtection = exports.validatePasswordStrength = exports.bruteForceProtection = exports.clearFailedAttempts = exports.recordFailedAttempt = exports.corsOptions = exports.securityHeaders = void 0;
 // src/middleware/security.ts
 const helmet_1 = __importDefault(require("helmet"));
 const cors_1 = __importDefault(require("cors"));
@@ -58,15 +58,57 @@ const validatePasswordStrength = (password) => {
 };
 exports.validatePasswordStrength = validatePasswordStrength;
 // Also restore other middlewares mentioned in index.ts imports
-const xssProtection = (req, res, next) => { next(); };
+const xss_1 = __importDefault(require("xss"));
+const mongo_sanitize_1 = __importDefault(require("mongo-sanitize"));
+// Also restore other middlewares mentioned in index.ts imports
+const xssProtection = (req, _res, next) => {
+    if (req.body) {
+        const clean = (obj) => {
+            for (const key in obj) {
+                if (typeof obj[key] === 'string') {
+                    obj[key] = (0, xss_1.default)(obj[key]);
+                }
+                else if (typeof obj[key] === 'object' && obj[key] !== null) {
+                    clean(obj[key]);
+                }
+            }
+        };
+        clean(req.body);
+    }
+    next();
+};
 exports.xssProtection = xssProtection;
-const ipFilter = (req, res, next) => { next(); };
-exports.ipFilter = ipFilter;
-const detectSuspiciousActivity = (req, res, next) => { next(); };
-exports.detectSuspiciousActivity = detectSuspiciousActivity;
-const sanitizeInput = (req, res, next) => { next(); };
+const sanitizeInput = (req, _res, next) => {
+    if (req.body)
+        req.body = (0, mongo_sanitize_1.default)(req.body);
+    if (req.query)
+        req.query = (0, mongo_sanitize_1.default)(req.query);
+    if (req.params)
+        req.params = (0, mongo_sanitize_1.default)(req.params);
+    next();
+};
 exports.sanitizeInput = sanitizeInput;
-const rateLimiter = (max, windowMs) => (0, express_rate_limit_1.default)({ max, windowMs });
+const ipFilter = (req, res, next) => {
+    // Simple check for common bot/testing IPs if needed
+    next();
+};
+exports.ipFilter = ipFilter;
+const detectSuspiciousActivity = (req, res, next) => {
+    // Log request if it contains sensitive characters like ../ OR <script>
+    const url = req.url.toLowerCase();
+    if (url.includes('../') || url.includes('<script')) {
+        console.warn(`[SECURITY] Suspicious activity detected from ${req.ip} on ${req.url}`);
+    }
+    next();
+};
+exports.detectSuspiciousActivity = detectSuspiciousActivity;
+const rateLimiter = (max, windowMs) => (0, express_rate_limit_1.default)({
+    max,
+    windowMs,
+    message: { error: 'Too many requests' },
+    standardHeaders: true,
+    legacyHeaders: false
+});
 exports.rateLimiter = rateLimiter;
 const validateRequestSignature = (req, res, next) => { next(); };
 exports.validateRequestSignature = validateRequestSignature;

@@ -71,7 +71,7 @@ class ReelService {
             };
         });
     }
-    // Get reels feed (discover/explore)
+    // Get reels feed (Instagram-Level Advanced Algorithm)
     static getReelsFeed(currentUserId_1) {
         return __awaiter(this, arguments, void 0, function* (currentUserId, page = 1, limit = 20) {
             try {
@@ -79,19 +79,31 @@ class ReelService {
                 const offset = utils_1.pagination.getOffset(validPage, validLimit);
                 const db = yield (0, database_1.getDatabase)();
                 const reelsCollection = db.collection('reels');
-                // Build match query
+                const followsCollection = db.collection('follows');
+                // 1. Get Social Graph (Who does the user follow?)
+                let followedUserIds = [];
+                if (currentUserId && mongodb_1.ObjectId.isValid(currentUserId)) {
+                    const follows = yield followsCollection
+                        .find({ follower_id: new mongodb_1.ObjectId(currentUserId) })
+                        .project({ following_id: 1 })
+                        .toArray();
+                    followedUserIds = follows.map(f => f.following_id);
+                }
+                // 2. Build Base Match Query
                 const matchQuery = {
                     is_archived: { $ne: true },
-                    is_deleted: { $ne: true }
+                    is_deleted: { $ne: true },
+                    is_public: true
                 };
+                // Exclude own reels
                 if (currentUserId && mongodb_1.ObjectId.isValid(currentUserId)) {
                     matchQuery.user_id = { $ne: new mongodb_1.ObjectId(currentUserId) };
                 }
-                // Get total count
-                const total = yield reelsCollection.countDocuments(matchQuery);
-                // Simple aggregation
-                const reels = yield reelsCollection.aggregate([
+                // 3. The "The Algorithm" Aggregation Pipeline
+                const pipeline = [
                     { $match: matchQuery },
+                    // --- Feature Extraction ---
+                    // Lookup Creator
                     {
                         $lookup: {
                             from: 'users',
@@ -101,33 +113,114 @@ class ReelService {
                         }
                     },
                     { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
-                    { $sort: { created_at: -1 } },
-                    { $skip: offset },
-                    { $limit: validLimit },
+                    // Count Likes (Real-time signal)
                     {
-                        $project: {
-                            _id: 1,
-                            user_id: 1,
-                            video_url: 1,
-                            thumbnail_url: 1,
-                            title: 1,
-                            description: 1,
-                            duration: 1,
-                            view_count: 1,
-                            is_public: 1,
-                            created_at: 1,
-                            updated_at: 1,
-                            user: {
-                                _id: '$user._id',
-                                username: '$user.username',
-                                full_name: '$user.full_name',
-                                avatar_url: '$user.avatar_url'
+                        $lookup: {
+                            from: 'likes',
+                            let: { reelId: '$_id' },
+                            pipeline: [
+                                { $match: { $expr: { $eq: ['$post_id', '$$reelId'] } } },
+                                { $count: 'count' }
+                            ],
+                            as: 'likes_info'
+                        }
+                    },
+                    // Count Comments (Real-time signal)
+                    {
+                        $lookup: {
+                            from: 'comments',
+                            let: { reelId: '$_id' },
+                            pipeline: [
+                                { $match: { $expr: { $and: [{ $eq: ['$post_id', '$$reelId'] }, { $eq: ['$is_deleted', false] }] } } },
+                                { $count: 'count' }
+                            ],
+                            as: 'comments_info'
+                        }
+                    },
+                    // Check Relationship (Is current user following creator?)
+                    {
+                        $addFields: {
+                            // Check if creator's ID is in our followedUserIds list
+                            is_following_creator: {
+                                $in: ['$user_id', followedUserIds]
                             }
                         }
-                    }
-                ]).toArray();
+                    },
+                    // Check if Liked by current user
+                    {
+                        $lookup: {
+                            from: 'likes',
+                            let: { reelId: '$_id' },
+                            pipeline: [
+                                {
+                                    $match: {
+                                        $expr: {
+                                            $and: [
+                                                { $eq: ['$post_id', '$$reelId'] },
+                                                { $eq: ['$user_id', currentUserId ? new mongodb_1.ObjectId(currentUserId) : null] }
+                                            ]
+                                        }
+                                    }
+                                }
+                            ],
+                            as: 'user_like'
+                        }
+                    },
+                    // --- Scoring Phase ---
+                    {
+                        $addFields: {
+                            likes_count: { $ifNull: [{ $arrayElemAt: ['$likes_info.count', 0] }, 0] },
+                            comments_count: { $ifNull: [{ $arrayElemAt: ['$comments_info.count', 0] }, 0] },
+                            is_liked: { $gt: [{ $size: '$user_like' }, 0] },
+                            // Interaction Score
+                            interaction_score: {
+                                $add: [
+                                    { $multiply: [{ $ifNull: [{ $arrayElemAt: ['$likes_info.count', 0] }, 0] }, 3] }, // Like = 3pts
+                                    { $multiply: [{ $ifNull: [{ $arrayElemAt: ['$comments_info.count', 0] }, 0] }, 5] }, // Comment = 5pts
+                                    { $multiply: ['$view_count', 0.05] } // View = 0.05pts (prevent viral dominance)
+                                ]
+                            },
+                            // Social Score
+                            social_score: {
+                                $cond: { if: '$is_following_creator', then: 50, else: 0 } // Follow = +50pts (Huge boost for friends/followed)
+                            },
+                            // Freshness Score (Decay Factor)
+                            // 1000 / (Hours + 2) -> 1h old = 333, 24h old = 38, 48h old = 20
+                            freshness_score: {
+                                $divide: [
+                                    1000,
+                                    {
+                                        $add: [
+                                            { $divide: [{ $subtract: [new Date(), '$created_at'] }, 1000 * 60 * 60] },
+                                            2 // Damping factor
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    // Calculate Final Score + Randomness (Discovery)
+                    {
+                        $addFields: {
+                            total_score: {
+                                $add: [
+                                    '$interaction_score',
+                                    '$social_score',
+                                    '$freshness_score',
+                                    { $multiply: [{ $rand: {} }, 15] } // 0-15pts Random Jitter for discovery
+                                ]
+                            }
+                        }
+                    },
+                    // --- Sorting & Paging ---
+                    { $sort: { total_score: -1 } },
+                    { $skip: offset },
+                    { $limit: validLimit }
+                ];
+                const reels = yield reelsCollection.aggregate(pipeline).toArray();
+                const total = yield reelsCollection.countDocuments(matchQuery);
                 const transformedReels = reels.map((reel) => {
-                    var _a, _b, _c, _d, _e;
+                    var _a, _b, _c, _d, _e, _f;
                     return ({
                         id: reel._id.toString(),
                         user_id: reel.user_id.toString(),
@@ -145,13 +238,13 @@ class ReelService {
                             username: ((_c = reel.user) === null || _c === void 0 ? void 0 : _c.username) || '',
                             full_name: ((_d = reel.user) === null || _d === void 0 ? void 0 : _d.full_name) || '',
                             avatar_url: ((_e = reel.user) === null || _e === void 0 ? void 0 : _e.avatar_url) || '',
-                            is_verified: false,
-                            is_following: false
+                            is_verified: ((_f = reel.user) === null || _f === void 0 ? void 0 : _f.is_verified) || false,
+                            is_following: reel.is_following_creator // Now correctly populated
                         },
-                        likes_count: 0,
-                        comments_count: 0,
-                        is_liked: false,
-                        is_following: false
+                        likes_count: reel.likes_count,
+                        comments_count: reel.comments_count,
+                        is_liked: reel.is_liked,
+                        is_following: reel.is_following_creator // Now correctly populated
                     });
                 });
                 return {

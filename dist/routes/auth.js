@@ -48,11 +48,17 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
+const mongodb_1 = require("mongodb");
 const database_1 = require("../lib/database");
+const auth_1 = require("../middleware/auth");
 const security_1 = require("../middleware/security");
 const encryption_1 = require("../utils/encryption");
 const router = (0, express_1.Router)();
-const JWT_SECRET = process.env.JWT_SECRET || '4d9f1c8c6b27a67e9f3a81d2e5b0f78c72d1e7a64d59c83fb20e5a72a8c4d192';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    console.error('FATAL ERROR: JWT_SECRET is not defined in environment variables.');
+    process.exit(1);
+}
 // POST /api/auth/login
 router.post('/login', security_1.bruteForceProtection, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
@@ -120,6 +126,22 @@ router.post('/login', security_1.bruteForceProtection, (req, res) => __awaiter(v
             sameSite: 'lax',
             secure: process.env.NODE_ENV === 'production',
         });
+        // Record login activity
+        try {
+            const userAgent = req.headers['user-agent'] || 'Unknown';
+            const ip = req.ip || '0.0.0.0';
+            yield db.collection('login_activity').insertOne({
+                userId: user._id,
+                device: userAgent,
+                ip,
+                location: 'Unknown', // Could use geoip here
+                timestamp: new Date(),
+                status: 'active'
+            });
+        }
+        catch (activityError) {
+            console.error('Failed to record login activity:', activityError);
+        }
         // Return user data and token
         const avatarUrl = user.avatar_url || user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username)}&background=0095f6&color=fff&size=128`;
         return res.json({
@@ -150,11 +172,11 @@ router.post('/login', security_1.bruteForceProtection, (req, res) => __awaiter(v
 // POST /api/auth/register
 router.post('/register', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        const { email, password, username, name } = req.body;
+        const { email, password, username, name, dob } = req.body;
         // Validate required fields
-        if (!email || !password || !username) {
+        if (!email || !password || !username || !dob) {
             return res.status(400).json({
-                message: "Email, password, and username are required"
+                message: "Email, password, username, and date of birth are required"
             });
         }
         // Connect to MongoDB using shared connection
@@ -236,6 +258,10 @@ router.post('/register', (req, res) => __awaiter(void 0, void 0, void 0, functio
             following_count: 0,
             verified: false,
             is_verified: false,
+            dob: dob ? new Date(dob) : null,
+            contentWarnings: 0,
+            isBlocked: false,
+            blockedUntil: null,
             createdAt: new Date(),
             updatedAt: new Date()
         });
@@ -305,27 +331,38 @@ router.post('/forgot-password', (req, res) => __awaiter(void 0, void 0, void 0, 
         // Always return success to prevent email enumeration
         if (!user) {
             return res.json({
-                message: 'If an account exists with this email, you will receive a password reset link.'
+                message: 'If an account exists with this email, you will receive an OTP.'
             });
         }
-        // Generate secure reset token
-        const { token, hash: tokenHash, expires } = (0, encryption_1.generatePasswordResetToken)();
-        // Store reset token in database
+        // Generate 6-digit OTP
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+        // Store OTP in database
         yield usersCollection.updateOne({ email }, {
             $set: {
-                resetPasswordToken: tokenHash,
-                resetPasswordExpires: expires,
+                resetPasswordOTP: otp,
+                resetPasswordOTPExpires: otpExpires,
                 updated_at: new Date()
             }
         });
-        // Send password reset email asynchronously (don't wait for it)
-        const { sendPasswordResetEmail } = yield Promise.resolve().then(() => __importStar(require('../services/email-resend')));
-        sendPasswordResetEmail(email, token, user.username || user.full_name).catch(err => {
-            console.error('[FORGOT PASSWORD] Email send error:', err);
-        });
+        console.log(`[FORGOT PASSWORD] OTP generated for ${email}: ${otp}`);
+        console.log(`[FORGOT PASSWORD] User: ${user.username}, Full Name: ${user.full_name}`);
+        // Send OTP email asynchronously (don't wait for it)
+        try {
+            const { sendPasswordResetOTPEmail } = yield Promise.resolve().then(() => __importStar(require('../services/email-resend')));
+            console.log('[FORGOT PASSWORD] Calling sendPasswordResetOTPEmail...');
+            sendPasswordResetOTPEmail(email, otp, user.username || user.full_name).then(() => {
+                console.log('[FORGOT PASSWORD] Email sent successfully');
+            }).catch(err => {
+                console.error('[FORGOT PASSWORD] Email send error:', err);
+            });
+        }
+        catch (importErr) {
+            console.error('[FORGOT PASSWORD] Import error:', importErr);
+        }
         // Respond immediately without waiting for email
         res.json({
-            message: 'If an account exists with this email, you will receive a password reset link.'
+            message: 'If an account exists with this email, you will receive an OTP.'
         });
     }
     catch (error) {
@@ -470,6 +507,136 @@ router.post('/change-password', (req, res) => __awaiter(void 0, void 0, void 0, 
     catch (error) {
         console.error('[CHANGE PASSWORD] Error:', error);
         res.status(500).json({ message: 'Failed to change password' });
+    }
+}));
+// GET /api/auth/login-activity - Get user's login history
+router.get('/login-activity', auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const userId = req.userId;
+        const db = yield (0, database_1.getDatabase)();
+        const activity = yield db.collection('login_activity')
+            .find({ userId: new mongodb_1.ObjectId(userId) })
+            .sort({ timestamp: -1 })
+            .limit(10)
+            .toArray();
+        res.json({
+            success: true,
+            activity: activity.map(a => ({
+                id: a._id,
+                device: a.device,
+                ip: a.ip,
+                location: a.location,
+                timestamp: a.timestamp,
+                status: a.status
+            }))
+        });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+}));
+// POST /api/auth/verify-otp - Verify OTP for password reset
+router.post('/verify-otp', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { email, otp } = req.body;
+        if (!email || !otp) {
+            return res.status(400).json({ message: 'Email and OTP are required' });
+        }
+        const db = yield (0, database_1.getDatabase)();
+        const usersCollection = db.collection('users');
+        const user = yield usersCollection.findOne({ email });
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+        // Check if OTP matches and is not expired
+        if (user.resetPasswordOTP !== otp || !user.resetPasswordOTPExpires || new Date() > user.resetPasswordOTPExpires) {
+            return res.status(400).json({ message: 'Invalid or expired OTP' });
+        }
+        console.log(`[OTP VERIFY] OTP verified for user: ${email}`);
+        // OTP is valid, return success
+        res.json({
+            message: 'OTP verified successfully',
+            verified: true
+        });
+    }
+    catch (error) {
+        console.error('[OTP VERIFY] Error:', error);
+        res.status(500).json({ message: 'Failed to verify OTP' });
+    }
+}));
+// POST /api/auth/reset-password-otp - Reset password using OTP
+router.post('/reset-password-otp', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { email, otp, newPassword } = req.body;
+        if (!email || !otp || !newPassword) {
+            return res.status(400).json({ message: 'Email, OTP, and new password are required' });
+        }
+        // Validate password strength
+        const passwordValidation = (0, security_1.validatePasswordStrength)(newPassword);
+        if (!passwordValidation.valid) {
+            return res.status(400).json({
+                message: 'Password does not meet requirements',
+                errors: passwordValidation.errors
+            });
+        }
+        const db = yield (0, database_1.getDatabase)();
+        const usersCollection = db.collection('users');
+        const user = yield usersCollection.findOne({ email });
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+        // Verify OTP
+        if (user.resetPasswordOTP !== otp || !user.resetPasswordOTPExpires || new Date() > user.resetPasswordOTPExpires) {
+            return res.status(400).json({ message: 'Invalid or expired OTP' });
+        }
+        // Hash new password
+        const hashedPassword = yield bcryptjs_1.default.hash(newPassword, 10);
+        // Update password and clear OTP
+        yield usersCollection.updateOne({ _id: user._id }, {
+            $set: {
+                password: hashedPassword,
+                updated_at: new Date()
+            },
+            $unset: {
+                resetPasswordOTP: '',
+                resetPasswordOTPExpires: ''
+            }
+        });
+        console.log(`[RESET PASSWORD OTP] Password reset successful for user: ${email}`);
+        // Generate JWT token for auto-login
+        const token = jsonwebtoken_1.default.sign({
+            userId: user._id.toString(),
+            email: user.email,
+            username: user.username,
+            name: user.name
+        }, JWT_SECRET, { expiresIn: '90d' });
+        // Send confirmation email asynchronously
+        const { sendPasswordChangedEmail } = yield Promise.resolve().then(() => __importStar(require('../services/email-resend')));
+        sendPasswordChangedEmail(email, user.username || user.full_name).catch(err => {
+            console.error('[RESET PASSWORD OTP] Email send error:', err);
+        });
+        // Return token for auto-login
+        res.json({
+            message: 'Password reset successful',
+            token: token,
+            user: {
+                _id: user._id.toString(),
+                id: user._id.toString(),
+                username: user.username,
+                email: user.email,
+                name: user.name || "",
+                fullName: user.name || "",
+                bio: user.bio || "",
+                avatar: user.avatar_url || user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username)}&background=0095f6&color=fff&size=128`,
+                followers: user.followers || 0,
+                following: user.following || 0,
+                verified: user.verified || false
+            }
+        });
+    }
+    catch (error) {
+        console.error('[RESET PASSWORD OTP] Error:', error);
+        res.status(500).json({ message: 'Failed to reset password' });
     }
 }));
 exports.default = router;

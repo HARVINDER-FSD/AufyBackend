@@ -15,6 +15,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 // Notifications API Routes
 const express_1 = __importDefault(require("express"));
 const mongodb_1 = require("mongodb");
+const anonymous_utils_1 = require("../lib/anonymous-utils");
 const auth_1 = __importDefault(require("../middleware/auth"));
 const authenticate = auth_1.default;
 const router = express_1.default.Router();
@@ -62,6 +63,7 @@ router.get('/', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, fu
                     postId: 1,
                     conversationId: 1,
                     isRead: 1,
+                    is_anonymous: 1, // Include anonymous flag
                     createdAt: 1,
                     'actor._id': 1,
                     'actor.username': 1,
@@ -89,12 +91,15 @@ router.get('/', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, fu
             return ({
                 id: notif._id.toString(),
                 type: notif.type,
-                user: {
+                user: (0, anonymous_utils_1.maskAnonymousUser)({
                     id: notif.actor._id.toString(),
                     username: notif.actor.username,
                     avatar: notif.actor.avatar_url || notif.actor.avatar || '/placeholder-user.jpg',
-                    verified: notif.actor.is_verified || notif.actor.verified || false
-                },
+                    avatar_url: notif.actor.avatar_url || notif.actor.avatar || '/placeholder-user.jpg',
+                    verified: notif.actor.is_verified || notif.actor.verified || false,
+                    is_verified: notif.actor.is_verified || notif.actor.verified || false,
+                    is_anonymous: notif.is_anonymous
+                }),
                 content: notif.content,
                 post: ((_a = notif.post) === null || _a === void 0 ? void 0 : _a._id) ? {
                     id: notif.post._id.toString(),

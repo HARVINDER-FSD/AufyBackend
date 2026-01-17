@@ -16,6 +16,7 @@ exports.ChatService = void 0;
 const database_1 = require("../lib/database");
 const websocket_1 = require("../lib/websocket");
 const utils_1 = require("../lib/utils");
+const anonymous_utils_1 = require("../lib/anonymous-utils");
 const config_1 = require("../lib/config");
 const conversation_1 = __importDefault(require("../models/conversation"));
 const message_1 = __importDefault(require("../models/message"));
@@ -193,6 +194,10 @@ class ChatService {
     static sendMessage(senderId, conversationId, messageData) {
         return __awaiter(this, void 0, void 0, function* () {
             const { content, media_url, media_type, message_type, reply_to_id } = messageData;
+            // Get sender to check anonymous status
+            const sender = yield user_1.default.findById(senderId);
+            if (!sender)
+                throw utils_1.errors.notFound("Sender not found");
             // Validate message
             if (!content && !media_url) {
                 throw utils_1.errors.badRequest("Message must have content or media");
@@ -221,23 +226,31 @@ class ChatService {
                 }
             }
             // Create message
-            const newMessage = yield message_1.default.create({
+            const message = yield message_1.default.create({
                 conversation_id: conversationId,
                 sender_id: senderId,
                 content,
                 media_url,
                 media_type,
                 message_type: message_type || 'text',
-                reply_to_id
+                reply_to_id,
+                is_anonymous: sender.isAnonymousMode === true,
+                status: 'sent',
+                read_by: [{ user_id: senderId, read_at: new Date() }]
             });
-            // Update conversation timestamp and last message
-            conversation.last_message = newMessage._id;
-            // Mongoose handles updatedAt automatically on save
-            yield conversation.save();
-            // Get sender info
-            const sender = yield user_1.default.findById(senderId).select('username full_name avatar_url is_verified');
+            const populatedMessage = yield message.populate('sender_id', 'username full_name avatar_url is_verified');
+            // Mask sender if anonymous
+            const result = populatedMessage.toObject();
+            if (result.is_anonymous) {
+                result.sender_id = (0, anonymous_utils_1.maskAnonymousUser)(Object.assign(Object.assign({}, result.sender_id), { is_anonymous: true }));
+            }
+            // Update conversation last message
+            yield conversation_1.default.findByIdAndUpdate(conversationId, {
+                last_message: message._id,
+                updated_at: new Date()
+            });
             // Get reply-to message details if exists
-            let replyToMessage = null;
+            let replyToMessage = undefined;
             if (reply_to_id) {
                 const rt = yield message_1.default.findById(reply_to_id).populate('sender_id', 'username full_name');
                 if (rt) {
@@ -247,32 +260,44 @@ class ChatService {
                         media_url: rt.media_url,
                         message_type: rt.message_type,
                         created_at: rt.created_at,
+                        updated_at: rt.updated_at,
+                        is_deleted: rt.is_deleted,
+                        conversation_id: conversationId,
+                        sender_id: rt.sender_id ? rt.sender_id._id.toString() : '',
                         sender: rt.sender_id ? {
                             username: rt.sender_id.username,
-                            full_name: rt.sender_id.full_name
-                        } : null
+                            full_name: rt.sender_id.full_name,
+                            id: rt.sender_id._id.toString(),
+                            email: '',
+                            is_verified: false,
+                            is_private: false,
+                            is_active: true,
+                            created_at: new Date(),
+                            updated_at: new Date()
+                        } : undefined
                     };
                 }
             }
             const messageWithDetails = {
-                id: newMessage._id.toString(),
+                id: message._id.toString(),
                 conversation_id: conversationId,
                 sender_id: senderId,
-                content: newMessage.content,
-                media_url: newMessage.media_url,
-                media_type: newMessage.media_type,
-                message_type: newMessage.message_type,
-                reply_to_id: newMessage.reply_to_id ? newMessage.reply_to_id.toString() : undefined,
-                is_deleted: newMessage.is_deleted,
-                created_at: newMessage.created_at,
-                updated_at: newMessage.updated_at,
-                sender: sender ? {
+                content: message.content,
+                media_url: message.media_url,
+                media_type: message.media_type,
+                message_type: message.message_type,
+                reply_to_id: message.reply_to_id ? message.reply_to_id.toString() : undefined,
+                is_deleted: message.is_deleted,
+                created_at: message.created_at,
+                updated_at: message.updated_at,
+                sender: sender ? (0, anonymous_utils_1.maskAnonymousUser)({
                     id: sender._id.toString(),
                     username: sender.username,
                     full_name: sender.full_name,
                     avatar_url: sender.avatar_url,
-                    is_verified: sender.is_verified
-                } : undefined,
+                    is_verified: sender.is_verified,
+                    is_anonymous: sender.isAnonymousMode
+                }) : undefined,
                 reply_to: replyToMessage,
                 is_read: false,
             };
@@ -282,86 +307,6 @@ class ChatService {
             const wsService = (0, websocket_1.getWebSocketService)();
             wsService.sendMessageToConversation(conversationId, messageWithDetails);
             return messageWithDetails;
-        });
-    }
-    // Get conversation messages
-    static getConversationMessages(conversationId_1, userId_1) {
-        return __awaiter(this, arguments, void 0, function* (conversationId, userId, page = 1, limit = 50) {
-            // Verify conversation and participation
-            const conversation = yield conversation_1.default.findOne({
-                _id: conversationId,
-                'participants': { $elemMatch: { user: userId, left_at: null } }
-            });
-            if (!conversation) {
-                throw utils_1.errors.forbidden("You are not a participant in this conversation or it doesn't exist");
-            }
-            const { page: validPage, limit: validLimit } = utils_1.pagination.validateParams(page.toString(), limit.toString());
-            const skip = (validPage - 1) * validLimit;
-            const query = {
-                conversation_id: conversationId,
-                is_deleted: false
-            };
-            const total = yield message_1.default.countDocuments(query);
-            // Get messages with sender info
-            const messagesDocs = yield message_1.default.find(query)
-                .sort({ created_at: -1 })
-                .skip(skip)
-                .limit(validLimit)
-                .populate('sender_id', 'username full_name avatar_url is_verified')
-                .populate({
-                path: 'reply_to_id',
-                populate: { path: 'sender_id', select: 'username full_name' }
-            });
-            const messages = yield Promise.all(messagesDocs.map((doc) => __awaiter(this, void 0, void 0, function* () {
-                const sender = doc.sender_id;
-                // Construct reply_to object
-                let replyTo = null;
-                if (doc.reply_to_id) {
-                    const rt = doc.reply_to_id;
-                    replyTo = {
-                        id: rt._id.toString(),
-                        content: rt.content,
-                        media_url: rt.media_url,
-                        message_type: rt.message_type,
-                        created_at: rt.created_at,
-                        sender: rt.sender_id ? {
-                            username: rt.sender_id.username,
-                            full_name: rt.sender_id.full_name
-                        } : null
-                    };
-                }
-                // Check is_read
-                const isRead = doc.read_by && doc.read_by.some(r => r.user_id.toString() === userId);
-                const message = {
-                    id: doc._id.toString(),
-                    conversation_id: doc.conversation_id.toString(),
-                    sender_id: doc.sender_id._id.toString(),
-                    content: doc.content,
-                    media_url: doc.media_url,
-                    media_type: doc.media_type,
-                    message_type: doc.message_type,
-                    reply_to_id: doc.reply_to_id ? doc.reply_to_id._id.toString() : undefined,
-                    is_deleted: doc.is_deleted,
-                    created_at: doc.created_at,
-                    updated_at: doc.updated_at,
-                    sender: {
-                        id: sender._id.toString(),
-                        username: sender.username,
-                        full_name: sender.full_name,
-                        avatar_url: sender.avatar_url,
-                        is_verified: sender.is_verified,
-                    },
-                    reply_to: replyTo,
-                    is_read: !!isRead
-                };
-                return message;
-            })));
-            const paginationMeta = utils_1.pagination.getMetadata(validPage, validLimit, total);
-            return {
-                success: true,
-                data: messages.reverse(), // Reverse to show oldest first
-                pagination: paginationMeta,
-            };
         });
     }
     // Mark messages as read
@@ -520,6 +465,37 @@ class ChatService {
                 participantId: userId,
                 timestamp: new Date(),
             });
+        });
+    }
+    // Get conversation messages
+    static getConversationMessages(conversationId_1, currentUserId_1) {
+        return __awaiter(this, arguments, void 0, function* (conversationId, currentUserId, page = 1, limit = 50, before) {
+            const { page: validPage, limit: validLimit } = utils_1.pagination.validateParams(page.toString(), limit.toString());
+            // Verify participation
+            const conversation = yield conversation_1.default.findById(conversationId);
+            if (!conversation)
+                throw utils_1.errors.notFound("Conversation not found");
+            const isParticipant = conversation.participants.some(p => p.user.toString() === currentUserId && !p.left_at);
+            if (!isParticipant)
+                throw utils_1.errors.forbidden("Access denied");
+            const query = { conversation_id: conversationId, is_deleted: false };
+            if (before) {
+                query.created_at = { $lt: new Date(before) };
+            }
+            const messages = yield message_1.default.find(query)
+                .sort({ created_at: -1 })
+                .skip((validPage - 1) * validLimit)
+                .limit(validLimit)
+                .populate('sender_id', 'username full_name avatar_url is_verified')
+                .populate('reply_to_id')
+                .lean();
+            return messages.map((msg) => {
+                // Mask sender if anonymous
+                if (msg.is_anonymous) {
+                    msg.sender_id = (0, anonymous_utils_1.maskAnonymousUser)(Object.assign(Object.assign({}, msg.sender_id), { is_anonymous: true }));
+                }
+                return msg;
+            }).reverse();
         });
     }
 }

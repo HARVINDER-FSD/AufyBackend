@@ -16,7 +16,7 @@ const express_1 = __importDefault(require("express"));
 const auth_1 = __importDefault(require("../middleware/auth"));
 const message_1 = __importDefault(require("../models/message"));
 const conversation_1 = __importDefault(require("../models/conversation"));
-const mongoose_1 = __importDefault(require("mongoose"));
+const chat_1 = require("../services/chat");
 const router = express_1.default.Router();
 // Get all conversations for current user
 router.get('/conversations', auth_1.default, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -61,18 +61,12 @@ router.get('/conversations/:conversationId/messages', auth_1.default, (req, res)
     try {
         const { conversationId } = req.params;
         const { limit = 50, before } = req.query;
-        const query = { conversation: conversationId };
-        if (before) {
-            query.createdAt = { $lt: new Date(before) };
-        }
-        const messages = yield message_1.default.find(query)
-            .populate('sender', 'username fullName profileImage')
-            .sort({ createdAt: -1 })
-            .limit(Number(limit));
-        res.json(messages.reverse());
+        const messages = yield chat_1.ChatService.getConversationMessages(conversationId, req.user._id, 1, // page (not strictly used if using before cursor, but kept for signature)
+        Number(limit), before);
+        res.json(messages);
     }
     catch (error) {
-        res.status(500).json({ message: 'Server error' });
+        res.status(error.statusCode || 500).json({ message: error.message || 'Server error' });
     }
 }));
 // Send a message
@@ -80,66 +74,16 @@ router.post('/conversations/:conversationId/messages', auth_1.default, (req, res
     try {
         const { conversationId } = req.params;
         const { content, image, recipientId } = req.body;
-        const message = yield message_1.default.create({
-            conversation_id: conversationId,
-            sender_id: req.user._id,
+        const message = yield chat_1.ChatService.sendMessage(req.user._id, conversationId, {
             content,
-            media_url: image,
+            media_url: image, // mapping image to media_url
             media_type: image ? 'image' : undefined,
             message_type: image ? 'image' : 'text'
         });
-        // Update conversation's last message
-        yield conversation_1.default.findByIdAndUpdate(conversationId, {
-            lastMessage: message._id,
-            updatedAt: new Date()
-        });
-        // Check if this should create a message request
-        if (recipientId) {
-            const db = mongoose_1.default.connection.db;
-            if (!db) {
-                console.error('Database connection not available');
-            }
-            else {
-                // Check mutual follow
-                const [userFollowsRecipient, recipientFollowsUser] = yield Promise.all([
-                    db.collection('follows').findOne({
-                        followerId: new mongoose_1.default.Types.ObjectId(req.user._id),
-                        followingId: new mongoose_1.default.Types.ObjectId(recipientId)
-                    }),
-                    db.collection('follows').findOne({
-                        followerId: new mongoose_1.default.Types.ObjectId(recipientId),
-                        followingId: new mongoose_1.default.Types.ObjectId(req.user._id)
-                    })
-                ]);
-                const isMutualFollow = !!userFollowsRecipient && !!recipientFollowsUser;
-                // If not mutual follow, create/update message request
-                if (!isMutualFollow) {
-                    yield db.collection('message_requests').updateOne({
-                        senderId: new mongoose_1.default.Types.ObjectId(req.user._id),
-                        recipientId: new mongoose_1.default.Types.ObjectId(recipientId)
-                    }, {
-                        $set: {
-                            conversationId,
-                            lastMessage: {
-                                content,
-                                image,
-                                timestamp: new Date()
-                            },
-                            updatedAt: new Date()
-                        },
-                        $setOnInsert: {
-                            status: 'pending',
-                            createdAt: new Date()
-                        }
-                    }, { upsert: true });
-                }
-            }
-        }
-        const populatedMessage = yield message.populate('sender', 'username fullName profileImage');
-        res.json(populatedMessage);
+        res.json(message);
     }
     catch (error) {
-        res.status(500).json({ message: 'Server error' });
+        res.status(error.statusCode || 500).json({ message: error.message || 'Server error' });
     }
 }));
 // Mark messages as read

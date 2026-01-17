@@ -14,6 +14,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const mongodb_1 = require("mongodb");
+const anonymous_utils_1 = require("../lib/anonymous-utils");
+const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const redis_1 = require("../lib/redis");
 const validate_1 = require("../middleware/validate");
@@ -124,6 +126,8 @@ router.get('/me', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, 
             badge_type: user.badge_type || user.verification_type || null,
             badgeType: user.badge_type || user.verification_type || null,
             posts_count: postsCount,
+            isAnonymousMode: user.isAnonymousMode || false,
+            anonymousPersona: user.anonymousPersona || null,
         };
         // Cache for 5 minutes (300 seconds)
         yield (0, redis_1.cacheSet)(cacheKey, response, 300);
@@ -1221,8 +1225,7 @@ router.delete('/delete', authenticate, (req, res) => __awaiter(void 0, void 0, v
 router.get('/blocked', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const userId = req.userId;
-        const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
-        const db = client.db();
+        const db = yield getDb();
         const blocks = yield db.collection('blocked_users').find({
             userId: new mongodb_1.ObjectId(userId)
         }).toArray();
@@ -1230,17 +1233,129 @@ router.get('/blocked', authenticate, (req, res) => __awaiter(void 0, void 0, voi
         const blockedUsers = yield db.collection('users').find({
             _id: { $in: blockedIds }
         }).toArray();
-        yield client.close();
-        return res.json(blockedUsers.map(user => ({
-            id: user._id.toString(),
-            username: user.username,
-            name: user.name || '',
-            avatar: user.avatar || '/placeholder-user.jpg'
-        })));
+        return res.json({
+            blocked: blockedUsers.map(user => ({
+                id: user._id.toString(),
+                username: user.username,
+                name: user.full_name || user.name || '',
+                avatar: user.avatar_url || user.avatar || '/placeholder-user.jpg',
+                verified: user.is_verified || user.verified || false
+            }))
+        });
     }
     catch (error) {
         console.error('Get blocked users error:', error);
         return res.status(500).json({ message: error.message || 'Failed to get blocked users' });
+    }
+}));
+// POST /api/users/:userId/block - Block/Unblock user
+router.post('/:userId/block', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const currentUserId = req.userId;
+        const { userId } = req.params;
+        if (currentUserId === userId) {
+            return res.status(400).json({ message: 'Cannot block yourself' });
+        }
+        const db = yield getDb();
+        const targetUserId = new mongodb_1.ObjectId(userId);
+        // Check if already blocked
+        const existingBlock = yield db.collection('blocked_users').findOne({
+            userId: new mongodb_1.ObjectId(currentUserId),
+            blockedUserId: targetUserId
+        });
+        if (existingBlock) {
+            // Unblock
+            yield db.collection('blocked_users').deleteOne({
+                userId: new mongodb_1.ObjectId(currentUserId),
+                blockedUserId: targetUserId
+            });
+            return res.json({ message: 'User unblocked', isBlocked: false });
+        }
+        else {
+            // Block
+            yield db.collection('blocked_users').insertOne({
+                userId: new mongodb_1.ObjectId(currentUserId),
+                blockedUserId: targetUserId,
+                createdAt: new Date()
+            });
+            // Also unfollow automatically
+            yield db.collection('follows').deleteMany({
+                $or: [
+                    { follower_id: new mongodb_1.ObjectId(currentUserId), following_id: targetUserId },
+                    { follower_id: targetUserId, following_id: new mongodb_1.ObjectId(currentUserId) }
+                ]
+            });
+            return res.json({ message: 'User blocked', isBlocked: true });
+        }
+    }
+    catch (error) {
+        console.error('Block user error:', error);
+        return res.status(500).json({ message: error.message || 'Failed to block user' });
+    }
+}));
+// GET /api/users/restricted - Get restricted users
+router.get('/restricted', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const userId = req.userId;
+        const db = yield getDb();
+        const restrictions = yield db.collection('restricted_users').find({
+            userId: new mongodb_1.ObjectId(userId)
+        }).toArray();
+        const restrictedIds = restrictions.map(r => r.restrictedUserId);
+        const restrictedUsers = yield db.collection('users').find({
+            _id: { $in: restrictedIds }
+        }).toArray();
+        return res.json({
+            restricted: restrictedUsers.map(user => ({
+                id: user._id.toString(),
+                username: user.username,
+                name: user.full_name || user.name || '',
+                avatar: user.avatar_url || user.avatar || '/placeholder-user.jpg',
+                verified: user.is_verified || user.verified || false
+            }))
+        });
+    }
+    catch (error) {
+        console.error('Get restricted users error:', error);
+        return res.status(500).json({ message: error.message || 'Failed to get restricted users' });
+    }
+}));
+// POST /api/users/:userId/restrict - Restrict/Unrestrict user
+router.post('/:userId/restrict', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const currentUserId = req.userId;
+        const { userId } = req.params;
+        if (currentUserId === userId) {
+            return res.status(400).json({ message: 'Cannot restrict yourself' });
+        }
+        const db = yield getDb();
+        const targetUserId = new mongodb_1.ObjectId(userId);
+        // Check if already restricted
+        const existingRestriction = yield db.collection('restricted_users').findOne({
+            userId: new mongodb_1.ObjectId(currentUserId),
+            restrictedUserId: targetUserId
+        });
+        if (existingRestriction) {
+            // Unrestrict
+            yield db.collection('restricted_users').deleteOne({
+                userId: new mongodb_1.ObjectId(currentUserId),
+                restrictedUserId: targetUserId
+            });
+            return res.json({ message: 'User unrestricted', isRestricted: false });
+        }
+        else {
+            // Restrict
+            yield db.collection('restricted_users').insertOne({
+                userId: new mongodb_1.ObjectId(currentUserId),
+                restrictedUserId: targetUserId,
+                createdAt: new Date()
+            });
+            return res.json({ message: 'User restricted', isRestricted: true });
+        }
+    }
+    catch (error) {
+        console.error('Restrict user error:', error);
+        return res.status(500).json({ message: error.message || 'Failed to restrict user' });
     }
 }));
 // GET /api/users/:userId/posts - Get user's posts (supports both userId and username)
@@ -1961,6 +2076,72 @@ router.delete('/fcm-token', authenticate, (req, res) => __awaiter(void 0, void 0
         });
     }
 }));
+// DELETE /api/users/delete - Delete account and all data
+router.delete('/delete', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const userId = req.userId;
+        const { password } = req.body;
+        const db = yield getDb();
+        // 1. Verify user exists and password is correct
+        const user = yield db.collection('users').findOne({ _id: new mongodb_1.ObjectId(userId) });
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+        const isPasswordCorrect = yield bcryptjs_1.default.compare(password, user.password);
+        if (!isPasswordCorrect) {
+            return res.status(401).json({ message: 'Incorrect password' });
+        }
+        console.log(`[DELETE ACCOUNT] Starting cleanup for user: ${userId} (${user.username})`);
+        const userObjectId = new mongodb_1.ObjectId(userId);
+        // 2. Delete all user-generated content and interactions
+        yield Promise.all([
+            // Content
+            db.collection('posts').deleteMany({ userId: userObjectId }),
+            db.collection('stories').deleteMany({ userId: userObjectId }),
+            db.collection('reels').deleteMany({ userId: userObjectId }),
+            // Interactions
+            db.collection('likes').deleteMany({ userId: userObjectId }),
+            db.collection('comments').deleteMany({ userId: userObjectId }),
+            db.collection('bookmarks').deleteMany({ userId: userObjectId }),
+            // Relationships
+            db.collection('follows').deleteMany({
+                $or: [{ follower_id: userObjectId }, { following_id: userObjectId }]
+            }),
+            db.collection('blocked_users').deleteMany({
+                $or: [{ userId: userObjectId }, { blockedUserId: userObjectId }]
+            }),
+            db.collection('restricted_users').deleteMany({
+                $or: [{ userId: userObjectId }, { restrictedUserId: userObjectId }]
+            }),
+            db.collection('muted_users').deleteMany({
+                $or: [{ userId: userObjectId }, { mutedUserId: userObjectId }]
+            }),
+            db.collection('close_friends').deleteMany({ user_id: userObjectId }),
+            // Notifications
+            db.collection('notifications').deleteMany({
+                $or: [{ userId: userObjectId }, { senderId: userObjectId }]
+            }),
+            // Activity & Analytics
+            db.collection('login_activity').deleteMany({ userId: userObjectId }),
+            db.collection('user_time_spent').deleteMany({ userId: userObjectId }),
+            // Messages (This is complex, usually we mark them as "Deleted User")
+            db.collection('messages').deleteMany({
+                $or: [{ senderId: userObjectId }, { receiverId: userObjectId }]
+            }),
+            db.collection('message_requests').deleteMany({
+                $or: [{ senderId: userObjectId }, { recipientId: userObjectId }]
+            })
+        ]);
+        // 3. Finally delete the user itself
+        yield db.collection('users').deleteOne({ _id: userObjectId });
+        console.log(`[DELETE ACCOUNT] Cleanup complete for user: ${userId}`);
+        return res.json({ message: 'Account and all data deleted successfully' });
+    }
+    catch (error) {
+        console.error('Delete account error:', error);
+        return res.status(500).json({ message: error.message || 'Failed to delete account' });
+    }
+}));
 exports.default = router;
 // POST /api/users/change-password - Change password
 router.post('/change-password', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -2122,6 +2303,12 @@ router.patch('/me', authenticate, (req, res) => __awaiter(void 0, void 0, void 0
             updateData.birthday = birthday;
         if (location !== undefined)
             updateData.location = location;
+        if (req.body.phone !== undefined)
+            updateData.phone = req.body.phone;
+        if (req.body.address !== undefined) {
+            updateData.address = req.body.address;
+            updateData.location = req.body.address; // Sync for compatibility
+        }
         yield db.collection('users').updateOne({ _id: new mongodb_1.ObjectId(userId) }, { $set: updateData });
         const updatedUser = yield db.collection('users').findOne({ _id: new mongodb_1.ObjectId(userId) }, { projection: { password: 0 } });
         return res.json({
@@ -2135,12 +2322,47 @@ router.patch('/me', authenticate, (req, res) => __awaiter(void 0, void 0, void 0
             birthday: (updatedUser === null || updatedUser === void 0 ? void 0 : updatedUser.birthday) || '',
             location: (updatedUser === null || updatedUser === void 0 ? void 0 : updatedUser.location) || '',
             avatar: (updatedUser === null || updatedUser === void 0 ? void 0 : updatedUser.avatar_url) || (updatedUser === null || updatedUser === void 0 ? void 0 : updatedUser.avatar) || '/placeholder-user.jpg',
-            verified: (updatedUser === null || updatedUser === void 0 ? void 0 : updatedUser.is_verified) || (updatedUser === null || updatedUser === void 0 ? void 0 : updatedUser.verified) || false
+            verified: (updatedUser === null || updatedUser === void 0 ? void 0 : updatedUser.is_verified) || (updatedUser === null || updatedUser === void 0 ? void 0 : updatedUser.verified) || false,
+            isAnonymousMode: (updatedUser === null || updatedUser === void 0 ? void 0 : updatedUser.isAnonymousMode) || false,
+            anonymousPersona: (updatedUser === null || updatedUser === void 0 ? void 0 : updatedUser.anonymousPersona) || null
         });
     }
     catch (error) {
         console.error('Update user error:', error);
         return res.status(500).json({ message: error.message || 'Failed to update user' });
+    }
+}));
+// POST /api/users/me/toggle-anonymous - Toggle anonymous mode
+router.post('/me/toggle-anonymous', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const userId = req.userId;
+        const db = yield getDb();
+        const user = yield db.collection('users').findOne({ _id: new mongodb_1.ObjectId(userId) });
+        if (!user)
+            return res.status(404).json({ message: 'User not found' });
+        const currentMode = user.isAnonymousMode || false;
+        const newMode = !currentMode;
+        const updateData = {
+            isAnonymousMode: newMode,
+            updatedAt: new Date()
+        };
+        // If turning ON and no persona exists, generate one
+        if (newMode && !user.anonymousPersona) {
+            updateData.anonymousPersona = (0, anonymous_utils_1.generateAnonymousPersona)();
+        }
+        yield db.collection('users').updateOne({ _id: new mongodb_1.ObjectId(userId) }, { $set: updateData });
+        // Invalidate profile cache
+        yield (0, redis_1.cacheInvalidate)(`userProfile:${userId}`);
+        return res.json({
+            success: true,
+            isAnonymousMode: newMode,
+            anonymousPersona: updateData.anonymousPersona || user.anonymousPersona,
+            message: newMode ? 'Anonymous mode enabled' : 'Anonymous mode disabled'
+        });
+    }
+    catch (error) {
+        console.error('Toggle anonymous error:', error);
+        return res.status(500).json({ message: error.message || 'Failed to toggle anonymous mode' });
     }
 }));
 // GET /api/users/:username/posts - Get user's posts (ONLY their own posts, not feed)
@@ -2195,15 +2417,17 @@ router.get('/:username/posts', authenticate, (req, res) => __awaiter(void 0, voi
         // Transform posts to include user info
         const transformedPosts = posts.map(post => ({
             id: post._id.toString(),
-            user: {
+            user: (0, anonymous_utils_1.maskAnonymousUser)({
                 id: targetUser._id.toString(),
                 username: targetUser.username,
                 avatar: targetUser.avatar_url || targetUser.avatar || '/placeholder-user.jpg',
                 avatar_url: targetUser.avatar_url || targetUser.avatar || '/placeholder-user.jpg',
                 verified: targetUser.is_verified || targetUser.verified || false,
                 is_verified: targetUser.is_verified || targetUser.verified || false,
-                badge_type: targetUser.badge_type || targetUser.verification_type || null
-            },
+                badge_type: targetUser.badge_type || targetUser.verification_type || null,
+                is_anonymous: post.is_anonymous
+            }),
+            is_anonymous: post.is_anonymous || false,
             content: post.content || '',
             caption: post.caption || post.content || '',
             media_type: post.media_type || 'text',

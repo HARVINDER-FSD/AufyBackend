@@ -84,6 +84,10 @@ const MessageSchema = new mongoose_1.Schema({
         type: Boolean,
         default: false,
     },
+    is_anonymous: {
+        type: Boolean,
+        default: false,
+    },
     deleted_at: {
         type: Date,
     },

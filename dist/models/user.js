@@ -240,6 +240,14 @@ const userSchema = new mongoose_1.default.Schema({
     updated_at: {
         type: Date,
         default: Date.now
+    },
+    isAnonymousMode: {
+        type: Boolean,
+        default: false
+    },
+    anonymousPersona: {
+        type: Object,
+        default: null
     }
 });
 // Pre-save middleware to hash password

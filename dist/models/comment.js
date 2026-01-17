@@ -38,6 +38,10 @@ const commentSchema = new mongoose_1.default.Schema({
         type: Boolean,
         default: false
     },
+    is_anonymous: {
+        type: Boolean,
+        default: false
+    },
     created_at: {
         type: Date,
         default: Date.now

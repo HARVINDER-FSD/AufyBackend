@@ -50,6 +50,7 @@ const database_1 = require("../lib/database");
 const story_1 = __importDefault(require("../models/story"));
 const auth_1 = require("../middleware/auth");
 const mongoose_1 = __importDefault(require("mongoose"));
+const content_filter_1 = require("../middleware/content-filter");
 // Type the Story model properly
 const Story = story_1.default;
 const router = (0, express_1.Router)();
@@ -127,7 +128,7 @@ router.get("/", auth_1.optionalAuth, (req, res) => __awaiter(void 0, void 0, voi
     }
 }));
 // Create story
-router.post("/", auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+router.post("/", auth_1.authenticateToken, content_filter_1.validateAgeAndContent, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         yield (0, database_1.connectToDatabase)();
         const { media_url, media_type, caption, texts, stickers, filter, music } = req.body;

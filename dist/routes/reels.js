@@ -13,6 +13,7 @@ const express_1 = require("express");
 const reel_1 = require("../services/reel");
 const comment_1 = require("../services/comment");
 const auth_1 = require("../middleware/auth");
+const content_filter_1 = require("../middleware/content-filter");
 const router = (0, express_1.Router)();
 // Get reels feed (discover)
 router.get("/", auth_1.optionalAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -61,6 +62,115 @@ router.get("/", auth_1.optionalAuth, (req, res) => __awaiter(void 0, void 0, voi
         });
     }
 }));
+// Get user's liked reels
+router.get("/liked", auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        let userId = req.userId;
+        const page = Number.parseInt(req.query.page) || 1;
+        const limit = Number.parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        const { getDatabase } = require('../lib/database');
+        const { ObjectId } = require('mongodb');
+        const db = yield getDatabase();
+        console.log('[Reels/Liked] Raw userId:', userId, 'Type:', typeof userId);
+        // Always convert to ObjectId - userId from JWT should be a valid 24-char hex string
+        let userObjectId;
+        try {
+            userObjectId = new ObjectId(userId);
+            console.log('[Reels/Liked] Converted to ObjectId:', userObjectId.toString());
+        }
+        catch (err) {
+            console.error('[Reels/Liked] Failed to convert userId to ObjectId:', err);
+            return res.json({
+                success: true,
+                reels: [],
+                pagination: { page, limit, total: 0, totalPages: 0, hasNext: false, hasPrev: false }
+            });
+        }
+        console.log('[Reels/Liked] Using userObjectId:', userObjectId.toString());
+        // Get total count of liked reels
+        const total = yield db.collection('reel_likes').countDocuments({
+            user_id: userObjectId
+        });
+        console.log('[Reels/Liked] Total liked reels:', total);
+        // Get liked reels with full details
+        const likedReels = yield db.collection('reel_likes')
+            .aggregate([
+            { $match: { user_id: userObjectId } },
+            { $sort: { created_at: -1 } },
+            { $skip: skip },
+            { $limit: limit },
+            {
+                $lookup: {
+                    from: 'reels',
+                    localField: 'reel_id',
+                    foreignField: '_id',
+                    as: 'reel'
+                }
+            },
+            { $unwind: { path: '$reel', preserveNullAndEmptyArrays: true } },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'reel.user_id',
+                    foreignField: '_id',
+                    as: 'author'
+                }
+            },
+            { $unwind: { path: '$author', preserveNullAndEmptyArrays: true } },
+            {
+                $project: {
+                    _id: '$reel._id',
+                    videoUrl: '$reel.video_url',
+                    thumbnail: '$reel.thumbnail_url',
+                    title: '$reel.title',
+                    description: '$reel.description',
+                    duration: '$reel.duration',
+                    createdAt: '$reel.created_at',
+                    likesCount: '$reel.likes_count',
+                    viewsCount: '$reel.views_count',
+                    commentsCount: '$reel.comments_count',
+                    sharesCount: '$reel.shares_count',
+                    author: {
+                        _id: '$author._id',
+                        username: '$author.username',
+                        avatar: '$author.avatar'
+                    }
+                }
+            },
+            { $match: { _id: { $ne: null } } }
+        ]).toArray();
+        console.log('[Reels/Liked] Found liked reels:', likedReels.length);
+        res.json({
+            success: true,
+            reels: likedReels,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit),
+                hasNext: page < Math.ceil(total / limit),
+                hasPrev: page > 1
+            }
+        });
+    }
+    catch (error) {
+        console.error('[Reels/Liked] Error:', error);
+        // Return empty results on error instead of 500
+        res.json({
+            success: true,
+            reels: [],
+            pagination: {
+                page: 1,
+                limit: 20,
+                total: 0,
+                totalPages: 0,
+                hasNext: false,
+                hasPrev: false
+            }
+        });
+    }
+}));
 // Get user's reels
 router.get("/user/:userId", auth_1.optionalAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b, _c;
@@ -80,7 +190,7 @@ router.get("/user/:userId", auth_1.optionalAuth, (req, res) => __awaiter(void 0,
     }
 }));
 // Create reel
-router.post("/", auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+router.post("/", auth_1.authenticateToken, content_filter_1.validateAgeAndContent, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { video_url, thumbnail_url, title, description, duration } = req.body;
         const reel = yield reel_1.ReelService.createReel(req.userId, {

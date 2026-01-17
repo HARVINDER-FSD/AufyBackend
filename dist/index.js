@@ -82,8 +82,11 @@ const reports_1 = __importDefault(require("./routes/reports"));
 const search_1 = __importDefault(require("./routes/search"));
 const analytics_1 = __importDefault(require("./routes/analytics"));
 const bookmarks_1 = __importDefault(require("./routes/bookmarks"));
+const comments_1 = __importDefault(require("./routes/comments"));
 const settings_1 = __importDefault(require("./routes/settings"));
 const push_1 = __importDefault(require("./routes/push"));
+const professional_1 = __importDefault(require("./routes/professional"));
+const verification_1 = __importDefault(require("./routes/verification"));
 const close_friends_1 = __importDefault(require("./routes/close-friends"));
 const highlights_1 = __importDefault(require("./routes/highlights"));
 const stories_close_friends_1 = __importDefault(require("./routes/stories-close-friends"));
@@ -230,6 +233,7 @@ app.use('/api/reports', reports_1.default);
 app.use('/api/search', search_1.default);
 app.use('/api/analytics', analytics_1.default);
 app.use('/api/bookmarks', bookmarks_1.default);
+app.use('/api/comments', comments_1.default);
 app.use('/api/settings', settings_1.default);
 app.use('/api/push', push_1.default);
 app.use('/api/close-friends', close_friends_1.default);
@@ -241,6 +245,8 @@ app.use('/api/secret-crush', secret_crush_1.default);
 app.use('/api/premium', premium_1.default);
 app.use('/api/demo', demo_1.default);
 app.use('/api/ai', ai_1.default);
+app.use('/api/professional', professional_1.default);
+app.use('/api/verification', verification_1.default);
 // Performance Metrics Endpoint (Admin only)
 app.get('/api/metrics', (_req, res) => {
     res.json({

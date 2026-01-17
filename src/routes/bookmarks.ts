@@ -9,17 +9,34 @@ import { getDatabase } from "../lib/database"
 // Get user bookmarks
 router.get("/", authenticateToken, async (req: any, res) => {
   try {
-    const userId = req.userId
+    const userId = req.userId as string
     const page = Number.parseInt(req.query.page as string) || 1
     const limit = Number.parseInt(req.query.limit as string) || 20
     const skip = (page - 1) * limit
 
-    const db = await getDatabase()
+    if (!ObjectId.isValid(userId)) {
+      console.error('[Bookmarks] Invalid userId for bookmarks:', userId)
+      return res.json({
+        success: true,
+        data: {
+          bookmarks: [],
+          pagination: {
+            page,
+            limit,
+            total: 0,
+            totalPages: 0,
+          },
+        },
+      })
+    }
 
-    const total = await db.collection('bookmarks').countDocuments({ userId: new ObjectId(userId) })
+    const db = await getDatabase()
+    const userObjectId = new ObjectId(userId)
+
+    const total = await db.collection('bookmarks').countDocuments({ userId: userObjectId })
     const bookmarks = await db.collection('bookmarks')
       .aggregate([
-        { $match: { userId: new ObjectId(userId) } },
+        { $match: { userId: userObjectId } },
         { $sort: { createdAt: -1 } },
         { $skip: skip },
         { $limit: limit },

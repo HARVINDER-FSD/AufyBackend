@@ -523,6 +523,97 @@ router.post("/:postId/share", authenticateToken, async (req, res) => {
   }
 })
 
+// Bookmark post (toggle behavior)
+router.post("/:postId/bookmark", authenticateToken, async (req, res) => {
+  try {
+    const { postId } = req.params
+    const userId = req.userId!
+
+    const db = await getDatabase()
+    const bookmarksCollection = db.collection('bookmarks')
+
+    // Check if already bookmarked
+    const existingBookmark = await bookmarksCollection.findOne({
+      user_id: new ObjectId(userId),
+      post_id: new ObjectId(postId)
+    })
+
+    let isBookmarked: boolean
+
+    if (existingBookmark) {
+      // Remove bookmark
+      await bookmarksCollection.deleteOne({
+        user_id: new ObjectId(userId),
+        post_id: new ObjectId(postId)
+      })
+      isBookmarked = false
+    } else {
+      // Add bookmark
+      await bookmarksCollection.insertOne({
+        user_id: new ObjectId(userId),
+        post_id: new ObjectId(postId),
+        created_at: new Date()
+      })
+      isBookmarked = true
+    }
+
+    // Get updated bookmark count
+    const bookmarkCount = await bookmarksCollection.countDocuments({ post_id: new ObjectId(postId) })
+
+    res.json({
+      success: true,
+      bookmarked: isBookmarked,
+      bookmarkCount,
+      message: isBookmarked ? "Post bookmarked successfully" : "Post removed from bookmarks"
+    })
+  } catch (error: any) {
+    console.error('Bookmark error:', error)
+    res.status(error.statusCode || 500).json({
+      success: false,
+      error: error.message,
+    })
+  }
+})
+
+// Check if post is bookmarked
+router.get("/:postId/bookmark", optionalAuth, async (req, res) => {
+  try {
+    const { postId } = req.params
+    const userId = req.userId
+
+    const db = await getDatabase()
+    const bookmarksCollection = db.collection('bookmarks')
+
+    let isBookmarked = false
+    let bookmarkCount = 0
+
+    if (userId) {
+      // Check if current user has bookmarked this post
+      const bookmark = await bookmarksCollection.findOne({
+        user_id: new ObjectId(userId),
+        post_id: new ObjectId(postId)
+      })
+      isBookmarked = !!bookmark
+    }
+
+    // Get total bookmark count for this post
+    bookmarkCount = await bookmarksCollection.countDocuments({ post_id: new ObjectId(postId) })
+
+    res.json({
+      success: true,
+      bookmarked: isBookmarked,
+      bookmarkCount
+    })
+  } catch (error: any) {
+    console.error('Check bookmark error:', error)
+    res.json({
+      success: true,
+      bookmarked: false,
+      bookmarkCount: 0
+    })
+  }
+})
+
 // Get post comments
 router.get("/:postId/comments", optionalAuth, async (req, res) => {
   try {

@@ -18,6 +18,7 @@ const note_1 = __importDefault(require("../models/note"));
 const close_friend_1 = __importDefault(require("../models/close-friend"));
 const crush_list_1 = __importDefault(require("../models/crush-list"));
 const mongoose_1 = __importDefault(require("mongoose"));
+const content_filter_1 = require("../middleware/content-filter");
 const router = (0, express_1.Router)();
 // Health check for notes endpoint
 router.get('/health', (_req, res) => {
@@ -130,7 +131,7 @@ router.get('/user/:userId', (req, res) => __awaiter(void 0, void 0, void 0, func
     }
 }));
 // Create new note
-router.post('/', auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+router.post('/', auth_1.authenticateToken, content_filter_1.validateAgeAndContent, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const userId = req.userId;
         const { content, note_type, photo_url, music_title, music_artist, music_preview_url, music_artwork_url, emoji, text_color, background_style, background_color, gradient_colors, emotion, visibility, group_id, favorite_user_id, hidden_from } = req.body;
@@ -204,7 +205,7 @@ router.post('/', auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 
     }
 }));
 // Update note
-router.put('/:noteId', auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+router.put('/:noteId', auth_1.authenticateToken, content_filter_1.validateAgeAndContent, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const userId = req.userId;
         const { noteId } = req.params;

@@ -13,6 +13,7 @@ exports.PostService = void 0;
 const database_1 = require("../lib/database");
 const utils_1 = require("../lib/utils");
 const mongodb_1 = require("mongodb");
+const anonymous_utils_1 = require("../lib/anonymous-utils");
 class PostService {
     // Create new post
     static createPost(userId, postData) {
@@ -31,6 +32,10 @@ class PostService {
             const db = yield (0, database_1.getDatabase)();
             const postsCollection = db.collection('posts');
             const usersCollection = db.collection('users');
+            const user = yield usersCollection.findOne({ _id: new mongodb_1.ObjectId(userId) });
+            if (!user) {
+                throw utils_1.errors.notFound("User not found");
+            }
             const postDoc = {
                 user_id: new mongodb_1.ObjectId(userId),
                 content: content || null,
@@ -38,22 +43,11 @@ class PostService {
                 media_type: media_type || 'text',
                 location: location || null,
                 is_archived: false,
+                is_anonymous: user.isAnonymousMode === true,
                 created_at: new Date(),
                 updated_at: new Date()
             };
             const result = yield postsCollection.insertOne(postDoc);
-            // Get user data for the post
-            console.log('Looking up user with ID:', userId);
-            console.log('ObjectId:', new mongodb_1.ObjectId(userId));
-            const user = yield usersCollection.findOne({ _id: new mongodb_1.ObjectId(userId) });
-            console.log('User found:', !!user);
-            if (!user) {
-                console.error('User not found! Searched for ID:', userId);
-                // Try to find any user to debug
-                const anyUser = yield usersCollection.findOne({});
-                console.log('Sample user in DB:', anyUser ? { id: anyUser._id, username: anyUser.username } : 'No users found');
-                throw utils_1.errors.notFound("User not found");
-            }
             const postWithUser = {
                 id: result.insertedId.toString(),
                 user_id: userId,
@@ -64,14 +58,7 @@ class PostService {
                 is_archived: postDoc.is_archived,
                 created_at: postDoc.created_at,
                 updated_at: postDoc.updated_at,
-                user: {
-                    id: user._id.toString(),
-                    username: user.username,
-                    full_name: user.full_name,
-                    avatar_url: user.avatar_url,
-                    is_verified: user.is_verified || false,
-                    badge_type: user.badge_type || user.verification_type || null,
-                },
+                user: (0, anonymous_utils_1.maskAnonymousUser)(Object.assign(Object.assign({}, user), { is_anonymous: postDoc.is_anonymous })),
                 likes_count: 0,
                 comments_count: 0,
                 is_liked: false,
@@ -124,14 +111,7 @@ class PostService {
                 is_archived: post.is_archived,
                 created_at: post.created_at,
                 updated_at: post.updated_at,
-                user: {
-                    id: user._id.toString(),
-                    username: user.username,
-                    full_name: user.full_name,
-                    avatar_url: user.avatar_url,
-                    is_verified: user.is_verified || false,
-                    badge_type: user.badge_type || user.verification_type || null,
-                },
+                user: (0, anonymous_utils_1.maskAnonymousUser)(Object.assign(Object.assign({}, user), { is_anonymous: post.is_anonymous })),
                 likes_count: likesCount,
                 comments_count: commentsCount,
                 is_liked
@@ -192,14 +172,7 @@ class PostService {
                     is_archived: post.is_archived,
                     created_at: post.created_at,
                     updated_at: post.updated_at,
-                    user: {
-                        id: post.user._id.toString(),
-                        username: post.user.username,
-                        full_name: post.user.full_name,
-                        avatar_url: post.user.avatar_url,
-                        is_verified: post.user.is_verified || false,
-                        badge_type: post.user.badge_type || post.user.verification_type || null,
-                    },
+                    user: (0, anonymous_utils_1.maskAnonymousUser)(Object.assign(Object.assign({}, post.user), { is_anonymous: post.is_anonymous })),
                     likes_count: likesCount,
                     comments_count: commentsCount,
                     is_liked
@@ -307,14 +280,7 @@ class PostService {
                     is_archived: post.is_archived,
                     created_at: post.created_at,
                     updated_at: post.updated_at,
-                    user: {
-                        id: post.user._id.toString(),
-                        username: post.user.username,
-                        full_name: post.user.full_name,
-                        avatar_url: post.user.avatar_url,
-                        is_verified: post.user.is_verified || false,
-                        badge_type: post.user.badge_type || post.user.verification_type || null,
-                    },
+                    user: (0, anonymous_utils_1.maskAnonymousUser)(Object.assign(Object.assign({}, post.user), { is_anonymous: post.is_anonymous })),
                     likes_count: likesCount,
                     comments_count: commentsCount,
                     liked: !!like, // Changed from is_liked to liked

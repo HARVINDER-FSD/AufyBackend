@@ -46,6 +46,27 @@ router.get("/", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
             });
         }
         console.log('[Search] Query:', q);
+        // Track search in history if user is logged in
+        if (req.headers.authorization) {
+            try {
+                const token = req.headers.authorization.split(' ')[1];
+                const decoded = jsonwebtoken_1.default.verify(token, JWT_SECRET);
+                const userId = decoded.userId;
+                const { getDatabase } = require('../lib/database');
+                const { ObjectId } = require('mongodb');
+                const db = yield getDatabase();
+                // Add to search history
+                yield db.collection('search_history').insertOne({
+                    user_id: new ObjectId(userId),
+                    query: q,
+                    type: 'search',
+                    created_at: new Date()
+                });
+            }
+            catch (err) {
+                console.log('[Search] Could not track search history:', err);
+            }
+        }
         // Try cache first
         const cacheKey = `search:${q}:${limit}`;
         const cached = yield (0, redis_1.cacheGet)(cacheKey);
@@ -79,12 +100,12 @@ router.get("/", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
             const userIds = users.map((u) => new mongodb_1.ObjectId(u._id));
             console.log('[Search] User IDs to check:', userIds.map(id => id.toString()));
             const follows = yield db.collection('follows').find({
-                follower_id: new mongodb_1.ObjectId(currentUserId), // Fixed: use follower_id instead of followerId
-                following_id: { $in: userIds } // Fixed: use following_id instead of followingId
+                follower_id: new mongodb_1.ObjectId(currentUserId),
+                following_id: { $in: userIds }
             }).toArray();
             console.log('[Search] Found follows:', follows.length);
             follows.forEach((follow) => {
-                const followingIdStr = follow.following_id.toString(); // Fixed: use following_id
+                const followingIdStr = follow.following_id.toString();
                 followStatusMap[followingIdStr] = true;
                 console.log('[Search] User', followingIdStr, 'is followed');
             });
@@ -259,6 +280,181 @@ router.get("/trending", (req, res) => __awaiter(void 0, void 0, void 0, function
         res.status(500).json({
             success: false,
             error: "Internal server error"
+        });
+    }
+}));
+// Get search history
+router.get("/history", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    try {
+        const token = (_a = req.headers.authorization) === null || _a === void 0 ? void 0 : _a.split(' ')[1];
+        if (!token) {
+            return res.status(401).json({
+                success: false,
+                error: 'Unauthorized'
+            });
+        }
+        const decoded = jsonwebtoken_1.default.verify(token, JWT_SECRET);
+        const userId = decoded.userId;
+        const page = Number.parseInt(req.query.page) || 1;
+        const limit = Number.parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        const { getDatabase } = require('../lib/database');
+        const { ObjectId } = require('mongodb');
+        const db = yield getDatabase();
+        console.log('[SearchHistory] Raw userId:', userId, 'Type:', typeof userId);
+        // Always convert to ObjectId - userId from JWT should be a valid 24-char hex string
+        let userObjectId;
+        try {
+            userObjectId = new ObjectId(userId);
+            console.log('[SearchHistory] Converted to ObjectId:', userObjectId.toString());
+        }
+        catch (err) {
+            console.error('[SearchHistory] Failed to convert userId to ObjectId:', err);
+            return res.json({
+                success: true,
+                history: [],
+                pagination: { page, limit, total: 0, totalPages: 0 }
+            });
+        }
+        // Get total count
+        const total = yield db.collection('search_history').countDocuments({
+            user_id: userObjectId
+        });
+        console.log('[SearchHistory] Total search history items:', total);
+        // Get search history
+        const history = yield db.collection('search_history')
+            .find({ user_id: userObjectId })
+            .sort({ created_at: -1 })
+            .skip(skip)
+            .limit(limit)
+            .toArray();
+        console.log('[SearchHistory] Found items:', history.length);
+        res.json({
+            success: true,
+            history: history.map((item) => ({
+                _id: item._id.toString(),
+                query: item.query,
+                type: item.type || 'search',
+                createdAt: item.created_at
+            })),
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit)
+            }
+        });
+    }
+    catch (error) {
+        console.error('[SearchHistory] Error:', error);
+        res.json({
+            success: true,
+            history: [],
+            pagination: { page: 1, limit: 20, total: 0, totalPages: 0 }
+        });
+    }
+}));
+// Delete search history item
+router.delete("/history/:itemId", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    try {
+        const token = (_a = req.headers.authorization) === null || _a === void 0 ? void 0 : _a.split(' ')[1];
+        if (!token) {
+            return res.status(401).json({
+                success: false,
+                error: 'Unauthorized'
+            });
+        }
+        const decoded = jsonwebtoken_1.default.verify(token, JWT_SECRET);
+        const userId = decoded.userId;
+        const { itemId } = req.params;
+        const { getDatabase } = require('../lib/database');
+        const { ObjectId } = require('mongodb');
+        const db = yield getDatabase();
+        console.log('[SearchHistory/Delete] Raw userId:', userId, 'itemId:', itemId);
+        // Always convert to ObjectId
+        let userObjectId;
+        try {
+            userObjectId = new ObjectId(userId);
+        }
+        catch (err) {
+            console.error('[SearchHistory/Delete] Failed to convert userId:', err);
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid user ID'
+            });
+        }
+        // Delete the search history item
+        const result = yield db.collection('search_history').deleteOne({
+            _id: new ObjectId(itemId),
+            user_id: userObjectId
+        });
+        if (result.deletedCount === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'Search history item not found'
+            });
+        }
+        console.log('[SearchHistory/Delete] Deleted successfully');
+        res.json({
+            success: true,
+            message: 'Search history item deleted'
+        });
+    }
+    catch (error) {
+        console.error('[SearchHistory/Delete] Error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+}));
+// Clear all search history
+router.delete("/history", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    try {
+        const token = (_a = req.headers.authorization) === null || _a === void 0 ? void 0 : _a.split(' ')[1];
+        if (!token) {
+            return res.status(401).json({
+                success: false,
+                error: 'Unauthorized'
+            });
+        }
+        const decoded = jsonwebtoken_1.default.verify(token, JWT_SECRET);
+        const userId = decoded.userId;
+        const { getDatabase } = require('../lib/database');
+        const { ObjectId } = require('mongodb');
+        const db = yield getDatabase();
+        console.log('[SearchHistory/Clear] Raw userId:', userId);
+        // Always convert to ObjectId
+        let userObjectId;
+        try {
+            userObjectId = new ObjectId(userId);
+        }
+        catch (err) {
+            console.error('[SearchHistory/Clear] Failed to convert userId:', err);
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid user ID'
+            });
+        }
+        // Delete all search history for user
+        const result = yield db.collection('search_history').deleteMany({
+            user_id: userObjectId
+        });
+        console.log('[SearchHistory/Clear] Deleted', result.deletedCount, 'items');
+        res.json({
+            success: true,
+            message: 'All search history cleared',
+            deletedCount: result.deletedCount
+        });
+    }
+    catch (error) {
+        console.error('[SearchHistory/Clear] Error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
         });
     }
 }));

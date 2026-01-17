@@ -102,29 +102,36 @@ router.get("/liked", authenticateToken, async (req: any, res: Response) => {
 
     console.log('[Reels/Liked] Using userObjectId:', userObjectId.toString())
 
-    // Get total count of liked reels
-    const total = await db.collection('reel_likes').countDocuments({
-      user_id: userObjectId
-    })
+    const likesCollection = db.collection('likes')
+
+    const basePipeline = [
+      { $match: { user_id: userObjectId } },
+      {
+        $lookup: {
+          from: 'reels',
+          localField: 'post_id',
+          foreignField: '_id',
+          as: 'reel'
+        }
+      },
+      { $unwind: { path: '$reel', preserveNullAndEmptyArrays: true } },
+      { $match: { 'reel._id': { $ne: null } } }
+    ]
+
+    const totalResult = await likesCollection
+      .aggregate([...basePipeline, { $count: 'count' }])
+      .toArray()
+
+    const total = totalResult[0]?.count || 0
 
     console.log('[Reels/Liked] Total liked reels:', total)
 
-    // Get liked reels with full details
-    const likedReels = await db.collection('reel_likes')
+    const likedReels = await likesCollection
       .aggregate([
-        { $match: { user_id: userObjectId } },
+        ...basePipeline,
         { $sort: { created_at: -1 } },
         { $skip: skip },
         { $limit: limit },
-        {
-          $lookup: {
-            from: 'reels',
-            localField: 'reel_id',
-            foreignField: '_id',
-            as: 'reel'
-          }
-        },
-        { $unwind: { path: '$reel', preserveNullAndEmptyArrays: true } },
         {
           $lookup: {
             from: 'users',
@@ -153,9 +160,9 @@ router.get("/liked", authenticateToken, async (req: any, res: Response) => {
               avatar: '$author.avatar'
             }
           }
-        },
-        { $match: { _id: { $ne: null } } }
-      ]).toArray()
+        }
+      ])
+      .toArray()
 
     console.log('[Reels/Liked] Found liked reels:', likedReels.length)
 

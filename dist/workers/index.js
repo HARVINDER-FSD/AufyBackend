@@ -54,12 +54,40 @@ const expo_server_sdk_1 = require("expo-server-sdk");
 const database_1 = require("../lib/database");
 const mongodb_1 = require("mongodb");
 const expo = new expo_server_sdk_1.Expo();
-const connection = new ioredis_1.default(process.env.REDIS_URL || 'redis://localhost:6379', {
-    maxRetriesPerRequest: null,
-    tls: ((_a = process.env.REDIS_URL) === null || _a === void 0 ? void 0 : _a.startsWith('rediss://')) ? {} : undefined,
-});
+let connection = null;
+let workersInitialized = false;
+try {
+    connection = new ioredis_1.default(process.env.REDIS_URL || 'redis://localhost:6379', {
+        maxRetriesPerRequest: null,
+        connectTimeout: 5000,
+        retryStrategy: (times) => {
+            if (times > 3) {
+                logger_1.logger.warn('⚠️  Workers Redis connection failed, workers disabled');
+                return null;
+            }
+            const delay = Math.min(times * 50, 2000);
+            return delay;
+        },
+        tls: ((_a = process.env.REDIS_URL) === null || _a === void 0 ? void 0 : _a.startsWith('rediss://')) ? {} : undefined,
+        lazyConnect: true,
+    });
+    connection.on('connect', () => {
+        logger_1.logger.info('✅ Workers Redis connected');
+        workersInitialized = true;
+    });
+    connection.on('error', (err) => {
+        logger_1.logger.warn('⚠️  Workers Redis error:', err.message);
+    });
+    connection.connect().catch(() => {
+        logger_1.logger.warn('⚠️  Workers Redis unavailable');
+    });
+}
+catch (error) {
+    logger_1.logger.warn('⚠️  Failed to initialize Workers Redis:', error);
+    connection = null;
+}
 // 1. Notification Worker
-const notificationWorker = new bullmq_1.Worker(queue_1.QUEUE_NAMES.NOTIFICATIONS, (job) => __awaiter(void 0, void 0, void 0, function* () {
+const notificationWorker = connection ? new bullmq_1.Worker(queue_1.QUEUE_NAMES.NOTIFICATIONS, (job) => __awaiter(void 0, void 0, void 0, function* () {
     const { recipientId, title, body, data } = job.data;
     const db = yield (0, database_1.getDatabase)();
     const user = yield db.collection('users').findOne({ _id: new mongodb_1.ObjectId(recipientId) });
@@ -88,7 +116,7 @@ const notificationWorker = new bullmq_1.Worker(queue_1.QUEUE_NAMES.NOTIFICATIONS
     catch (error) {
         logger_1.logger.error(`Error sending push notification to ${recipientId}:`, error);
     }
-}), { connection });
+}), { connection }) : null;
 // 2. Feed Update Worker (Invalidates cache for followers)
 const feedUpdateWorker = new bullmq_1.Worker(queue_1.QUEUE_NAMES.FEED_UPDATES, (job) => __awaiter(void 0, void 0, void 0, function* () {
     const { userId, type } = job.data;

@@ -23,6 +23,7 @@ const validate_1 = require("../middleware/validate");
 const pagination_1 = require("../middleware/pagination");
 const queue_1 = require("../lib/queue");
 const joi_1 = __importDefault(require("joi"));
+const content_filter_1 = require("../middleware/content-filter");
 const router = (0, express_1.Router)();
 // Schemas
 const createPostSchema = joi_1.default.object({
@@ -76,7 +77,7 @@ router.get("/feed", auth_1.authenticateToken, pagination_1.paginate, (req, res) 
     }
 }));
 // Create post
-router.post("/", auth_1.authenticateToken, (0, validate_1.validateBody)(createPostSchema), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+router.post("/", auth_1.authenticateToken, content_filter_1.validateAgeAndContent, (0, validate_1.validateBody)(createPostSchema), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { content, media_urls, media_type, location } = req.body;
         // Use req.userId instead of req.user.userId
@@ -126,7 +127,7 @@ router.get("/:postId", auth_1.optionalAuth, (req, res) => __awaiter(void 0, void
     }
 }));
 // Update post
-router.put("/:postId", auth_1.authenticateToken, (0, validate_1.validateBody)(updatePostSchema), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+router.put("/:postId", auth_1.authenticateToken, content_filter_1.validateAgeAndContent, (0, validate_1.validateBody)(updatePostSchema), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { postId } = req.params;
         const updates = req.body;
@@ -210,11 +211,15 @@ router.post("/:postId/like", auth_1.authenticateToken, (0, validate_1.validateBo
             userReaction = reaction;
         }
         else {
+            // Check if user is anonymous
+            const user = yield db.collection('users').findOne({ _id: new mongodb_1.ObjectId(userId) });
+            const isAnonymous = (user === null || user === void 0 ? void 0 : user.isAnonymousMode) === true;
             // Like - insert new like with reaction
             yield likesCollection.insertOne({
                 user_id: new mongodb_1.ObjectId(userId),
                 post_id: new mongodb_1.ObjectId(postId),
-                reaction: reaction || '❤️', // Default to heart if no reaction specified
+                reaction: reaction || '❤️',
+                is_anonymous: isAnonymous,
                 created_at: new Date()
             });
             isLiked = true;
@@ -228,7 +233,7 @@ router.post("/:postId/like", auth_1.authenticateToken, (0, validate_1.validateBo
                     yield (0, queue_1.addJob)(queue_1.QUEUE_NAMES.NOTIFICATIONS, 'like-notification', {
                         recipientId: post.user_id.toString(),
                         title: 'New Like! ❤️',
-                        body: `${(sender === null || sender === void 0 ? void 0 : sender.username) || 'Someone'} liked your post.`,
+                        body: isAnonymous ? 'A Ghost User 👻 liked your post.' : `${(sender === null || sender === void 0 ? void 0 : sender.username) || 'Someone'} liked your post.`,
                         data: { postId, type: 'like' }
                     });
                 }
@@ -253,9 +258,9 @@ router.post("/:postId/like", auth_1.authenticateToken, (0, validate_1.validateBo
                 }
             },
             { $unwind: '$user' },
-            { $project: { 'user.username': 1 } }
+            { $project: { 'user.username': 1, 'is_anonymous': 1 } }
         ]).toArray();
-        const likedBy = recentLikes.map((like) => like.user.username);
+        const likedBy = recentLikes.map((like) => like.is_anonymous ? 'Ghost User' : like.user.username);
         // Get reaction summary (count of each reaction type)
         const reactionSummary = yield likesCollection.aggregate([
             { $match: { post_id: new mongodb_1.ObjectId(postId) } },
@@ -305,6 +310,116 @@ router.delete("/:postId/like", auth_1.authenticateToken, (req, res) => __awaiter
         res.status(error.statusCode || 500).json({
             success: false,
             error: error.message,
+        });
+    }
+}));
+// Get user's liked posts
+router.get("/liked", auth_1.authenticateToken, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        let userId = req.userId;
+        const page = Number.parseInt(req.query.page) || 1;
+        const limit = Number.parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        const db = yield (0, database_1.getDatabase)();
+        console.log('[Posts/Liked] Raw userId:', userId, 'Type:', typeof userId);
+        // Always convert to ObjectId - userId from JWT should be a valid 24-char hex string
+        let userObjectId;
+        try {
+            userObjectId = new mongodb_1.ObjectId(userId);
+            console.log('[Posts/Liked] Converted to ObjectId:', userObjectId.toString());
+        }
+        catch (err) {
+            console.error('[Posts/Liked] Failed to convert userId to ObjectId:', err);
+            return res.json({
+                success: true,
+                posts: [],
+                pagination: {
+                    page,
+                    limit,
+                    total: 0,
+                    totalPages: 0,
+                    hasNext: false,
+                    hasPrev: false
+                }
+            });
+        }
+        // Get total count of liked posts
+        const total = yield db.collection('likes').countDocuments({
+            user_id: userObjectId
+        });
+        console.log('[Posts/Liked] Total liked posts:', total);
+        // Get liked posts with full details
+        const likedPosts = yield db.collection('likes')
+            .aggregate([
+            { $match: { user_id: userObjectId } },
+            { $sort: { created_at: -1 } },
+            { $skip: skip },
+            { $limit: limit },
+            {
+                $lookup: {
+                    from: 'posts',
+                    localField: 'post_id',
+                    foreignField: '_id',
+                    as: 'post'
+                }
+            },
+            { $unwind: { path: '$post', preserveNullAndEmptyArrays: true } },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'post.user_id',
+                    foreignField: '_id',
+                    as: 'author'
+                }
+            },
+            { $unwind: { path: '$author', preserveNullAndEmptyArrays: true } },
+            {
+                $project: {
+                    _id: '$post._id',
+                    content: '$post.content',
+                    media_urls: '$post.media_urls',
+                    media_type: '$post.media_type',
+                    createdAt: '$post.created_at',
+                    likesCount: '$post.likes_count',
+                    commentsCount: '$post.comments_count',
+                    sharesCount: '$post.shares_count',
+                    author: {
+                        _id: '$author._id',
+                        username: '$author.username',
+                        avatar: '$author.avatar'
+                    }
+                }
+            },
+            { $match: { _id: { $ne: null } } }
+        ]).toArray();
+        console.log('[Posts/Liked] Found liked posts:', likedPosts.length);
+        res.json({
+            success: true,
+            posts: likedPosts,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit),
+                hasNext: page < Math.ceil(total / limit),
+                hasPrev: page > 1
+            }
+        });
+    }
+    catch (error) {
+        console.error('[Posts/Liked] Error:', error);
+        // Return empty results on error instead of 500
+        res.json({
+            success: true,
+            posts: [],
+            pagination: {
+                page: 1,
+                limit: 20,
+                total: 0,
+                totalPages: 0,
+                hasNext: false,
+                hasPrev: false
+            }
         });
     }
 }));
@@ -391,7 +506,7 @@ router.get("/:postId/comments", auth_1.optionalAuth, (req, res) => __awaiter(voi
     }
 }));
 // Create comment
-router.post("/:postId/comments", auth_1.authenticateToken, (0, validate_1.validateBody)(createCommentSchema), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+router.post("/:postId/comments", auth_1.authenticateToken, content_filter_1.validateAgeAndContent, (0, validate_1.validateBody)(createCommentSchema), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { postId } = req.params;
         const { content, parent_comment_id } = req.body;

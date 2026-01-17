@@ -15,6 +15,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.CommentService = void 0;
 const database_1 = require("../lib/database");
 const utils_1 = require("../lib/utils");
+const anonymous_utils_1 = require("../lib/anonymous-utils");
 const config_1 = require("../lib/config");
 const comment_1 = __importDefault(require("../models/comment"));
 const post_1 = __importDefault(require("../models/post"));
@@ -52,6 +53,15 @@ class CommentService {
                         throw new Error("Parent comment not found");
                     }
                 }
+                // Get user data
+                console.log('[COMMENT CREATE] Fetching user data...');
+                const user = yield User.findById(userId)
+                    .select('username full_name avatar_url is_verified badge_type isAnonymousMode anonymousPersona')
+                    .lean()
+                    .exec();
+                if (!user) {
+                    throw utils_1.errors.notFound('User not found');
+                }
                 // Create comment
                 console.log('[COMMENT CREATE] Creating comment...');
                 const newComment = yield Comment.create({
@@ -60,19 +70,11 @@ class CommentService {
                     parent_comment_id: parent_comment_id || null,
                     content: content.trim(),
                     is_deleted: false,
+                    is_anonymous: user.isAnonymousMode === true,
                     likes_count: 0,
                     replies_count: 0,
                 });
                 console.log('[COMMENT CREATE] Comment created:', newComment._id);
-                // Get user data
-                console.log('[COMMENT CREATE] Fetching user data...');
-                const user = yield User.findById(userId)
-                    .select('username full_name avatar_url is_verified badge_type')
-                    .lean()
-                    .exec();
-                if (!user) {
-                    console.warn('[COMMENT CREATE] User not found, using minimal data');
-                }
                 const comment = {
                     id: newComment._id.toString(),
                     _id: newComment._id,
@@ -85,7 +87,7 @@ class CommentService {
                     is_deleted: newComment.is_deleted,
                     created_at: newComment.created_at,
                     updated_at: newComment.updated_at,
-                    user: user || { username: 'Unknown', full_name: 'Unknown User' }
+                    user: (0, anonymous_utils_1.maskAnonymousUser)(Object.assign(Object.assign({}, user), { is_anonymous: newComment.is_anonymous }))
                 };
                 console.log('[COMMENT CREATE] Success!');
                 return comment;
@@ -142,9 +144,9 @@ class CommentService {
                     .exec();
                 const repliesWithUsers = replies.map((reply) => {
                     const replyUser = replyUsers.find((u) => u._id.toString() === reply.user_id.toString());
-                    return Object.assign(Object.assign({}, reply), { user: replyUser || null, username: (replyUser === null || replyUser === void 0 ? void 0 : replyUser.username) || 'Unknown', user_avatar: (replyUser === null || replyUser === void 0 ? void 0 : replyUser.avatar_url) || null });
+                    return Object.assign(Object.assign({}, reply), { user: (0, anonymous_utils_1.maskAnonymousUser)(Object.assign(Object.assign({}, replyUser), { is_anonymous: reply.is_anonymous })) });
                 });
-                return Object.assign(Object.assign({}, comment), { user: user || null, username: (user === null || user === void 0 ? void 0 : user.username) || 'Unknown', user_avatar: (user === null || user === void 0 ? void 0 : user.avatar_url) || null, replies: repliesWithUsers });
+                return Object.assign(Object.assign({}, comment), { user: (0, anonymous_utils_1.maskAnonymousUser)(Object.assign(Object.assign({}, user), { is_anonymous: comment.is_anonymous })), replies: repliesWithUsers });
             })));
             const totalPages = Math.ceil(total / validLimit);
             return {
@@ -186,7 +188,7 @@ class CommentService {
                 .exec();
             const repliesWithUsers = replies.map((reply) => {
                 const user = users.find((u) => u._id.toString() === reply.user_id.toString());
-                return Object.assign(Object.assign({}, reply), { user: user });
+                return Object.assign(Object.assign({}, reply), { user: (0, anonymous_utils_1.maskAnonymousUser)(Object.assign(Object.assign({}, user), { is_anonymous: reply.is_anonymous })) });
             });
             const paginationMeta = utils_1.pagination.getMetadata(validPage, validLimit, total);
             return {
@@ -221,7 +223,7 @@ class CommentService {
                 .select('id username full_name avatar_url is_verified')
                 .lean()
                 .exec();
-            const updatedComment = Object.assign(Object.assign({}, comment), { user: user });
+            const updatedComment = Object.assign(Object.assign({}, comment), { user: (0, anonymous_utils_1.maskAnonymousUser)(Object.assign(Object.assign({}, user), { is_anonymous: comment.is_anonymous })) });
             // Clear comments cache
             yield database_1.cache.del(utils_1.cacheKeys.postComments(comment.post_id));
             return updatedComment;
@@ -284,7 +286,7 @@ class CommentService {
             if (!user) {
                 throw utils_1.errors.notFound("Comment user not found");
             }
-            return Object.assign(Object.assign({}, comment), { user: user });
+            return Object.assign(Object.assign({}, comment), { user: (0, anonymous_utils_1.maskAnonymousUser)(Object.assign(Object.assign({}, user), { is_anonymous: comment.is_anonymous })) });
         });
     }
 }
