@@ -168,26 +168,36 @@ router.post("/:postId/like", auth_1.authenticateToken, (0, validate_1.validateBo
         const { postId } = req.params;
         const { reaction } = req.body; // Get reaction from request body
         const userId = req.userId;
+        let userObjectId;
+        let postObjectId;
+        try {
+            userObjectId = new mongodb_1.ObjectId(userId);
+            postObjectId = new mongodb_1.ObjectId(postId);
+        }
+        catch (err) {
+            console.error('[LIKE] ObjectId conversion error:', err);
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid ID format'
+            });
+        }
         const db = yield (0, database_1.getDatabase)();
         const likesCollection = db.collection('likes');
-        // Check if already liked
         const existingLike = yield likesCollection.findOne({
-            user_id: new mongodb_1.ObjectId(userId),
-            post_id: new mongodb_1.ObjectId(postId)
+            user_id: userObjectId,
+            post_id: postObjectId
         });
         let isLiked;
         let userReaction = null;
         if (existingLike && !reaction) {
-            // Unlike - delete the like (only if no reaction provided)
             yield likesCollection.deleteOne({
-                user_id: new mongodb_1.ObjectId(userId),
-                post_id: new mongodb_1.ObjectId(postId)
+                user_id: userObjectId,
+                post_id: postObjectId
             });
             isLiked = false;
-            // Delete like notification
             try {
                 const { deleteLikeNotification } = require('../lib/notifications');
-                const post = yield db.collection('posts').findOne({ _id: new mongodb_1.ObjectId(postId) });
+                const post = yield db.collection('posts').findOne({ _id: postObjectId });
                 if (post && post.user_id) {
                     yield deleteLikeNotification(post.user_id.toString(), userId, postId);
                 }
@@ -197,10 +207,9 @@ router.post("/:postId/like", auth_1.authenticateToken, (0, validate_1.validateBo
             }
         }
         else if (existingLike && reaction) {
-            // Update existing like with new reaction
             yield likesCollection.updateOne({
-                user_id: new mongodb_1.ObjectId(userId),
-                post_id: new mongodb_1.ObjectId(postId)
+                user_id: userObjectId,
+                post_id: postObjectId
             }, {
                 $set: {
                     reaction: reaction,
@@ -211,25 +220,21 @@ router.post("/:postId/like", auth_1.authenticateToken, (0, validate_1.validateBo
             userReaction = reaction;
         }
         else {
-            // Check if user is anonymous
-            const user = yield db.collection('users').findOne({ _id: new mongodb_1.ObjectId(userId) });
+            const user = yield db.collection('users').findOne({ _id: userObjectId });
             const isAnonymous = (user === null || user === void 0 ? void 0 : user.isAnonymousMode) === true;
-            // Like - insert new like with reaction
             yield likesCollection.insertOne({
-                user_id: new mongodb_1.ObjectId(userId),
-                post_id: new mongodb_1.ObjectId(postId),
+                user_id: userObjectId,
+                post_id: postObjectId,
                 reaction: reaction || '❤️',
                 is_anonymous: isAnonymous,
                 created_at: new Date()
             });
             isLiked = true;
             userReaction = reaction || '❤️';
-            // Create like notification via Background Queue
             try {
-                const post = yield db.collection('posts').findOne({ _id: new mongodb_1.ObjectId(postId) });
+                const post = yield db.collection('posts').findOne({ _id: postObjectId });
                 if (post && post.user_id && post.user_id.toString() !== userId) {
-                    // Fetch sender username for the notification body
-                    const sender = yield db.collection('users').findOne({ _id: new mongodb_1.ObjectId(userId) });
+                    const sender = yield db.collection('users').findOne({ _id: userObjectId });
                     yield (0, queue_1.addJob)(queue_1.QUEUE_NAMES.NOTIFICATIONS, 'like-notification', {
                         recipientId: post.user_id.toString(),
                         title: 'New Like! ❤️',
@@ -242,11 +247,9 @@ router.post("/:postId/like", auth_1.authenticateToken, (0, validate_1.validateBo
                 console.error('[LIKE] Queue error:', err);
             }
         }
-        // Get updated like count
-        const likeCount = yield likesCollection.countDocuments({ post_id: new mongodb_1.ObjectId(postId) });
-        // Get users who liked (for "liked by" display)
+        const likeCount = yield likesCollection.countDocuments({ post_id: postObjectId });
         const recentLikes = yield likesCollection.aggregate([
-            { $match: { post_id: new mongodb_1.ObjectId(postId) } },
+            { $match: { post_id: postObjectId } },
             { $sort: { created_at: -1 } },
             { $limit: 3 },
             {
@@ -261,9 +264,8 @@ router.post("/:postId/like", auth_1.authenticateToken, (0, validate_1.validateBo
             { $project: { 'user.username': 1, 'is_anonymous': 1 } }
         ]).toArray();
         const likedBy = recentLikes.map((like) => like.is_anonymous ? 'Ghost User' : like.user.username);
-        // Get reaction summary (count of each reaction type)
         const reactionSummary = yield likesCollection.aggregate([
-            { $match: { post_id: new mongodb_1.ObjectId(postId) } },
+            { $match: { post_id: postObjectId } },
             {
                 $group: {
                     _id: '$reaction',
@@ -271,7 +273,6 @@ router.post("/:postId/like", auth_1.authenticateToken, (0, validate_1.validateBo
                 }
             }
         ]).toArray();
-        // Convert to object format: { "❤️": 10, "😍": 5, ... }
         const reactions = {};
         reactionSummary.forEach((item) => {
             if (item._id) {
@@ -415,6 +416,8 @@ router.get("/liked", auth_1.authenticateToken, (req, res) => __awaiter(void 0, v
         console.log('[Posts/Liked] Found liked posts:', likedPosts.length);
         res.json({
             success: true,
+            endpoint: '/api/posts/liked',
+            version: 2,
             posts: likedPosts,
             pagination: {
                 page,
@@ -428,9 +431,10 @@ router.get("/liked", auth_1.authenticateToken, (req, res) => __awaiter(void 0, v
     }
     catch (error) {
         console.error('[Posts/Liked] Error:', error);
-        // Return empty results on error instead of 500
         res.json({
             success: true,
+            endpoint: '/api/posts/liked',
+            version: 2,
             posts: [],
             pagination: {
                 page: 1,
@@ -474,6 +478,21 @@ router.get("/saved", auth_1.authenticateToken, (req, res) => __awaiter(void 0, v
             });
         }
         console.log('[Posts/Saved] Using userObjectId:', userObjectId.toString());
+        // Debug: Check all bookmarks in collection
+        try {
+            const allBookmarks = yield db.collection('bookmarks').find({}).limit(5).toArray();
+            console.log('[Posts/Saved] Sample bookmarks in collection:', allBookmarks.map(b => {
+                var _a, _b, _c, _d;
+                return ({
+                    user_id: ((_b = (_a = b.user_id) === null || _a === void 0 ? void 0 : _a.toString) === null || _b === void 0 ? void 0 : _b.call(_a)) || b.user_id,
+                    post_id: ((_d = (_c = b.post_id) === null || _c === void 0 ? void 0 : _c.toString) === null || _d === void 0 ? void 0 : _d.call(_c)) || b.post_id,
+                    created_at: b.created_at
+                });
+            }));
+        }
+        catch (debugErr) {
+            console.log('[Posts/Saved] Could not fetch sample bookmarks:', debugErr);
+        }
         // Get total count of saved posts
         let total = 0;
         try {
@@ -590,12 +609,24 @@ router.post("/:postId/share", auth_1.authenticateToken, (req, res) => __awaiter(
     try {
         const { postId } = req.params;
         const userId = req.userId;
+        let userObjectId;
+        let postObjectId;
+        try {
+            userObjectId = new mongodb_1.ObjectId(userId);
+            postObjectId = new mongodb_1.ObjectId(postId);
+        }
+        catch (err) {
+            console.error('[SHARE] ObjectId conversion error:', err);
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid ID format'
+            });
+        }
         const db = yield (0, database_1.getDatabase)();
         const sharesCollection = db.collection('shares');
-        // Check if already shared
         const existingShare = yield sharesCollection.findOne({
-            user_id: new mongodb_1.ObjectId(userId),
-            post_id: new mongodb_1.ObjectId(postId)
+            user_id: userObjectId,
+            post_id: postObjectId
         });
         if (existingShare) {
             return res.json({
@@ -604,14 +635,12 @@ router.post("/:postId/share", auth_1.authenticateToken, (req, res) => __awaiter(
                 shared: true
             });
         }
-        // Record the share
         yield sharesCollection.insertOne({
-            user_id: new mongodb_1.ObjectId(userId),
-            post_id: new mongodb_1.ObjectId(postId),
+            user_id: userObjectId,
+            post_id: postObjectId,
             created_at: new Date()
         });
-        // Get updated share count
-        const shareCount = yield sharesCollection.countDocuments({ post_id: new mongodb_1.ObjectId(postId) });
+        const shareCount = yield sharesCollection.countDocuments({ post_id: postObjectId });
         res.json({
             success: true,
             message: "Post shared successfully",
@@ -634,31 +663,51 @@ router.post("/:postId/bookmark", auth_1.authenticateToken, (req, res) => __await
         const userId = req.userId;
         const db = yield (0, database_1.getDatabase)();
         const bookmarksCollection = db.collection('bookmarks');
+        console.log('[Bookmark] userId:', userId, 'postId:', postId);
+        // Convert to ObjectId
+        let userObjectId;
+        let postObjectId;
+        try {
+            userObjectId = new mongodb_1.ObjectId(userId);
+            postObjectId = new mongodb_1.ObjectId(postId);
+            console.log('[Bookmark] Converted - userObjectId:', userObjectId.toString(), 'postObjectId:', postObjectId.toString());
+        }
+        catch (err) {
+            console.error('[Bookmark] ObjectId conversion error:', err);
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid ID format'
+            });
+        }
         // Check if already bookmarked
         const existingBookmark = yield bookmarksCollection.findOne({
-            user_id: new mongodb_1.ObjectId(userId),
-            post_id: new mongodb_1.ObjectId(postId)
+            user_id: userObjectId,
+            post_id: postObjectId
         });
+        console.log('[Bookmark] Existing bookmark:', existingBookmark ? 'Found' : 'Not found');
         let isBookmarked;
         if (existingBookmark) {
             // Remove bookmark
             yield bookmarksCollection.deleteOne({
-                user_id: new mongodb_1.ObjectId(userId),
-                post_id: new mongodb_1.ObjectId(postId)
+                user_id: userObjectId,
+                post_id: postObjectId
             });
             isBookmarked = false;
+            console.log('[Bookmark] Removed bookmark');
         }
         else {
             // Add bookmark
-            yield bookmarksCollection.insertOne({
-                user_id: new mongodb_1.ObjectId(userId),
-                post_id: new mongodb_1.ObjectId(postId),
+            const result = yield bookmarksCollection.insertOne({
+                user_id: userObjectId,
+                post_id: postObjectId,
                 created_at: new Date()
             });
             isBookmarked = true;
+            console.log('[Bookmark] Added bookmark, insertedId:', result.insertedId);
         }
         // Get updated bookmark count
-        const bookmarkCount = yield bookmarksCollection.countDocuments({ post_id: new mongodb_1.ObjectId(postId) });
+        const bookmarkCount = yield bookmarksCollection.countDocuments({ post_id: postObjectId });
+        console.log('[Bookmark] Total bookmarks for this post:', bookmarkCount);
         res.json({
             success: true,
             bookmarked: isBookmarked,
@@ -667,7 +716,7 @@ router.post("/:postId/bookmark", auth_1.authenticateToken, (req, res) => __await
         });
     }
     catch (error) {
-        console.error('Bookmark error:', error);
+        console.error('[Bookmark] Error:', error);
         res.status(error.statusCode || 500).json({
             success: false,
             error: error.message,
@@ -679,20 +728,34 @@ router.get("/:postId/bookmark", auth_1.optionalAuth, (req, res) => __awaiter(voi
     try {
         const { postId } = req.params;
         const userId = req.userId;
+        let userObjectId = null;
+        let postObjectId;
+        try {
+            postObjectId = new mongodb_1.ObjectId(postId);
+            if (userId) {
+                userObjectId = new mongodb_1.ObjectId(userId);
+            }
+        }
+        catch (err) {
+            console.error('[BOOKMARK CHECK] ObjectId conversion error:', err);
+            return res.json({
+                success: true,
+                bookmarked: false,
+                bookmarkCount: 0
+            });
+        }
         const db = yield (0, database_1.getDatabase)();
         const bookmarksCollection = db.collection('bookmarks');
         let isBookmarked = false;
         let bookmarkCount = 0;
-        if (userId) {
-            // Check if current user has bookmarked this post
+        if (userObjectId) {
             const bookmark = yield bookmarksCollection.findOne({
-                user_id: new mongodb_1.ObjectId(userId),
-                post_id: new mongodb_1.ObjectId(postId)
+                user_id: userObjectId,
+                post_id: postObjectId
             });
             isBookmarked = !!bookmark;
         }
-        // Get total bookmark count for this post
-        bookmarkCount = yield bookmarksCollection.countDocuments({ post_id: new mongodb_1.ObjectId(postId) });
+        bookmarkCount = yield bookmarksCollection.countDocuments({ post_id: postObjectId });
         res.json({
             success: true,
             bookmarked: isBookmarked,

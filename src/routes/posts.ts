@@ -178,30 +178,40 @@ router.post("/:postId/like", authenticateToken, validateBody(postReactionSchema)
     const { reaction } = req.body // Get reaction from request body
     const userId = req.userId!
 
+    let userObjectId: ObjectId
+    let postObjectId: ObjectId
+    try {
+      userObjectId = new ObjectId(userId)
+      postObjectId = new ObjectId(postId)
+    } catch (err: any) {
+      console.error('[LIKE] ObjectId conversion error:', err)
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid ID format'
+      })
+    }
+
     const db = await getDatabase()
     const likesCollection = db.collection('likes')
 
-    // Check if already liked
     const existingLike = await likesCollection.findOne({
-      user_id: new ObjectId(userId),
-      post_id: new ObjectId(postId)
+      user_id: userObjectId,
+      post_id: postObjectId
     })
 
     let isLiked: boolean
     let userReaction: string | null = null
 
     if (existingLike && !reaction) {
-      // Unlike - delete the like (only if no reaction provided)
       await likesCollection.deleteOne({
-        user_id: new ObjectId(userId),
-        post_id: new ObjectId(postId)
+        user_id: userObjectId,
+        post_id: postObjectId
       })
       isLiked = false
 
-      // Delete like notification
       try {
         const { deleteLikeNotification } = require('../lib/notifications');
-        const post = await db.collection('posts').findOne({ _id: new ObjectId(postId) });
+        const post = await db.collection('posts').findOne({ _id: postObjectId });
         if (post && post.user_id) {
           await deleteLikeNotification(post.user_id.toString(), userId, postId);
         }
@@ -209,11 +219,10 @@ router.post("/:postId/like", authenticateToken, validateBody(postReactionSchema)
         console.error('[LIKE] Notification deletion error:', err);
       }
     } else if (existingLike && reaction) {
-      // Update existing like with new reaction
       await likesCollection.updateOne(
         {
-          user_id: new ObjectId(userId),
-          post_id: new ObjectId(postId)
+          user_id: userObjectId,
+          post_id: postObjectId
         },
         {
           $set: {
@@ -225,14 +234,12 @@ router.post("/:postId/like", authenticateToken, validateBody(postReactionSchema)
       isLiked = true
       userReaction = reaction
     } else {
-      // Check if user is anonymous
-      const user = await db.collection('users').findOne({ _id: new ObjectId(userId) });
+      const user = await db.collection('users').findOne({ _id: userObjectId });
       const isAnonymous = user?.isAnonymousMode === true;
 
-      // Like - insert new like with reaction
       await likesCollection.insertOne({
-        user_id: new ObjectId(userId),
-        post_id: new ObjectId(postId),
+        user_id: userObjectId,
+        post_id: postObjectId,
         reaction: reaction || '❤️',
         is_anonymous: isAnonymous,
         created_at: new Date()
@@ -240,12 +247,10 @@ router.post("/:postId/like", authenticateToken, validateBody(postReactionSchema)
       isLiked = true
       userReaction = reaction || '❤️'
 
-      // Create like notification via Background Queue
       try {
-        const post = await db.collection('posts').findOne({ _id: new ObjectId(postId) });
+        const post = await db.collection('posts').findOne({ _id: postObjectId });
         if (post && post.user_id && post.user_id.toString() !== userId) {
-          // Fetch sender username for the notification body
-          const sender = await db.collection('users').findOne({ _id: new ObjectId(userId) });
+          const sender = await db.collection('users').findOne({ _id: userObjectId });
 
           await addJob(QUEUE_NAMES.NOTIFICATIONS, 'like-notification', {
             recipientId: post.user_id.toString(),
@@ -260,12 +265,10 @@ router.post("/:postId/like", authenticateToken, validateBody(postReactionSchema)
     }
 
 
-    // Get updated like count
-    const likeCount = await likesCollection.countDocuments({ post_id: new ObjectId(postId) })
+    const likeCount = await likesCollection.countDocuments({ post_id: postObjectId })
 
-    // Get users who liked (for "liked by" display)
     const recentLikes = await likesCollection.aggregate([
-      { $match: { post_id: new ObjectId(postId) } },
+      { $match: { post_id: postObjectId } },
       { $sort: { created_at: -1 } },
       { $limit: 3 },
       {
@@ -282,9 +285,8 @@ router.post("/:postId/like", authenticateToken, validateBody(postReactionSchema)
 
     const likedBy = recentLikes.map((like: any) => like.is_anonymous ? 'Ghost User' : like.user.username)
 
-    // Get reaction summary (count of each reaction type)
     const reactionSummary = await likesCollection.aggregate([
-      { $match: { post_id: new ObjectId(postId) } },
+      { $match: { post_id: postObjectId } },
       {
         $group: {
           _id: '$reaction',
@@ -293,7 +295,6 @@ router.post("/:postId/like", authenticateToken, validateBody(postReactionSchema)
       }
     ]).toArray()
 
-    // Convert to object format: { "❤️": 10, "😍": 5, ... }
     const reactions: { [emoji: string]: number } = {}
     reactionSummary.forEach((item: any) => {
       if (item._id) {
@@ -447,6 +448,8 @@ router.get("/liked", authenticateToken, async (req, res) => {
 
     res.json({
       success: true,
+      endpoint: '/api/posts/liked',
+      version: 2,
       posts: likedPosts,
       pagination: {
         page,
@@ -459,9 +462,10 @@ router.get("/liked", authenticateToken, async (req, res) => {
     })
   } catch (error: any) {
     console.error('[Posts/Liked] Error:', error)
-    // Return empty results on error instead of 500
     res.json({
       success: true,
+      endpoint: '/api/posts/liked',
+      version: 2,
       posts: [],
       pagination: {
         page: 1,
@@ -509,6 +513,18 @@ router.get("/saved", authenticateToken, async (req, res) => {
     }
 
     console.log('[Posts/Saved] Using userObjectId:', userObjectId.toString())
+
+    // Debug: Check all bookmarks in collection
+    try {
+      const allBookmarks = await db.collection('bookmarks').find({}).limit(5).toArray()
+      console.log('[Posts/Saved] Sample bookmarks in collection:', allBookmarks.map(b => ({
+        user_id: b.user_id?.toString?.() || b.user_id,
+        post_id: b.post_id?.toString?.() || b.post_id,
+        created_at: b.created_at
+      })))
+    } catch (debugErr) {
+      console.log('[Posts/Saved] Could not fetch sample bookmarks:', debugErr)
+    }
 
     // Get total count of saved posts
     let total = 0
@@ -635,13 +651,25 @@ router.post("/:postId/share", authenticateToken, async (req, res) => {
     const { postId } = req.params
     const userId = req.userId!
 
+    let userObjectId: ObjectId
+    let postObjectId: ObjectId
+    try {
+      userObjectId = new ObjectId(userId)
+      postObjectId = new ObjectId(postId)
+    } catch (err: any) {
+      console.error('[SHARE] ObjectId conversion error:', err)
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid ID format'
+      })
+    }
+
     const db = await getDatabase()
     const sharesCollection = db.collection('shares')
 
-    // Check if already shared
     const existingShare = await sharesCollection.findOne({
-      user_id: new ObjectId(userId),
-      post_id: new ObjectId(postId)
+      user_id: userObjectId,
+      post_id: postObjectId
     })
 
     if (existingShare) {
@@ -652,15 +680,13 @@ router.post("/:postId/share", authenticateToken, async (req, res) => {
       })
     }
 
-    // Record the share
     await sharesCollection.insertOne({
-      user_id: new ObjectId(userId),
-      post_id: new ObjectId(postId),
+      user_id: userObjectId,
+      post_id: postObjectId,
       created_at: new Date()
     })
 
-    // Get updated share count
-    const shareCount = await sharesCollection.countDocuments({ post_id: new ObjectId(postId) })
+    const shareCount = await sharesCollection.countDocuments({ post_id: postObjectId })
 
     res.json({
       success: true,
@@ -686,33 +712,56 @@ router.post("/:postId/bookmark", authenticateToken, async (req, res) => {
     const db = await getDatabase()
     const bookmarksCollection = db.collection('bookmarks')
 
+    console.log('[Bookmark] userId:', userId, 'postId:', postId)
+
+    // Convert to ObjectId
+    let userObjectId: any
+    let postObjectId: any
+    try {
+      userObjectId = new ObjectId(userId)
+      postObjectId = new ObjectId(postId)
+      console.log('[Bookmark] Converted - userObjectId:', userObjectId.toString(), 'postObjectId:', postObjectId.toString())
+    } catch (err) {
+      console.error('[Bookmark] ObjectId conversion error:', err)
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid ID format'
+      })
+    }
+
     // Check if already bookmarked
     const existingBookmark = await bookmarksCollection.findOne({
-      user_id: new ObjectId(userId),
-      post_id: new ObjectId(postId)
+      user_id: userObjectId,
+      post_id: postObjectId
     })
+
+    console.log('[Bookmark] Existing bookmark:', existingBookmark ? 'Found' : 'Not found')
 
     let isBookmarked: boolean
 
     if (existingBookmark) {
       // Remove bookmark
       await bookmarksCollection.deleteOne({
-        user_id: new ObjectId(userId),
-        post_id: new ObjectId(postId)
+        user_id: userObjectId,
+        post_id: postObjectId
       })
       isBookmarked = false
+      console.log('[Bookmark] Removed bookmark')
     } else {
       // Add bookmark
-      await bookmarksCollection.insertOne({
-        user_id: new ObjectId(userId),
-        post_id: new ObjectId(postId),
+      const result = await bookmarksCollection.insertOne({
+        user_id: userObjectId,
+        post_id: postObjectId,
         created_at: new Date()
       })
       isBookmarked = true
+      console.log('[Bookmark] Added bookmark, insertedId:', result.insertedId)
     }
 
     // Get updated bookmark count
-    const bookmarkCount = await bookmarksCollection.countDocuments({ post_id: new ObjectId(postId) })
+    const bookmarkCount = await bookmarksCollection.countDocuments({ post_id: postObjectId })
+
+    console.log('[Bookmark] Total bookmarks for this post:', bookmarkCount)
 
     res.json({
       success: true,
@@ -721,7 +770,7 @@ router.post("/:postId/bookmark", authenticateToken, async (req, res) => {
       message: isBookmarked ? "Post bookmarked successfully" : "Post removed from bookmarks"
     })
   } catch (error: any) {
-    console.error('Bookmark error:', error)
+    console.error('[Bookmark] Error:', error)
     res.status(error.statusCode || 500).json({
       success: false,
       error: error.message,
@@ -735,23 +784,37 @@ router.get("/:postId/bookmark", optionalAuth, async (req, res) => {
     const { postId } = req.params
     const userId = req.userId
 
+    let userObjectId: ObjectId | null = null
+    let postObjectId: ObjectId
+    try {
+      postObjectId = new ObjectId(postId)
+      if (userId) {
+        userObjectId = new ObjectId(userId)
+      }
+    } catch (err: any) {
+      console.error('[BOOKMARK CHECK] ObjectId conversion error:', err)
+      return res.json({
+        success: true,
+        bookmarked: false,
+        bookmarkCount: 0
+      })
+    }
+
     const db = await getDatabase()
     const bookmarksCollection = db.collection('bookmarks')
 
     let isBookmarked = false
     let bookmarkCount = 0
 
-    if (userId) {
-      // Check if current user has bookmarked this post
+    if (userObjectId) {
       const bookmark = await bookmarksCollection.findOne({
-        user_id: new ObjectId(userId),
-        post_id: new ObjectId(postId)
+        user_id: userObjectId,
+        post_id: postObjectId
       })
       isBookmarked = !!bookmark
     }
 
-    // Get total bookmark count for this post
-    bookmarkCount = await bookmarksCollection.countDocuments({ post_id: new ObjectId(postId) })
+    bookmarkCount = await bookmarksCollection.countDocuments({ post_id: postObjectId })
 
     res.json({
       success: true,

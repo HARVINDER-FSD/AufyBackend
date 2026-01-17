@@ -77,18 +77,27 @@ router.post("/:postId", authenticateToken, async (req: any, res) => {
     const userId = req.userId
     const { postId } = req.params
 
+    if (!ObjectId.isValid(userId) || !ObjectId.isValid(postId)) {
+      console.error('[Bookmarks] Invalid ID format for add bookmark:', { userId, postId })
+      return res.status(400).json({
+        success: false,
+        error: "Invalid ID format"
+      })
+    }
+
+    const userObjectId = new ObjectId(userId)
+    const postObjectId = new ObjectId(postId)
+
     const db = await getDatabase()
 
-    // Check if post exists
-    const post = await db.collection('posts').findOne({ _id: new ObjectId(postId) })
+    const post = await db.collection('posts').findOne({ _id: postObjectId })
     if (!post) {
       return res.status(404).json({ success: false, error: "Post not found" })
     }
 
-    // Check if already bookmarked
     const existing = await db.collection('bookmarks').findOne({
-      userId: new ObjectId(userId),
-      postId: new ObjectId(postId)
+      userId: userObjectId,
+      postId: postObjectId
     })
 
     if (existing) {
@@ -96,8 +105,8 @@ router.post("/:postId", authenticateToken, async (req: any, res) => {
     }
 
     await db.collection('bookmarks').insertOne({
-      userId: new ObjectId(userId),
-      postId: new ObjectId(postId),
+      userId: userObjectId,
+      postId: postObjectId,
       createdAt: new Date()
     })
 
@@ -119,10 +128,21 @@ router.delete("/:postId", authenticateToken, async (req: any, res) => {
     const userId = req.userId
     const { postId } = req.params
 
+    if (!ObjectId.isValid(userId) || !ObjectId.isValid(postId)) {
+      console.error('[Bookmarks] Invalid ID format for remove bookmark:', { userId, postId })
+      return res.status(400).json({
+        success: false,
+        error: "Invalid ID format"
+      })
+    }
+
+    const userObjectId = new ObjectId(userId)
+    const postObjectId = new ObjectId(postId)
+
     const db = await getDatabase()
     await db.collection('bookmarks').deleteOne({
-      userId: new ObjectId(userId),
-      postId: new ObjectId(postId)
+      userId: userObjectId,
+      postId: postObjectId
     })
 
     res.json({

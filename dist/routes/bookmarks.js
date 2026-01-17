@@ -80,23 +80,30 @@ router.post("/:postId", auth_1.authenticateToken, (req, res) => __awaiter(void 0
     try {
         const userId = req.userId;
         const { postId } = req.params;
+        if (!mongodb_1.ObjectId.isValid(userId) || !mongodb_1.ObjectId.isValid(postId)) {
+            console.error('[Bookmarks] Invalid ID format for add bookmark:', { userId, postId });
+            return res.status(400).json({
+                success: false,
+                error: "Invalid ID format"
+            });
+        }
+        const userObjectId = new mongodb_1.ObjectId(userId);
+        const postObjectId = new mongodb_1.ObjectId(postId);
         const db = yield (0, database_1.getDatabase)();
-        // Check if post exists
-        const post = yield db.collection('posts').findOne({ _id: new mongodb_1.ObjectId(postId) });
+        const post = yield db.collection('posts').findOne({ _id: postObjectId });
         if (!post) {
             return res.status(404).json({ success: false, error: "Post not found" });
         }
-        // Check if already bookmarked
         const existing = yield db.collection('bookmarks').findOne({
-            userId: new mongodb_1.ObjectId(userId),
-            postId: new mongodb_1.ObjectId(postId)
+            userId: userObjectId,
+            postId: postObjectId
         });
         if (existing) {
             return res.json({ success: true, message: "Already bookmarked" });
         }
         yield db.collection('bookmarks').insertOne({
-            userId: new mongodb_1.ObjectId(userId),
-            postId: new mongodb_1.ObjectId(postId),
+            userId: userObjectId,
+            postId: postObjectId,
             createdAt: new Date()
         });
         res.json({
@@ -116,10 +123,19 @@ router.delete("/:postId", auth_1.authenticateToken, (req, res) => __awaiter(void
     try {
         const userId = req.userId;
         const { postId } = req.params;
+        if (!mongodb_1.ObjectId.isValid(userId) || !mongodb_1.ObjectId.isValid(postId)) {
+            console.error('[Bookmarks] Invalid ID format for remove bookmark:', { userId, postId });
+            return res.status(400).json({
+                success: false,
+                error: "Invalid ID format"
+            });
+        }
+        const userObjectId = new mongodb_1.ObjectId(userId);
+        const postObjectId = new mongodb_1.ObjectId(postId);
         const db = yield (0, database_1.getDatabase)();
         yield db.collection('bookmarks').deleteOne({
-            userId: new mongodb_1.ObjectId(userId),
-            postId: new mongodb_1.ObjectId(postId)
+            userId: userObjectId,
+            postId: postObjectId
         });
         res.json({
             success: true,
