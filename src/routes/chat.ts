@@ -11,7 +11,11 @@ const router = express.Router();
 router.get('/conversations', auth, async (req, res) => {
   try {
     const conversations = await Conversation.find({
-      'participants.user': req.userId
+      'participants.user': req.userId,
+      $or: [
+        { last_message: { $exists: true, $ne: null } },
+        { type: 'group' }
+      ]
     })
       .populate('participants.user', 'username fullName profileImage')
       .populate('last_message')
