@@ -726,4 +726,112 @@ router.post('/reset-password-otp', async (req: Request, res: Response) => {
   }
 });
 
+// POST /api/auth/send-verification-otp
+router.post('/send-verification-otp', authenticateToken, async (req: any, res: Response) => {
+  try {
+    const userId = req.userId;
+    const db = await getDatabase();
+    const user = await db.collection('users').findOne({ _id: new ObjectId(userId) });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Generate 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    // Store OTP in database
+    await db.collection('users').updateOne(
+      { _id: new ObjectId(userId) },
+      {
+        $set: {
+          contactUpdateOTP: otp,
+          contactUpdateOTPExpires: otpExpires,
+          updated_at: new Date()
+        }
+      }
+    );
+
+    console.log(`[IDENTITY VERIFY] OTP generated for ${user.email}: ${otp}`);
+
+    // Send OTP email
+    try {
+      const { sendIdentityVerificationOTPEmail } = await import('../services/email-resend');
+      sendIdentityVerificationOTPEmail(user.email, otp, user.username || user.full_name).catch(err => {
+        console.error('[IDENTITY VERIFY] Email send error:', err);
+      });
+    } catch (importErr) {
+      console.error('[IDENTITY VERIFY] Import error:', importErr);
+    }
+
+    // If user has phone, we would send SMS here
+    if (user.phone) {
+      console.log(`[IDENTITY VERIFY] Would send SMS to ${user.phone}: ${otp}`);
+      // TODO: Implement SMS sending
+    }
+
+    res.json({ message: 'Verification OTP sent to your registered email' });
+
+  } catch (error) {
+    console.error('[IDENTITY VERIFY] Error:', error);
+    res.status(500).json({ message: 'Failed to send verification OTP' });
+  }
+});
+
+// POST /api/auth/verify-identity-otp
+router.post('/verify-identity-otp', authenticateToken, async (req: any, res: Response) => {
+  try {
+    const userId = req.userId;
+    const { otp } = req.body;
+
+    if (!otp) {
+      return res.status(400).json({ message: 'OTP is required' });
+    }
+
+    const db = await getDatabase();
+    const user = await db.collection('users').findOne({ _id: new ObjectId(userId) });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Check OTP
+    if (user.contactUpdateOTP !== otp || !user.contactUpdateOTPExpires || new Date() > user.contactUpdateOTPExpires) {
+      return res.status(400).json({ message: 'Invalid or expired OTP' });
+    }
+
+    // Generate verification token (short lived)
+    const verificationToken = jwt.sign(
+      {
+        userId: userId,
+        scope: 'update_contact',
+        timestamp: Date.now()
+      },
+      process.env.JWT_SECRET as string,
+      { expiresIn: '10m' }
+    );
+
+    // Clear OTP
+    await db.collection('users').updateOne(
+      { _id: new ObjectId(userId) },
+      {
+        $unset: {
+          contactUpdateOTP: "",
+          contactUpdateOTPExpires: ""
+        }
+      }
+    );
+
+    res.json({
+      message: 'Identity verified successfully',
+      verificationToken: verificationToken
+    });
+
+  } catch (error) {
+    console.error('[IDENTITY VERIFY] Error:', error);
+    res.status(500).json({ message: 'Failed to verify identity' });
+  }
+});
+
 export default router

@@ -237,6 +237,22 @@ const userSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  resetPasswordOTP: {
+    type: String,
+    default: null
+  },
+  resetPasswordOTPExpires: {
+    type: Date,
+    default: null
+  },
+  contactUpdateOTP: {
+    type: String,
+    default: null
+  },
+  contactUpdateOTPExpires: {
+    type: Date,
+    default: null
+  },
   created_at: {
     type: Date,
     default: Date.now
@@ -312,6 +328,10 @@ export interface IUser extends Document {
   settings: any; // Simplified for now, can be more specific
   resetPasswordToken?: string;
   resetPasswordExpires?: Date;
+  resetPasswordOTP?: string;
+  resetPasswordOTPExpires?: Date;
+  contactUpdateOTP?: string;
+  contactUpdateOTPExpires?: Date;
   created_at: Date;
   updated_at: Date;
   isAnonymousMode?: boolean;

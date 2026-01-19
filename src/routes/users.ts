@@ -28,30 +28,30 @@ const authenticate = (req: any, res: Response, next: any) => {
     } catch (error) {
         return res.status(403).json({ message: 'Invalid token' })
     }
-
-    // Register push token (Expo/FCM)
-    // Register push token (Expo/FCM) with validation
-    const pushTokenSchema = Joi.object({
-        token: Joi.string().required(),
-        platform: Joi.string().optional().default('expo'),
-    });
-    router.post('/:id/push-token', validateBody(pushTokenSchema), async (req: Request, res: Response) => {
-        try {
-            const { token, platform } = req.body;
-            const userId = req.params.id;
-            const db = await getDatabase();
-            const result = await db.collection('users').updateOne(
-                { _id: new ObjectId(userId) },
-                { $set: { pushToken: token, pushTokenPlatform: platform, pushTokenUpdatedAt: new Date() } }
-            );
-            if (result.matchedCount === 0) return res.status(404).json({ message: 'User not found' });
-            res.json({ success: true, message: 'Push token saved' });
-        } catch (e) {
-            console.error('Push token save error:', e);
-            res.status(500).json({ message: 'Server error' });
-        }
-    });
 }
+
+// Register push token (Expo/FCM)
+// Register push token (Expo/FCM) with validation
+const pushTokenSchema = Joi.object({
+    token: Joi.string().required(),
+    platform: Joi.string().optional().default('expo'),
+});
+router.post('/:id/push-token', validateBody(pushTokenSchema), async (req: Request, res: Response) => {
+    try {
+        const { token, platform } = req.body;
+        const userId = req.params.id;
+        const db = await getDatabase();
+        const result = await db.collection('users').updateOne(
+            { _id: new ObjectId(userId) },
+            { $set: { pushToken: token, pushTokenPlatform: platform, pushTokenUpdatedAt: new Date() } }
+        );
+        if (result.matchedCount === 0) return res.status(404).json({ message: 'User not found' });
+        res.json({ success: true, message: 'Push token saved' });
+    } catch (e) {
+        console.error('Push token save error:', e);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
 
 // GET /api/users/me - Get current user (OPTIMIZED)
 router.get('/me', authenticate, async (req: any, res: Response) => {
@@ -153,6 +153,75 @@ router.patch('/me', authenticate, async (req: any, res: Response) => {
     } catch (error: any) {
         console.error('Update personal info error:', error);
         return res.status(500).json({ message: error.message || 'Failed to update information' });
+    }
+});
+
+// POST /api/users/me/contact - Update contact info (email/phone) with verification token
+router.post('/me/contact', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.userId;
+        const { verificationToken, email, phone } = req.body;
+
+        if (!verificationToken) {
+            return res.status(400).json({ message: 'Verification token is required' });
+        }
+
+        if (!email && !phone) {
+            return res.status(400).json({ message: 'Email or phone is required' });
+        }
+
+        // Verify token
+        let decoded: any;
+        try {
+            decoded = jwt.verify(verificationToken, JWT_SECRET);
+        } catch (err) {
+            return res.status(403).json({ message: 'Invalid or expired verification token' });
+        }
+
+        if (decoded.scope !== 'update_contact' || decoded.userId !== userId) {
+            return res.status(403).json({ message: 'Invalid verification token scope' });
+        }
+
+        const db = await getDatabase();
+        const updateData: any = { updated_at: new Date() };
+
+        // Check if email/phone is already taken by another user
+        if (email) {
+            const existingEmail = await db.collection('users').findOne({
+                email: email,
+                _id: { $ne: new ObjectId(userId) }
+            });
+            if (existingEmail) {
+                return res.status(400).json({ message: 'Email is already in use' });
+            }
+            updateData.email = email;
+        }
+
+        if (phone) {
+            const existingPhone = await db.collection('users').findOne({
+                phone: phone,
+                _id: { $ne: new ObjectId(userId) }
+            });
+            if (existingPhone) {
+                return res.status(400).json({ message: 'Phone number is already in use' });
+            }
+            updateData.phone = phone;
+        }
+
+        const result = await db.collection('users').updateOne(
+            { _id: new ObjectId(userId) },
+            { $set: updateData }
+        );
+
+        // Invalidate cache
+        const cacheKey = `userProfile:${userId}`;
+        await cacheDel(cacheKey);
+
+        return res.json({ message: 'Contact information updated successfully' });
+
+    } catch (error: any) {
+        console.error('Update contact info error:', error);
+        return res.status(500).json({ message: error.message || 'Failed to update contact information' });
     }
 });
 
