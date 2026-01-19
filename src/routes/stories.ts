@@ -1,5 +1,5 @@
 import { Router, Request, Response } from "express"
-import { connectToDatabase } from "../lib/database"
+import { connectToDatabase, getDatabase } from "../lib/database"
 import StoryModel from "../models/story"
 import { authenticateToken, optionalAuth } from "../middleware/auth"
 import mongoose, { Model } from "mongoose"
@@ -26,17 +26,14 @@ router.get("/", optionalAuth, async (req: AuthRequest, res: Response) => {
     // Get following list if user is authenticated
     let followingIds: any[] = []
     if (currentUserId) {
-      const { MongoClient, ObjectId } = require('mongodb')
-      const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/socialmedia'
-      const client = await MongoClient.connect(MONGODB_URI)
-      const db = client.db()
+      const { ObjectId } = require('mongodb')
+      const db = await getDatabase()
 
       const follows = await db.collection('follows').find({
         followerId: new ObjectId(currentUserId)
       }).toArray()
 
       followingIds = follows.map((f: any) => f.followingId.toString())
-      await client.close()
     }
 
     // Get active stories (not expired)

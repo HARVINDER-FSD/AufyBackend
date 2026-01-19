@@ -45,7 +45,9 @@ class PostService {
                 is_archived: false,
                 is_anonymous: user.isAnonymousMode === true,
                 created_at: new Date(),
-                updated_at: new Date()
+                updated_at: new Date(),
+                likes_count: 0,
+                comments_count: 0,
             };
             const result = yield postsCollection.insertOne(postDoc);
             const postWithUser = {
@@ -87,20 +89,39 @@ class PostService {
                 throw utils_1.errors.notFound("User not found");
             }
             // Get likes and comments count
-            const likesCount = yield likesCollection.countDocuments({ post_id: post._id });
-            const commentsCount = yield commentsCollection.countDocuments({
+            // Use stored counts if available, fallback to countDocuments
+            const likesCount = post.likes_count !== undefined ? post.likes_count : yield likesCollection.countDocuments({ post_id: post._id });
+            const commentsCount = post.comments_count !== undefined ? post.comments_count : yield commentsCollection.countDocuments({
                 post_id: post._id,
                 is_deleted: { $ne: true }
             });
             // Check if current user liked
             let is_liked = false;
+            let userReaction = null;
             if (currentUserId) {
                 const like = yield likesCollection.findOne({
                     user_id: new mongodb_1.ObjectId(currentUserId),
                     post_id: post._id
                 });
                 is_liked = !!like;
+                userReaction = like === null || like === void 0 ? void 0 : like.reaction;
             }
+            // Get reaction summary
+            const reactionSummary = yield likesCollection.aggregate([
+                { $match: { post_id: post._id } },
+                {
+                    $group: {
+                        _id: '$reaction',
+                        count: { $sum: 1 }
+                    }
+                }
+            ]).toArray();
+            const reactions = {};
+            reactionSummary.forEach((item) => {
+                if (item._id) {
+                    reactions[item._id] = item.count;
+                }
+            });
             return {
                 id: post._id.toString(),
                 user_id: post.user_id.toString(),
@@ -114,8 +135,80 @@ class PostService {
                 user: (0, anonymous_utils_1.maskAnonymousUser)(Object.assign(Object.assign({}, user), { is_anonymous: post.is_anonymous })),
                 likes_count: likesCount,
                 comments_count: commentsCount,
-                is_liked
+                is_liked,
+                userReaction,
+                reactions
             };
+        });
+    }
+    // Helper to enrich posts with user info, likes, reactions, etc. efficiently
+    static enrichPosts(posts, currentUserId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (posts.length === 0)
+                return [];
+            const db = yield (0, database_1.getDatabase)();
+            const likesCollection = db.collection('likes');
+            const postIds = posts.map(p => p._id);
+            const userId = currentUserId ? new mongodb_1.ObjectId(currentUserId) : null;
+            // 1. Batch fetch user likes (if logged in)
+            let likedPostIds = new Set();
+            let userReactions = new Map();
+            if (userId) {
+                const likes = yield likesCollection.find({
+                    user_id: userId,
+                    post_id: { $in: postIds }
+                }).toArray();
+                likes.forEach(like => {
+                    likedPostIds.add(like.post_id.toString());
+                    if (like.reaction) {
+                        userReactions.set(like.post_id.toString(), like.reaction);
+                    }
+                });
+            }
+            // 2. Batch fetch reaction summaries
+            const reactionSummaries = yield likesCollection.aggregate([
+                { $match: { post_id: { $in: postIds } } },
+                {
+                    $group: {
+                        _id: { post_id: '$post_id', reaction: '$reaction' },
+                        count: { $sum: 1 }
+                    }
+                }
+            ]).toArray();
+            const reactionsMap = new Map();
+            reactionSummaries.forEach((item) => {
+                const postId = item._id.post_id.toString();
+                const reaction = item._id.reaction || '❤️';
+                if (!reactionsMap.has(postId)) {
+                    reactionsMap.set(postId, {});
+                }
+                reactionsMap.get(postId)[reaction] = item.count;
+            });
+            // 3. Map everything back
+            return posts.map(post => {
+                const postId = post._id.toString();
+                const isLiked = likedPostIds.has(postId);
+                const reactions = reactionsMap.get(postId) || {};
+                return {
+                    id: postId,
+                    user_id: post.user_id.toString(),
+                    content: post.content,
+                    media_urls: post.media_urls,
+                    media_type: post.media_type,
+                    location: post.location,
+                    is_archived: post.is_archived,
+                    created_at: post.created_at,
+                    updated_at: post.updated_at,
+                    user: (0, anonymous_utils_1.maskAnonymousUser)(Object.assign(Object.assign({}, post.user), { is_anonymous: post.is_anonymous })),
+                    // Use stored counts if available, otherwise 0
+                    likes_count: post.likes_count || 0,
+                    comments_count: post.comments_count || 0,
+                    is_liked: isLiked,
+                    userReaction: userReactions.get(postId) || null,
+                    reactions: reactions,
+                    likedBy: [] // Optimization: skip fetching recent likes usernames for feed performance
+                };
+            });
         });
     }
     // Get user's posts
@@ -125,9 +218,6 @@ class PostService {
             const offset = utils_1.pagination.getOffset(validPage, validLimit);
             const db = yield (0, database_1.getDatabase)();
             const postsCollection = db.collection('posts');
-            const usersCollection = db.collection('users');
-            const likesCollection = db.collection('likes');
-            const commentsCollection = db.collection('comments');
             const matchQuery = {
                 user_id: new mongodb_1.ObjectId(userId),
                 is_archived: { $ne: true }
@@ -148,36 +238,7 @@ class PostService {
                 { $skip: offset },
                 { $limit: validLimit }
             ]).toArray();
-            const transformedPosts = yield Promise.all(posts.map((post) => __awaiter(this, void 0, void 0, function* () {
-                const likesCount = yield likesCollection.countDocuments({ post_id: post._id });
-                const commentsCount = yield commentsCollection.countDocuments({
-                    post_id: post._id,
-                    is_deleted: { $ne: true }
-                });
-                let is_liked = false;
-                if (currentUserId) {
-                    const like = yield likesCollection.findOne({
-                        user_id: new mongodb_1.ObjectId(currentUserId),
-                        post_id: post._id
-                    });
-                    is_liked = !!like;
-                }
-                return {
-                    id: post._id.toString(),
-                    user_id: post.user_id.toString(),
-                    content: post.content,
-                    media_urls: post.media_urls,
-                    media_type: post.media_type,
-                    location: post.location,
-                    is_archived: post.is_archived,
-                    created_at: post.created_at,
-                    updated_at: post.updated_at,
-                    user: (0, anonymous_utils_1.maskAnonymousUser)(Object.assign(Object.assign({}, post.user), { is_anonymous: post.is_anonymous })),
-                    likes_count: likesCount,
-                    comments_count: commentsCount,
-                    is_liked
-                };
-            })));
+            const transformedPosts = yield PostService.enrichPosts(posts, currentUserId);
             const paginationMeta = utils_1.pagination.getMetadata(validPage, validLimit, total);
             return {
                 success: true,
@@ -194,8 +255,6 @@ class PostService {
             const db = yield (0, database_1.getDatabase)();
             const postsCollection = db.collection('posts');
             const followsCollection = db.collection('follows');
-            const likesCollection = db.collection('likes');
-            const commentsCollection = db.collection('comments');
             // Get users that current user follows (check both field formats)
             const follows = yield followsCollection.find({
                 $or: [
@@ -226,70 +285,7 @@ class PostService {
                 { $skip: offset },
                 { $limit: validLimit }
             ]).toArray();
-            const transformedPosts = yield Promise.all(posts.map((post) => __awaiter(this, void 0, void 0, function* () {
-                const likesCount = yield likesCollection.countDocuments({ post_id: post._id });
-                const commentsCount = yield commentsCollection.countDocuments({
-                    post_id: post._id,
-                    is_deleted: { $ne: true }
-                });
-                const like = yield likesCollection.findOne({
-                    user_id: new mongodb_1.ObjectId(userId),
-                    post_id: post._id
-                });
-                // Get reaction summary for this post
-                const reactionSummary = yield likesCollection.aggregate([
-                    { $match: { post_id: post._id } },
-                    {
-                        $group: {
-                            _id: '$reaction',
-                            count: { $sum: 1 }
-                        }
-                    }
-                ]).toArray();
-                // Convert to object format: { "❤️": 10, "😍": 5, ... }
-                const reactions = {};
-                reactionSummary.forEach((item) => {
-                    if (item._id) {
-                        reactions[item._id] = item.count;
-                    }
-                });
-                // Get users who liked (for "liked by" display)
-                const recentLikes = yield likesCollection.aggregate([
-                    { $match: { post_id: post._id } },
-                    { $sort: { created_at: -1 } },
-                    { $limit: 3 },
-                    {
-                        $lookup: {
-                            from: 'users',
-                            localField: 'user_id',
-                            foreignField: '_id',
-                            as: 'user'
-                        }
-                    },
-                    { $unwind: '$user' },
-                    { $project: { 'user.username': 1 } }
-                ]).toArray();
-                const likedBy = recentLikes.map((like) => like.user.username);
-                return {
-                    id: post._id.toString(),
-                    user_id: post.user_id.toString(),
-                    content: post.content,
-                    media_urls: post.media_urls,
-                    media_type: post.media_type,
-                    location: post.location,
-                    is_archived: post.is_archived,
-                    created_at: post.created_at,
-                    updated_at: post.updated_at,
-                    user: (0, anonymous_utils_1.maskAnonymousUser)(Object.assign(Object.assign({}, post.user), { is_anonymous: post.is_anonymous })),
-                    likes_count: likesCount,
-                    comments_count: commentsCount,
-                    liked: !!like, // Changed from is_liked to liked
-                    is_liked: !!like, // Keep both for compatibility
-                    userReaction: (like === null || like === void 0 ? void 0 : like.reaction) || null, // User's current reaction
-                    reactions, // Summary of all reactions
-                    likedBy, // Top 3 usernames who liked
-                };
-            })));
+            const transformedPosts = yield PostService.enrichPosts(posts, userId);
             const paginationMeta = utils_1.pagination.getMetadata(validPage, validLimit, total);
             return {
                 success: true,
@@ -345,8 +341,8 @@ class PostService {
                     is_verified: user.is_verified || false,
                     badge_type: user.badge_type || user.verification_type || null,
                 },
-                likes_count: 0,
-                comments_count: 0,
+                likes_count: result.likes_count || 0,
+                comments_count: result.comments_count || 0,
                 is_liked: false
             };
         });
@@ -394,6 +390,8 @@ class PostService {
                 post_id: new mongodb_1.ObjectId(postId),
                 created_at: new Date()
             });
+            // Increment likes count on post
+            yield postsCollection.updateOne({ _id: new mongodb_1.ObjectId(postId) }, { $inc: { likes_count: 1 } });
         });
     }
     // Unlike post
@@ -401,6 +399,7 @@ class PostService {
         return __awaiter(this, void 0, void 0, function* () {
             const db = yield (0, database_1.getDatabase)();
             const likesCollection = db.collection('likes');
+            const postsCollection = db.collection('posts');
             const result = yield likesCollection.deleteOne({
                 user_id: new mongodb_1.ObjectId(userId),
                 post_id: new mongodb_1.ObjectId(postId)
@@ -408,6 +407,8 @@ class PostService {
             if (result.deletedCount === 0) {
                 throw utils_1.errors.notFound("Like not found");
             }
+            // Decrement likes count on post
+            yield postsCollection.updateOne({ _id: new mongodb_1.ObjectId(postId) }, { $inc: { likes_count: -1 } });
         });
     }
     // Get post likes

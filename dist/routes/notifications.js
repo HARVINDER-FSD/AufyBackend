@@ -17,16 +17,19 @@ const express_1 = __importDefault(require("express"));
 const mongodb_1 = require("mongodb");
 const anonymous_utils_1 = require("../lib/anonymous-utils");
 const auth_1 = __importDefault(require("../middleware/auth"));
+const database_1 = require("../lib/database");
 const authenticate = auth_1.default;
 const router = express_1.default.Router();
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/social-media';
 // GET /api/notifications - Get all notifications for current user
 router.get('/', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const userId = req.userId;
         const { limit = 50, skip = 0, unreadOnly = false } = req.query;
-        const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
-        const db = client.db();
+        const rawLimit = Number(limit) || 50;
+        const safeLimit = Math.min(Math.max(rawLimit, 1), 100);
+        const rawSkip = Number(skip) || 0;
+        const safeSkip = Math.max(rawSkip, 0);
+        const db = yield (0, database_1.getDatabase)();
         const query = { userId: new mongodb_1.ObjectId(userId) };
         if (unreadOnly === 'true') {
             query.isRead = false;
@@ -36,8 +39,8 @@ router.get('/', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, fu
             .aggregate([
             { $match: query },
             { $sort: { createdAt: -1 } },
-            { $skip: Number(skip) },
-            { $limit: Number(limit) },
+            { $skip: safeSkip },
+            { $limit: safeLimit },
             {
                 $lookup: {
                     from: 'users',
@@ -84,7 +87,6 @@ router.get('/', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, fu
             userId: new mongodb_1.ObjectId(userId),
             isRead: false
         });
-        yield client.close();
         // Format notifications
         const formattedNotifications = notifications.map(notif => {
             var _a, _b, _c, _d;
@@ -122,7 +124,7 @@ router.get('/', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, fu
         res.json({
             notifications: formattedNotifications,
             unreadCount,
-            hasMore: notifications.length === Number(limit)
+            hasMore: notifications.length === safeLimit
         });
     }
     catch (error) {
@@ -134,13 +136,11 @@ router.get('/', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, fu
 router.get('/unread-count', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const userId = req.userId;
-        const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
-        const db = client.db();
+        const db = yield (0, database_1.getDatabase)();
         const unreadCount = yield db.collection('notifications').countDocuments({
             userId: new mongodb_1.ObjectId(userId),
             isRead: false
         });
-        yield client.close();
         res.json({ unreadCount });
     }
     catch (error) {
@@ -153,8 +153,7 @@ router.put('/:notificationId/read', authenticate, (req, res) => __awaiter(void 0
     try {
         const userId = req.userId;
         const { notificationId } = req.params;
-        const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
-        const db = client.db();
+        const db = yield (0, database_1.getDatabase)();
         const result = yield db.collection('notifications').updateOne({
             _id: new mongodb_1.ObjectId(notificationId),
             userId: new mongodb_1.ObjectId(userId)
@@ -164,7 +163,6 @@ router.put('/:notificationId/read', authenticate, (req, res) => __awaiter(void 0
                 updatedAt: new Date()
             }
         });
-        yield client.close();
         if (result.matchedCount === 0) {
             return res.status(404).json({ message: 'Notification not found' });
         }
@@ -179,8 +177,7 @@ router.put('/:notificationId/read', authenticate, (req, res) => __awaiter(void 0
 router.put('/read-all', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const userId = req.userId;
-        const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
-        const db = client.db();
+        const db = yield (0, database_1.getDatabase)();
         yield db.collection('notifications').updateMany({
             userId: new mongodb_1.ObjectId(userId),
             isRead: false
@@ -190,7 +187,6 @@ router.put('/read-all', authenticate, (req, res) => __awaiter(void 0, void 0, vo
                 updatedAt: new Date()
             }
         });
-        yield client.close();
         res.json({ message: 'All notifications marked as read' });
     }
     catch (error) {
@@ -203,13 +199,11 @@ router.delete('/:notificationId', authenticate, (req, res) => __awaiter(void 0, 
     try {
         const userId = req.userId;
         const { notificationId } = req.params;
-        const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
-        const db = client.db();
+        const db = yield (0, database_1.getDatabase)();
         const result = yield db.collection('notifications').deleteOne({
             _id: new mongodb_1.ObjectId(notificationId),
             userId: new mongodb_1.ObjectId(userId)
         });
-        yield client.close();
         if (result.deletedCount === 0) {
             return res.status(404).json({ message: 'Notification not found' });
         }

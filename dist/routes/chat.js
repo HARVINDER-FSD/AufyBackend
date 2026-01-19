@@ -22,10 +22,10 @@ const router = express_1.default.Router();
 router.get('/conversations', auth_1.default, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const conversations = yield conversation_1.default.find({
-            participants: req.user._id
+            'participants.user': req.userId
         })
-            .populate('participants', 'username fullName profileImage')
-            .populate('lastMessage')
+            .populate('participants.user', 'username fullName profileImage')
+            .populate('last_message')
             .sort({ updatedAt: -1 });
         res.json(conversations);
     }
@@ -39,21 +39,26 @@ router.post('/conversations', auth_1.default, (req, res) => __awaiter(void 0, vo
         const { userId } = req.body;
         // Check if conversation already exists
         let conversation = yield conversation_1.default.findOne({
-            participants: { $all: [req.user._id, userId] }
+            'participants.user': { $all: [req.userId, userId] }
         })
-            .populate('participants', 'username fullName profileImage')
-            .populate('lastMessage');
+            .populate('participants.user', 'username fullName profileImage')
+            .populate('last_message');
         if (!conversation) {
             // Create new conversation
             conversation = yield conversation_1.default.create({
-                participants: [req.user._id, userId]
+                participants: [
+                    { user: req.userId, role: 'admin' },
+                    { user: userId, role: 'member' }
+                ],
+                created_by: req.userId
             });
-            conversation = yield conversation.populate('participants', 'username fullName profileImage');
+            conversation = yield conversation.populate('participants.user', 'username fullName profileImage');
         }
         res.json(conversation);
     }
     catch (error) {
-        res.status(500).json({ message: 'Server error' });
+        console.error('Conversation creation error:', error);
+        res.status(500).json({ message: error.message || 'Server error' });
     }
 }));
 // Get messages in a conversation
@@ -61,7 +66,7 @@ router.get('/conversations/:conversationId/messages', auth_1.default, (req, res)
     try {
         const { conversationId } = req.params;
         const { limit = 50, before } = req.query;
-        const messages = yield chat_1.ChatService.getConversationMessages(conversationId, req.user._id, 1, // page (not strictly used if using before cursor, but kept for signature)
+        const messages = yield chat_1.ChatService.getConversationMessages(conversationId, req.userId, 1, // page (not strictly used if using before cursor, but kept for signature)
         Number(limit), before);
         res.json(messages);
     }
@@ -74,7 +79,7 @@ router.post('/conversations/:conversationId/messages', auth_1.default, (req, res
     try {
         const { conversationId } = req.params;
         const { content, image, recipientId } = req.body;
-        const message = yield chat_1.ChatService.sendMessage(req.user._id, conversationId, {
+        const message = yield chat_1.ChatService.sendMessage(req.userId, conversationId, {
             content,
             media_url: image, // mapping image to media_url
             media_type: image ? 'image' : undefined,
@@ -92,7 +97,7 @@ router.post('/conversations/:conversationId/read', auth_1.default, (req, res) =>
         const { conversationId } = req.params;
         yield message_1.default.updateMany({
             conversation: conversationId,
-            sender: { $ne: req.user._id },
+            sender: { $ne: req.userId },
             read: false
         }, { read: true });
         res.json({ message: 'Messages marked as read' });
@@ -108,7 +113,7 @@ router.delete('/messages/:messageId', auth_1.default, (req, res) => __awaiter(vo
         if (!message) {
             return res.status(404).json({ message: 'Message not found' });
         }
-        if (message.sender_id.toString() !== req.user._id.toString()) {
+        if (message.sender_id.toString() !== req.userId.toString()) {
             return res.status(403).json({ message: 'Not authorized' });
         }
         yield message.deleteOne();

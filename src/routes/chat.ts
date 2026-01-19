@@ -11,10 +11,10 @@ const router = express.Router();
 router.get('/conversations', auth, async (req, res) => {
   try {
     const conversations = await Conversation.find({
-      participants: req.user!._id
+      'participants.user': req.userId
     })
-      .populate('participants', 'username fullName profileImage')
-      .populate('lastMessage')
+      .populate('participants.user', 'username fullName profileImage')
+      .populate('last_message')
       .sort({ updatedAt: -1 });
 
     res.json(conversations);
@@ -30,23 +30,28 @@ router.post('/conversations', auth, async (req, res) => {
 
     // Check if conversation already exists
     let conversation = await Conversation.findOne({
-      participants: { $all: [req.user!._id, userId] }
+      'participants.user': { $all: [req.userId, userId] }
     })
-      .populate('participants', 'username fullName profileImage')
-      .populate('lastMessage');
+      .populate('participants.user', 'username fullName profileImage')
+      .populate('last_message');
 
     if (!conversation) {
       // Create new conversation
       conversation = await Conversation.create({
-        participants: [req.user!._id, userId]
+        participants: [
+          { user: req.userId, role: 'admin' },
+          { user: userId, role: 'member' }
+        ],
+        created_by: req.userId
       });
 
-      conversation = await conversation.populate('participants', 'username fullName profileImage');
+      conversation = await conversation.populate('participants.user', 'username fullName profileImage');
     }
 
     res.json(conversation);
-  } catch (error) {
-    res.status(500).json({ message: 'Server error' });
+  } catch (error: any) {
+    console.error('Conversation creation error:', error);
+    res.status(500).json({ message: error.message || 'Server error' });
   }
 });
 
@@ -58,7 +63,7 @@ router.get('/conversations/:conversationId/messages', auth, async (req, res) => 
 
     const messages = await ChatService.getConversationMessages(
       conversationId,
-      req.user!._id,
+      req.userId!,
       1, // page (not strictly used if using before cursor, but kept for signature)
       Number(limit),
       before as string
@@ -77,7 +82,7 @@ router.post('/conversations/:conversationId/messages', auth, async (req, res) =>
     const { content, image, recipientId } = req.body;
 
     const message = await ChatService.sendMessage(
-      req.user!._id,
+      req.userId!,
       conversationId,
       {
         content,
@@ -101,7 +106,7 @@ router.post('/conversations/:conversationId/read', auth, async (req, res) => {
     await Message.updateMany(
       {
         conversation: conversationId,
-        sender: { $ne: req.user!._id },
+        sender: { $ne: req.userId },
         read: false
       },
       { read: true }
@@ -122,7 +127,7 @@ router.delete('/messages/:messageId', auth, async (req, res) => {
       return res.status(404).json({ message: 'Message not found' });
     }
 
-    if (message.sender_id.toString() !== req.user!._id.toString()) {
+    if (message.sender_id.toString() !== req.userId!.toString()) {
       return res.status(403).json({ message: 'Not authorized' });
     }
 

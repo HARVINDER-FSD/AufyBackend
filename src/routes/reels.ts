@@ -16,14 +16,10 @@ router.get("/", optionalAuth, async (req: any, res: Response) => {
       console.log('[Reels Route] Getting reels for username:', username)
 
       // First, find the user by username
-      const { MongoClient } = require('mongodb')
-      const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/socialmedia'
-      const client = new MongoClient(MONGODB_URI)
-      await client.connect()
-      const db = client.db()
+      const { getDatabase } = require('../lib/database')
+      const db = await getDatabase()
 
       const user = await db.collection('users').findOne({ username })
-      await client.close()
 
       if (!user) {
         return res.status(404).json({

@@ -1,35 +1,16 @@
 import { Router, Request, Response } from 'express'
-import { MongoClient, ObjectId, Db } from 'mongodb'
+import { ObjectId } from 'mongodb'
 import { generateAnonymousPersona, maskAnonymousUser } from '../lib/anonymous-utils'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { cacheGet, cacheSet, cacheDel, cacheInvalidate } from '../lib/redis';
 import { validateBody } from '../middleware/validate';
+import { getDatabase } from '../lib/database';
 import Joi from 'joi';
 
 const router = Router()
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/socialmedia'
 const JWT_SECRET = process.env.JWT_SECRET || '4d9f1c8c6b27a67e9f3a81d2e5b0f78c72d1e7a64d59c83fb20e5a72a8c4d192'
-
-// Connection pool - reuse connections
-let cachedClient: MongoClient | null = null
-let cachedDb: Db | null = null
-
-async function getDb(): Promise<Db> {
-    if (cachedDb && cachedClient) {
-        return cachedDb
-    }
-
-    cachedClient = await MongoClient.connect(MONGODB_URI, {
-        maxPoolSize: 10,
-        minPoolSize: 2
-    })
-    cachedDb = cachedClient.db()
-
-    console.log('✅ MongoDB connection pool established')
-    return cachedDb
-}
 
 // Simple auth middleware
 const authenticate = (req: any, res: Response, next: any) => {
@@ -58,7 +39,7 @@ const authenticate = (req: any, res: Response, next: any) => {
         try {
             const { token, platform } = req.body;
             const userId = req.params.id;
-            const db = await getDb();
+            const db = await getDatabase();
             const result = await db.collection('users').updateOne(
                 { _id: new ObjectId(userId) },
                 { $set: { pushToken: token, pushTokenPlatform: platform, pushTokenUpdatedAt: new Date() } }
@@ -82,7 +63,7 @@ router.get('/me', authenticate, async (req: any, res: Response) => {
         if (cached) {
             return res.json(cached);
         }
-        const db = await getDb();
+        const db = await getDatabase();
         const user = await db.collection('users').findOne(
             { _id: new ObjectId(userId) },
             { projection: { password: 0 } }
@@ -139,8 +120,8 @@ router.get('/me', authenticate, async (req: any, res: Response) => {
 // GET /api/users/list - List following users (for sharing, etc.)
 router.get('/list', authenticate, async (req: any, res: Response) => {
     try {
-        const db = await getDb()
-        const limit = parseInt(req.query.limit as string) || 50
+        const db = await getDatabase()
+        const limit = Math.min(parseInt(req.query.limit as string) || 50, 100)
         const mutual = req.query.mutual === 'true'
         const currentUserId = new ObjectId(req.userId)
 
@@ -261,13 +242,11 @@ router.get('/username/:username', async (req: any, res: Response) => {
             return res.json(cached);
         }
 
-        const client = await MongoClient.connect(MONGODB_URI)
-        const db = client.db()
+        const db = await getDatabase()
         const user = await db.collection('users').findOne({ username })
 
         if (!user) {
-            await client.close()
-            return res.status(404).json({ message: 'User not found' })
+return res.status(404).json({ message: 'User not found' })
         }
 
         // Check follow status if user is logged in
@@ -324,10 +303,7 @@ router.get('/username/:username', async (req: any, res: Response) => {
             user_id: user._id,
             is_archived: { $ne: true }
         })
-
-        await client.close()
-
-        const response = {
+const response = {
             _id: user._id.toString(),
             id: user._id.toString(),
             username: user.username,
@@ -372,6 +348,8 @@ router.get('/username/:username', async (req: any, res: Response) => {
 router.get('/:userId/mutual-followers', authenticate, async (req: any, res: Response) => {
     try {
         const { userId } = req.params
+        const limit = Math.min(parseInt(req.query.limit as string) || 20, 100)
+        const skip = parseInt(req.query.skip as string) || 0
 
         // Validate ObjectId format
         if (!ObjectId.isValid(userId)) {
@@ -382,37 +360,66 @@ router.get('/:userId/mutual-followers', authenticate, async (req: any, res: Resp
             })
         }
 
-        const db = await getDb()
+        const db = await getDatabase()
 
-        // Get users that this user follows
-        const following = await db.collection('follows').find({
-            follower_id: new ObjectId(userId)
-        }).toArray()
-        const followingIds = following.map(f => f.following_id.toString())
-
-        // Get users that follow this user
-        const followers = await db.collection('follows').find({
-            following_id: new ObjectId(userId)
-        }).toArray()
-        const followerIds = followers.map(f => f.follower_id.toString())
-
-        // Find mutual followers (intersection)
-        const mutualIds = followingIds.filter(id => followerIds.includes(id))
-
-        // Get user details for mutual followers
-        const mutualUsers = await db.collection('users').find({
-            _id: { $in: mutualIds.map(id => new ObjectId(id)) }
-        }).project({
-            password: 0
-        }).toArray()
+        // Optimized Mutual Followers with Aggregation
+        // Find users I follow (follower_id = userId) who also follow me (following_id = userId)
+        const mutualUsers = await db.collection('follows').aggregate([
+            { $match: { follower_id: new ObjectId(userId) } }, // 1. Users userId follows
+            {
+                $lookup: {
+                    from: 'follows',
+                    let: { their_id: '$following_id' },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $and: [
+                                        { $eq: ['$follower_id', '$$their_id'] },
+                                        { $eq: ['$following_id', new ObjectId(userId)] }
+                                    ]
+                                }
+                            }
+                        }
+                    ],
+                    as: 'mutual_relation'
+                }
+            },
+            { $match: { 'mutual_relation.0': { $exists: true } } }, // 2. Must be mutual
+            { $skip: skip },
+            { $limit: limit },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'following_id',
+                    foreignField: '_id',
+                    as: 'user_details'
+                }
+            },
+            { $unwind: '$user_details' },
+            {
+                $project: {
+                    _id: '$user_details._id',
+                    username: '$user_details.username',
+                    fullName: { $ifNull: ['$user_details.full_name', '$user_details.name'] },
+                    profileImage: {
+                        $ifNull: [
+                            '$user_details.avatar_url',
+                            { $ifNull: ['$user_details.avatar', '/placeholder-user.jpg'] }
+                        ]
+                    },
+                    isVerified: { $ifNull: ['$user_details.is_verified', '$user_details.verified'] }
+                }
+            }
+        ]).toArray()
 
         // Format response
         const formattedUsers = mutualUsers.map(user => ({
             _id: user._id.toString(),
             username: user.username,
-            fullName: user.full_name || user.fullName || user.name || '',
-            profileImage: user.avatar_url || user.avatar || user.profile_picture || user.profileImage || '/placeholder-user.jpg',
-            isVerified: user.is_verified || user.verified || false
+            fullName: user.fullName || '',
+            profileImage: user.profileImage,
+            isVerified: !!user.isVerified
         }))
 
         return res.json({
@@ -435,13 +442,9 @@ router.get('/:userId([0-9a-fA-F]{24})', async (req: Request, res: Response) => {
     try {
         const { userId } = req.params
 
-        const client = await MongoClient.connect(MONGODB_URI)
-        const db = client.db()
+        const db = await getDatabase()
         const user = await db.collection('users').findOne({ _id: new ObjectId(userId) })
-
-        await client.close()
-
-        if (!user) {
+if (!user) {
             return res.status(404).json({ message: 'User not found' })
         }
 
@@ -501,12 +504,10 @@ router.get('/:username', async (req: any, res: Response) => {
             // Token is optional, continue without it
         }
 
-        const client = await MongoClient.connect(MONGODB_URI)
-        const db = client.db()
+        const db = await getDatabase()
         const user = await db.collection('users').findOne({ username })
 
         if (!user) {
-            await client.close()
             return res.status(404).json({ message: 'User not found' })
         }
 
@@ -545,10 +546,7 @@ router.get('/:username', async (req: any, res: Response) => {
             user_id: user._id,
             is_archived: { $ne: true }
         })
-
-        await client.close()
-
-        const avatarUrl = user.avatar_url || user.avatar || user.profile_picture || user.profileImage || '/placeholder-user.jpg';
+const avatarUrl = user.avatar_url || user.avatar || user.profile_picture || user.profileImage || '/placeholder-user.jpg';
 
         return res.json({
             _id: user._id.toString(),
@@ -602,8 +600,7 @@ router.put('/profile', authenticate, async (req: any, res: Response) => {
             return res.status(400).json({ message: 'Missing user ID' });
         }
 
-        const client = await MongoClient.connect(MONGODB_URI)
-        const db = client.db()
+        const db = await getDatabase()
 
         const updateData: any = { updatedAt: new Date() }
         if (name !== undefined) {
@@ -657,8 +654,7 @@ router.put('/profile', authenticate, async (req: any, res: Response) => {
 
         if (!user) {
             console.error('[Backend] User not found with either ObjectId or string ID');
-            await client.close()
-            return res.status(404).json({ message: 'User not found' })
+return res.status(404).json({ message: 'User not found' })
         }
 
         // Handle username change with 15-day restriction
@@ -668,8 +664,7 @@ router.put('/profile', authenticate, async (req: any, res: Response) => {
             // Validate username format - only letters, numbers, underscore, and period
             const usernameRegex = /^[a-zA-Z0-9_.]+$/;
             if (!usernameRegex.test(username)) {
-                await client.close()
-                return res.status(400).json({
+return res.status(400).json({
                     message: 'Username can only contain letters, numbers, underscores (_), and periods (.)',
                     error: 'INVALID_USERNAME_FORMAT'
                 })
@@ -677,8 +672,7 @@ router.put('/profile', authenticate, async (req: any, res: Response) => {
 
             // Check username length (3-30 characters)
             if (username.length < 3 || username.length > 30) {
-                await client.close()
-                return res.status(400).json({
+return res.status(400).json({
                     message: 'Username must be between 3 and 30 characters',
                     error: 'INVALID_USERNAME_LENGTH'
                 })
@@ -715,9 +709,7 @@ router.put('/profile', authenticate, async (req: any, res: Response) => {
                         }
                     }
                 }
-
-                await client.close()
-                return res.status(400).json({
+return res.status(400).json({
                     message: 'Username is already taken',
                     error: 'USERNAME_TAKEN',
                     suggestions: suggestions.slice(0, 5) // Return up to 5 suggestions
@@ -732,8 +724,7 @@ router.put('/profile', authenticate, async (req: any, res: Response) => {
 
             if (daysSinceLastChange < 15) {
                 const daysRemaining = Math.ceil(15 - daysSinceLastChange);
-                await client.close()
-                return res.status(400).json({
+return res.status(400).json({
                     message: `You can only change your username once every 15 days. Please wait ${daysRemaining} more day${daysRemaining > 1 ? 's' : ''}.`,
                     error: 'USERNAME_CHANGE_TOO_SOON',
                     daysRemaining
@@ -761,8 +752,7 @@ router.put('/profile', authenticate, async (req: any, res: Response) => {
 
             if (!user) {
                 console.error('[Backend] User not found after update');
-                await client.close()
-                return res.status(500).json({ message: 'Failed to retrieve updated user' })
+return res.status(500).json({ message: 'Failed to retrieve updated user' })
             }
 
             console.log('[Backend] Updated user data:', {
@@ -776,10 +766,7 @@ router.put('/profile', authenticate, async (req: any, res: Response) => {
                 website: user?.website,
                 location: user?.location
             });
-
-            await client.close()
-
-            // Add timestamp to avatar URLs for cache busting
+// Add timestamp to avatar URLs for cache busting
             const timestamp = Date.now();
             const avatarUrl = user?.avatar_url || user?.avatar || '/placeholder-user.jpg';
             const avatarWithTimestamp = avatarUrl !== '/placeholder-user.jpg'
@@ -807,8 +794,7 @@ router.put('/profile', authenticate, async (req: any, res: Response) => {
             return res.json(responseData);
         } catch (updateError) {
             console.error('[Backend] Error updating user:', updateError);
-            await client.close()
-            return res.status(500).json({ message: 'Failed to update profile' })
+return res.status(500).json({ message: 'Failed to update profile' })
         }
     } catch (error: any) {
         console.error('Update profile error:', error)
@@ -825,8 +811,7 @@ router.get('/search', async (req: Request, res: Response) => {
             return res.status(400).json({ message: 'Search query required' })
         }
 
-        const client = await MongoClient.connect(MONGODB_URI)
-        const db = client.db()
+        const db = await getDatabase()
 
         const users = await db.collection('users').find({
             $or: [
@@ -834,10 +819,7 @@ router.get('/search', async (req: Request, res: Response) => {
                 { name: { $regex: q, $options: 'i' } }
             ]
         }).limit(20).toArray()
-
-        await client.close()
-
-        return res.json(users.map(user => ({
+return res.json(users.map(user => ({
             id: user._id.toString(),
             username: user.username,
             name: user.name || '',
@@ -862,14 +844,12 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
             return res.status(400).json({ message: 'Cannot follow yourself' })
         }
 
-        const client = await MongoClient.connect(MONGODB_URI)
-        const db = client.db()
+        const db = await getDatabase()
 
         // Get target user to check if private
         const targetUser = await db.collection('users').findOne({ _id: new ObjectId(userId) })
         if (!targetUser) {
-            await client.close()
-            return res.status(404).json({ message: 'User not found' })
+return res.status(404).json({ message: 'User not found' })
         }
 
         const isPrivate = targetUser.is_private || false
@@ -920,10 +900,7 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
                 following_id: new ObjectId(userId),
                 status: 'accepted'
             })
-
-            await client.close()
-
-            // Invalidate profile cache for both users
+// Invalidate profile cache for both users
             await cacheInvalidate(`profile:*`)
 
             return res.json({
@@ -948,10 +925,7 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
                 await db.collection('followRequests').deleteOne({
                     _id: existingRequest._id
                 })
-
-                await client.close()
-
-                // Invalidate profile cache
+// Invalidate profile cache
                 await cacheInvalidate(`profile:*`)
 
                 return res.json({
@@ -976,10 +950,7 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
                     created_at: new Date(),
                     updated_at: new Date()
                 })
-
-                await client.close()
-
-                // Send notification (non-blocking)
+// Send notification (non-blocking)
                 setImmediate(async () => {
                     try {
                         const { createNotification } = require('../lib/notifications');
@@ -1034,10 +1005,7 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
                     follower_id: new ObjectId(userId),
                     following_id: new ObjectId(currentUserId)
                 })
-
-                await client.close()
-
-                // Invalidate profile cache
+// Invalidate profile cache
                 await cacheInvalidate(`profile:*`)
 
                 // Create notification (non-blocking)
@@ -1072,8 +1040,7 @@ router.get('/:userId/follow-status', authenticate, async (req: any, res: Respons
         const currentUserId = req.userId
         const { userId } = req.params
 
-        const client = await MongoClient.connect(MONGODB_URI)
-        const db = client.db()
+        const db = await getDatabase()
 
         // Check if current user follows target user
         const isFollowing = await db.collection('follows').findOne({
@@ -1093,10 +1060,7 @@ router.get('/:userId/follow-status', authenticate, async (req: any, res: Respons
             requested_id: new ObjectId(userId),
             status: 'pending'
         })
-
-        await client.close()
-
-        return res.json({
+return res.json({
             isFollowing: !!isFollowing,
             isPending: !!pendingRequest,
             followsBack: !!followsBack,
@@ -1114,8 +1078,7 @@ router.delete('/:userId/follow', authenticate, async (req: any, res: Response) =
         const currentUserId = req.userId
         const { userId } = req.params
 
-        const client = await MongoClient.connect(MONGODB_URI)
-        const db = client.db()
+        const db = await getDatabase()
 
         // Remove from following
         await db.collection('follows').deleteOne({
@@ -1132,10 +1095,7 @@ router.delete('/:userId/follow', authenticate, async (req: any, res: Response) =
             { _id: new ObjectId(userId) },
             { $inc: { followers: -1 } }
         )
-
-        await client.close()
-
-        return res.json({ message: 'Unfollowed successfully' })
+return res.json({ message: 'Unfollowed successfully' })
     } catch (error: any) {
         console.error('Unfollow error:', error)
         return res.status(500).json({ message: error.message || 'Failed to unfollow user' })
@@ -1157,14 +1117,12 @@ router.get('/:userId/followers', authenticate, async (req: any, res: Response) =
             return res.json(cached)
         }
 
-        const client = await MongoClient.connect(MONGODB_URI)
-        const db = client.db()
+        const db = await getDatabase()
 
         // Check if target user is private
         const targetUser = await db.collection('users').findOne({ _id: new ObjectId(userId) })
         if (!targetUser) {
-            await client.close()
-            return res.status(404).json({ message: 'User not found' })
+return res.status(404).json({ message: 'User not found' })
         }
 
         const isPrivate = targetUser.is_private || false
@@ -1184,8 +1142,7 @@ router.get('/:userId/followers', authenticate, async (req: any, res: Response) =
         // If private account, check if current user is following
         if (isPrivate && !isOwnProfile) {
             if (!currentUserId) {
-                await client.close()
-                return res.status(403).json({ message: 'This account is private' })
+return res.status(403).json({ message: 'This account is private' })
             }
 
             const isFollowing = await db.collection('follows').findOne({
@@ -1195,8 +1152,7 @@ router.get('/:userId/followers', authenticate, async (req: any, res: Response) =
             })
 
             if (!isFollowing) {
-                await client.close()
-                return res.status(403).json({ message: 'This account is private' })
+return res.status(403).json({ message: 'This account is private' })
             }
         }
 
@@ -1221,10 +1177,7 @@ router.get('/:userId/followers', authenticate, async (req: any, res: Response) =
         }).toArray() : []
 
         const followingIds = new Set(currentUserFollowing.map(f => f.following_id.toString()))
-
-        await client.close()
-
-        const result = followers.map(user => ({
+const result = followers.map(user => ({
             id: user._id.toString(),
             username: user.username,
             full_name: user.name || user.full_name || '',
@@ -1253,8 +1206,7 @@ router.get('/:userId/followers', authenticate, async (req: any, res: Response) =
 router.get('/:userId/followers/debug', async (req: Request, res: Response) => {
     try {
         const { userId } = req.params
-        const client = await MongoClient.connect(MONGODB_URI)
-        const db = client.db()
+        const db = await getDatabase()
 
         // Get all follow records
         const follows = await db.collection('follows').find({
@@ -1273,10 +1225,7 @@ router.get('/:userId/followers/debug', async (req: Request, res: Response) => {
         const userProfile = await db.collection('users').findOne({
             _id: new ObjectId(userId)
         })
-
-        await client.close()
-
-        return res.json({
+return res.json({
             userId,
             followRecordsCount: follows.length,
             followRecords: follows.map(f => ({
@@ -1306,14 +1255,12 @@ router.get('/:userId/following', authenticate, async (req: any, res: Response) =
         const { userId } = req.params
         const currentUserId = req.userId // From auth middleware
 
-        const client = await MongoClient.connect(MONGODB_URI)
-        const db = client.db()
+        const db = await getDatabase()
 
         // Check if target user is private
         const targetUser = await db.collection('users').findOne({ _id: new ObjectId(userId) })
         if (!targetUser) {
-            await client.close()
-            return res.status(404).json({ message: 'User not found' })
+return res.status(404).json({ message: 'User not found' })
         }
 
         const isPrivate = targetUser.is_private || false
@@ -1333,8 +1280,7 @@ router.get('/:userId/following', authenticate, async (req: any, res: Response) =
         // If private account, check if current user is following
         if (isPrivate && !isOwnProfile) {
             if (!currentUserId) {
-                await client.close()
-                return res.status(403).json({ message: 'This account is private' })
+return res.status(403).json({ message: 'This account is private' })
             }
 
             const isFollowing = await db.collection('follows').findOne({
@@ -1344,8 +1290,7 @@ router.get('/:userId/following', authenticate, async (req: any, res: Response) =
             })
 
             if (!isFollowing) {
-                await client.close()
-                return res.status(403).json({ message: 'This account is private' })
+return res.status(403).json({ message: 'This account is private' })
             }
         }
 
@@ -1361,9 +1306,7 @@ router.get('/:userId/following', authenticate, async (req: any, res: Response) =
 
         // For following list, all users are already being followed (isFollowing = true)
         // This is because we're showing who the user is following
-        await client.close()
-
-        const result = following.map(user => ({
+const result = following.map(user => ({
             id: user._id.toString(),
             username: user.username,
             full_name: user.name || user.full_name || '',
@@ -1386,8 +1329,7 @@ router.delete('/delete', authenticate, async (req: any, res: Response) => {
     try {
         const userId = req.userId
 
-        const client = await MongoClient.connect(MONGODB_URI)
-        const db = client.db()
+        const db = await getDatabase()
 
         // Delete user
         await db.collection('users').deleteOne({ _id: new ObjectId(userId) })
@@ -1402,10 +1344,7 @@ router.delete('/delete', authenticate, async (req: any, res: Response) => {
                 { following_id: new ObjectId(userId) }
             ]
         })
-
-        await client.close()
-
-        return res.json({ message: 'Account deleted successfully' })
+return res.json({ message: 'Account deleted successfully' })
     } catch (error: any) {
         console.error('Delete account error:', error)
         return res.status(500).json({ message: error.message || 'Failed to delete account' })
@@ -1416,7 +1355,7 @@ router.delete('/delete', authenticate, async (req: any, res: Response) => {
 router.get('/blocked', authenticate, async (req: any, res: Response) => {
     try {
         const userId = req.userId
-        const db = await getDb()
+        const db = await getDatabase()
 
         const blocks = await db.collection('blocked_users').find({
             userId: new ObjectId(userId)
@@ -1452,7 +1391,7 @@ router.post('/:userId/block', authenticate, async (req: any, res: Response) => {
             return res.status(400).json({ message: 'Cannot block yourself' })
         }
 
-        const db = await getDb()
+        const db = await getDatabase()
         const targetUserId = new ObjectId(userId)
 
         // Check if already blocked
@@ -1496,7 +1435,7 @@ router.post('/:userId/block', authenticate, async (req: any, res: Response) => {
 router.get('/restricted', authenticate, async (req: any, res: Response) => {
     try {
         const userId = req.userId
-        const db = await getDb()
+        const db = await getDatabase()
 
         const restrictions = await db.collection('restricted_users').find({
             userId: new ObjectId(userId)
@@ -1532,7 +1471,7 @@ router.post('/:userId/restrict', authenticate, async (req: any, res: Response) =
             return res.status(400).json({ message: 'Cannot restrict yourself' })
         }
 
-        const db = await getDb()
+        const db = await getDatabase()
         const targetUserId = new ObjectId(userId)
 
         // Check if already restricted
@@ -1581,8 +1520,7 @@ router.get('/:userId/posts', async (req: any, res: Response) => {
             return res.json(cached)
         }
 
-        const client = await MongoClient.connect(MONGODB_URI)
-        const db = client.db()
+        const db = await getDatabase()
 
         // Check if userId is an ObjectId or username
         let userObjectId: ObjectId
@@ -1595,15 +1533,13 @@ router.get('/:userId/posts', async (req: any, res: Response) => {
             // It's a username, look up the user
             targetUser = await db.collection('users').findOne({ username: userId })
             if (!targetUser) {
-                await client.close()
-                return res.status(404).json({ success: false, message: 'User not found' })
+return res.status(404).json({ success: false, message: 'User not found' })
             }
             userObjectId = targetUser._id
         }
 
         if (!targetUser) {
-            await client.close()
-            return res.status(404).json({ success: false, message: 'User not found' })
+return res.status(404).json({ success: false, message: 'User not found' })
         }
 
         // Get current user ID from token (optional)
@@ -1633,8 +1569,7 @@ router.get('/:userId/posts', async (req: any, res: Response) => {
 
             if (!isFollowing) {
                 // Private account and not following - return empty
-                await client.close()
-                return res.json({
+return res.json({
                     success: true,
                     data: [],
                     pagination: {
@@ -1719,10 +1654,7 @@ router.get('/:userId/posts', async (req: any, res: Response) => {
                 }
             })
         )
-
-        await client.close()
-
-        const response = {
+const response = {
             success: true,
             data: postsWithCounts,
             pagination: {
@@ -1758,7 +1690,7 @@ router.post('/conversations', authenticate, async (req: any, res: Response) => {
             return res.status(400).json({ message: 'Cannot create conversation with yourself' })
         }
 
-        const db = await getDb()
+        const db = await getDatabase()
 
         // Get both users
         const [currentUser, recipient] = await Promise.all([
@@ -1845,7 +1777,7 @@ router.post('/conversations', authenticate, async (req: any, res: Response) => {
 router.get('/message-requests', authenticate, async (req: any, res: Response) => {
     try {
         const userId = req.userId
-        const db = await getDb()
+        const db = await getDatabase()
 
         // Get message requests where user is recipient and not mutual followers
         const requests = await db.collection('message_requests').find({
@@ -1890,7 +1822,7 @@ router.post('/message-requests/:requestId/accept', authenticate, async (req: any
     try {
         const userId = req.userId
         const { requestId } = req.params
-        const db = await getDb()
+        const db = await getDatabase()
 
         const request = await db.collection('message_requests').findOne({
             _id: new ObjectId(requestId),
@@ -1936,7 +1868,7 @@ router.delete('/message-requests/:requestId', authenticate, async (req: any, res
     try {
         const userId = req.userId
         const { requestId } = req.params
-        const db = await getDb()
+        const db = await getDatabase()
 
         const result = await db.collection('message_requests').deleteOne({
             _id: new ObjectId(requestId),
@@ -1962,7 +1894,7 @@ router.post('/message-requests/:requestId/block', authenticate, async (req: any,
     try {
         const userId = req.userId
         const { requestId } = req.params
-        const db = await getDb()
+        const db = await getDatabase()
 
         const request = await db.collection('message_requests').findOne({
             _id: new ObjectId(requestId),
@@ -2009,7 +1941,7 @@ router.post('/message-requests/:requestId/report', authenticate, async (req: any
         const userId = req.userId
         const { requestId } = req.params
         const { reason } = req.body
-        const db = await getDb()
+        const db = await getDatabase()
 
         const request = await db.collection('message_requests').findOne({
             _id: new ObjectId(requestId),
@@ -2051,7 +1983,7 @@ router.put('/privacy', authenticate, async (req: any, res: Response) => {
     try {
         const userId = req.userId
         const { isPrivate } = req.body
-        const db = await getDb()
+        const db = await getDatabase()
 
         await db.collection('users').updateOne(
             { _id: new ObjectId(userId) },
@@ -2073,7 +2005,7 @@ router.put('/privacy', authenticate, async (req: any, res: Response) => {
 router.get('/follow-requests', authenticate, async (req: any, res: Response) => {
     try {
         const currentUserId = req.userId
-        const db = await getDb()
+        const db = await getDatabase()
 
         const requests = await db.collection('followRequests').find({
             requested_id: new ObjectId(currentUserId),
@@ -2125,7 +2057,7 @@ router.post('/follow-requests/:requestId/approve', authenticate, async (req: any
     try {
         const currentUserId = req.userId
         const { requestId } = req.params
-        const db = await getDb()
+        const db = await getDatabase()
 
         // Find the request
         const request = await db.collection('followRequests').findOne({
@@ -2193,7 +2125,7 @@ router.post('/follow-requests/:requestId/decline', authenticate, async (req: any
     try {
         const currentUserId = req.userId
         const { requestId } = req.params
-        const db = await getDb()
+        const db = await getDatabase()
 
         // Find the request
         const request = await db.collection('followRequests').findOne({
@@ -2238,7 +2170,7 @@ router.get('/:userId/follow-request-status', authenticate, async (req: any, res:
     try {
         const currentUserId = req.userId
         const { userId } = req.params
-        const db = await getDb()
+        const db = await getDatabase()
 
         // Check for pending request
         const request = await db.collection('followRequests').findOne({
@@ -2282,7 +2214,7 @@ router.post('/push-token', authenticate, async (req: any, res: Response) => {
 
         console.log('[PUSH TOKEN] Registering token for user:', userId, 'Platform:', platform)
 
-        const db = await getDb()
+        const db = await getDatabase()
 
         // Update user's push token
         await db.collection('users').updateOne(
@@ -2323,7 +2255,7 @@ router.post('/fcm-token', authenticate, async (req: any, res: Response) => {
 
         console.log('[FCM] Registering token for user:', userId)
 
-        const db = await getDb()
+        const db = await getDatabase()
 
         // Update user's FCM token
         await db.collection('users').updateOne(
@@ -2358,7 +2290,7 @@ router.delete('/fcm-token', authenticate, async (req: any, res: Response) => {
 
         console.log('[FCM] Unregistering token for user:', userId)
 
-        const db = await getDb()
+        const db = await getDatabase()
 
         // Remove user's FCM token
         await db.collection('users').updateOne(
@@ -2391,7 +2323,7 @@ router.delete('/delete', authenticate, async (req: any, res: Response) => {
     try {
         const userId = req.userId
         const { password } = req.body
-        const db = await getDb()
+        const db = await getDatabase()
 
         // 1. Verify user exists and password is correct
         const user = await db.collection('users').findOne({ _id: new ObjectId(userId) })
@@ -2482,7 +2414,7 @@ router.post('/change-password', authenticate, async (req: any, res: Response) =>
             return res.status(400).json({ message: 'Password must be at least 6 characters' })
         }
 
-        const db = await getDb()
+        const db = await getDatabase()
         const user = await db.collection('users').findOne({ _id: new ObjectId(userId) })
 
         if (!user) {
@@ -2522,7 +2454,7 @@ router.post('/change-password', authenticate, async (req: any, res: Response) =>
 router.get('/muted', authenticate, async (req: any, res: Response) => {
     try {
         const userId = req.userId
-        const db = await getDb()
+        const db = await getDatabase()
 
         // Get muted user IDs
         const mutedRecords = await db.collection('muted').find({
@@ -2563,7 +2495,7 @@ router.post('/:userId/mute', authenticate, async (req: any, res: Response) => {
             return res.status(400).json({ message: 'Cannot mute yourself' })
         }
 
-        const db = await getDb()
+        const db = await getDatabase()
 
         // Check if already muted
         const existingMute = await db.collection('muted').findOne({
@@ -2599,7 +2531,7 @@ router.post('/:userId/mute', authenticate, async (req: any, res: Response) => {
 router.get('/login-activity', authenticate, async (req: any, res: Response) => {
     try {
         const userId = req.userId
-        const db = await getDb()
+        const db = await getDatabase()
 
         const activity = await db.collection('loginActivity').find({
             userId: new ObjectId(userId)
@@ -2625,7 +2557,7 @@ router.patch('/me', authenticate, async (req: any, res: Response) => {
         const userId = req.userId
         const { name, username, email, bio, website, gender, birthday, location } = req.body
 
-        const db = await getDb()
+        const db = await getDatabase()
 
         const updateData: any = { updatedAt: new Date() }
         if (name !== undefined) {
@@ -2643,7 +2575,8 @@ router.patch('/me', authenticate, async (req: any, res: Response) => {
             }
             updateData.username = username
         }
-        if (email !== undefined) updateData.email = email
+        // Email is non-editable for security reasons
+        // if (email !== undefined) updateData.email = email
         if (bio !== undefined) updateData.bio = bio
         if (website !== undefined) updateData.website = website
         if (gender !== undefined) updateData.gender = gender
@@ -2691,7 +2624,7 @@ router.patch('/me', authenticate, async (req: any, res: Response) => {
 router.post('/me/toggle-anonymous', authenticate, async (req: any, res: Response) => {
     try {
         const userId = req.userId;
-        const db = await getDb();
+        const db = await getDatabase();
 
         const user = await db.collection('users').findOne({ _id: new ObjectId(userId) });
         if (!user) return res.status(404).json({ message: 'User not found' });
@@ -2734,7 +2667,7 @@ router.get('/:username/posts', authenticate, async (req: any, res: Response) => 
     try {
         const { username } = req.params
         const currentUserId = req.userId
-        const db = await getDb()
+        const db = await getDatabase()
 
         // Find user by username
         const targetUser = await db.collection('users').findOne({ username })

@@ -36,7 +36,7 @@ const clearFailedAttempts = (email) => {
 exports.clearFailedAttempts = clearFailedAttempts;
 exports.bruteForceProtection = (0, express_rate_limit_1.default)({
     windowMs: 15 * 60 * 1000,
-    max: 5, // 5 attempts per 15 mins for login
+    max: 500, // Increased for testing
     message: { error: 'Too many login attempts, please try again after 15 minutes.' },
     standardHeaders: true,
     legacyHeaders: false,

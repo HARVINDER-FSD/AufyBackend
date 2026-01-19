@@ -19,7 +19,7 @@ router.get("/my-comments", auth_1.authenticateToken, (req, res) => __awaiter(voi
     try {
         let userId = req.userId;
         const page = Number.parseInt(req.query.page) || 1;
-        const limit = Number.parseInt(req.query.limit) || 20;
+        const limit = Math.min(Number.parseInt(req.query.limit) || 20, 100);
         const skip = (page - 1) * limit;
         const db = yield (0, database_1.getDatabase)();
         console.log('[Comments/MyComments] Raw userId:', userId, 'Type:', typeof userId);

@@ -21,7 +21,7 @@ import cors from 'cors'
 import cookieParser from 'cookie-parser'
 import mongoose from 'mongoose'
 import { initializeWebSocket } from './lib/websocket'
-import { initRedis } from './lib/redis'
+import { initRedis, getRedis } from './lib/redis'
 import { recordMetric, getPerformanceSummary, checkPerformanceTargets } from './lib/performance-monitor'
 import authRoutes from './routes/auth'
 import usersRoutes from './routes/users'
@@ -66,8 +66,38 @@ const PORT = parseInt(process.env.PORT || '8000')
 // Initialize Firebase for push notifications
 initializeFirebase()
 
-// Initialize Redis for caching
 initRedis()
+
+let redisHealthy = false
+let redisLastCheck = 0
+
+const REDIS_CHECK_INTERVAL = 5000
+const REDIS_CHECK_TIMEOUT = 150
+
+const redisClient = getRedis()
+
+const checkRedis = async () => {
+  if (!redisClient || typeof (redisClient as any).ping !== 'function') {
+    redisHealthy = false
+    redisLastCheck = Date.now()
+    return
+  }
+  try {
+    const pingPromise = (redisClient as any).ping()
+    const timeoutPromise = new Promise((resolve) =>
+      setTimeout(() => resolve('timeout'), REDIS_CHECK_TIMEOUT)
+    )
+    const result = await Promise.race([pingPromise, timeoutPromise])
+    redisHealthy = result !== 'timeout'
+  } catch {
+    redisHealthy = false
+  } finally {
+    redisLastCheck = Date.now()
+  }
+}
+
+checkRedis()
+setInterval(checkRedis, REDIS_CHECK_INTERVAL).unref()
 
 // Initialize WebSocket server
 const io = initializeWebSocket(httpServer)
@@ -83,12 +113,16 @@ mongoose.connect(MONGODB_URI, {
   .then(async () => {
     console.log('✅ MongoDB connected successfully')
 
-    // Create indexes for faster queries
     try {
       const db = mongoose.connection.db
       if (db) {
         await db.collection('users').createIndex({ email: 1 }, { unique: true })
         await db.collection('users').createIndex({ username: 1 }, { unique: true })
+        await db.collection('users').createIndex({ created_at: -1 })
+        await db.collection('notifications').createIndex({ userId: 1, createdAt: -1 })
+        await db.collection('notifications').createIndex({ userId: 1, isRead: 1, createdAt: -1 })
+        await db.collection('follows').createIndex({ followerId: 1 })
+        await db.collection('follows').createIndex({ followingId: 1 })
         console.log('✅ Database indexes created')
       }
     } catch (error) {
@@ -109,10 +143,12 @@ import {
   csrfProtection,
   ipFilter,
   detectSuspiciousActivity,
-  secureSession
+  secureSession,
+  securityHeaders
 } from './middleware/security'
 
 // Middleware
+app.use(securityHeaders) // Helmet security headers
 app.use(cors({
   origin: '*', // Allow all origins for mobile app compatibility
   credentials: true,
@@ -125,7 +161,17 @@ app.use(xssProtection as any)
 app.use(ipFilter as any)
 app.use(detectSuspiciousActivity as any)
 app.use(sanitizeInput as any)
-app.use(rateLimiter(100, 60000) as any) // 100 requests per minute
+
+// Global rate limiting:
+// - Production: 100 req/min (per IP)
+// - Non‑production (local/testing): very high limit to avoid 429 during load tests
+const isProduction = process.env.NODE_ENV === 'production'
+if (isProduction) {
+  app.use(rateLimiter(100, 60000) as any)
+} else {
+  app.use(rateLimiter(100000, 60000) as any)
+}
+
 app.use(validateRequestSignature as any)
 app.use(csrfProtection as any)
 app.use(secureSession as any)
@@ -176,23 +222,10 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument))
 
 app.use(express.static(path.join(__dirname, '..', 'public')))
 
-// Health check
 app.get('/health', async (_req, res) => {
-  const dbStatus = mongoose.connection.readyState === 1;
-  let redisStatus = false;
-  try {
-    const { getRedis } = await import('./lib/redis');
-    const redis = getRedis();
-    if (redis) {
-      // @ts-ignore
-      await (redis as any).ping();
-      redisStatus = true;
-    }
-  } catch (err) {
-    logger.warn('Health check Redis Error:', err);
-  }
-
-  const status = dbStatus && redisStatus ? 'ok' : 'degraded';
+  const dbStatus = mongoose.connection.readyState === 1
+  const redisStatus = redisHealthy
+  const status = dbStatus && redisStatus ? 'ok' : 'degraded'
   res.status(status === 'ok' ? 200 : 503).json({
     status,
     timestamp: new Date().toISOString(),

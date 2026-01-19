@@ -247,6 +247,11 @@ const userSchema = new mongoose.Schema({
   }
 });
 
+userSchema.index({ username: 1 });
+userSchema.index({ full_name: 1 });
+userSchema.index({ is_verified: -1, created_at: -1 });
+userSchema.index({ created_at: -1 });
+
 // Pre-save middleware to hash password
 userSchema.pre('save', async function (next) {
   // Only hash the password if it's modified or new

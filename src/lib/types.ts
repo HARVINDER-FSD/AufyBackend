@@ -33,6 +33,9 @@ export interface Post {
   likes_count?: number
   comments_count?: number
   is_liked?: boolean
+  userReaction?: string | null
+  reactions?: { [key: string]: number }
+  likedBy?: any[]
 }
 
 export interface Comment {

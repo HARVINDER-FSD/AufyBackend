@@ -62,15 +62,12 @@ router.get("/", auth_1.optionalAuth, (req, res) => __awaiter(void 0, void 0, voi
         // Get following list if user is authenticated
         let followingIds = [];
         if (currentUserId) {
-            const { MongoClient, ObjectId } = require('mongodb');
-            const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/socialmedia';
-            const client = yield MongoClient.connect(MONGODB_URI);
-            const db = client.db();
+            const { ObjectId } = require('mongodb');
+            const db = yield (0, database_1.getDatabase)();
             const follows = yield db.collection('follows').find({
                 followerId: new ObjectId(currentUserId)
             }).toArray();
             followingIds = follows.map((f) => f.followingId.toString());
-            yield client.close();
         }
         // Get active stories (not expired)
         const stories = yield Story.find({

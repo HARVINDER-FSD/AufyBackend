@@ -66,4 +66,6 @@ const notificationSchema = new mongoose_1.Schema({
 }, {
     timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' }
 });
+// Index for better query performance
+notificationSchema.index({ user_id: 1, created_at: -1 });
 exports.default = mongoose_1.default.model('Notification', notificationSchema);

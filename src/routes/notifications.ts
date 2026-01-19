@@ -1,13 +1,13 @@
 // Notifications API Routes
 import express, { Response } from 'express';
-import { MongoClient, ObjectId } from 'mongodb';
+import { ObjectId } from 'mongodb';
 import { maskAnonymousUser } from '../lib/anonymous-utils';
 import authenticateToken from '../middleware/auth';
+import { getDatabase } from '../lib/database';
 
 const authenticate = authenticateToken;
 
 const router = express.Router();
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/social-media';
 
 // GET /api/notifications - Get all notifications for current user
 router.get('/', authenticate, async (req: any, res: Response) => {
@@ -15,8 +15,12 @@ router.get('/', authenticate, async (req: any, res: Response) => {
     const userId = req.userId;
     const { limit = 50, skip = 0, unreadOnly = false } = req.query;
 
-    const client = await MongoClient.connect(MONGODB_URI);
-    const db = client.db();
+    const rawLimit = Number(limit) || 50;
+    const safeLimit = Math.min(Math.max(rawLimit, 1), 100);
+    const rawSkip = Number(skip) || 0;
+    const safeSkip = Math.max(rawSkip, 0);
+
+    const db = await getDatabase();
 
     const query: any = { userId: new ObjectId(userId) };
     if (unreadOnly === 'true') {
@@ -28,8 +32,8 @@ router.get('/', authenticate, async (req: any, res: Response) => {
       .aggregate([
         { $match: query },
         { $sort: { createdAt: -1 } },
-        { $skip: Number(skip) },
-        { $limit: Number(limit) },
+        { $skip: safeSkip },
+        { $limit: safeLimit },
         {
           $lookup: {
             from: 'users',
@@ -78,8 +82,6 @@ router.get('/', authenticate, async (req: any, res: Response) => {
       isRead: false
     });
 
-    await client.close();
-
     // Format notifications
     const formattedNotifications = notifications.map(notif => {
       const masked = maskAnonymousUser({
@@ -118,7 +120,7 @@ router.get('/', authenticate, async (req: any, res: Response) => {
     res.json({
       notifications: formattedNotifications,
       unreadCount,
-      hasMore: notifications.length === Number(limit)
+      hasMore: notifications.length === safeLimit
     });
   } catch (error: any) {
     console.error('Get notifications error:', error);
@@ -131,15 +133,12 @@ router.get('/unread-count', authenticate, async (req: any, res: Response) => {
   try {
     const userId = req.userId;
 
-    const client = await MongoClient.connect(MONGODB_URI);
-    const db = client.db();
+    const db = await getDatabase();
 
     const unreadCount = await db.collection('notifications').countDocuments({
       userId: new ObjectId(userId),
       isRead: false
     });
-
-    await client.close();
 
     res.json({ unreadCount });
   } catch (error: any) {
@@ -154,8 +153,7 @@ router.put('/:notificationId/read', authenticate, async (req: any, res: Response
     const userId = req.userId;
     const { notificationId } = req.params;
 
-    const client = await MongoClient.connect(MONGODB_URI);
-    const db = client.db();
+    const db = await getDatabase();
 
     const result = await db.collection('notifications').updateOne(
       {
@@ -169,8 +167,6 @@ router.put('/:notificationId/read', authenticate, async (req: any, res: Response
         }
       }
     );
-
-    await client.close();
 
     if (result.matchedCount === 0) {
       return res.status(404).json({ message: 'Notification not found' });
@@ -188,8 +184,7 @@ router.put('/read-all', authenticate, async (req: any, res: Response) => {
   try {
     const userId = req.userId;
 
-    const client = await MongoClient.connect(MONGODB_URI);
-    const db = client.db();
+    const db = await getDatabase();
 
     await db.collection('notifications').updateMany(
       {
@@ -204,8 +199,6 @@ router.put('/read-all', authenticate, async (req: any, res: Response) => {
       }
     );
 
-    await client.close();
-
     res.json({ message: 'All notifications marked as read' });
   } catch (error: any) {
     console.error('Mark all notifications as read error:', error);
@@ -219,15 +212,12 @@ router.delete('/:notificationId', authenticate, async (req: any, res: Response) 
     const userId = req.userId;
     const { notificationId } = req.params;
 
-    const client = await MongoClient.connect(MONGODB_URI);
-    const db = client.db();
+    const db = await getDatabase();
 
     const result = await db.collection('notifications').deleteOne({
       _id: new ObjectId(notificationId),
       userId: new ObjectId(userId)
     });
-
-    await client.close();
 
     if (result.deletedCount === 0) {
       return res.status(404).json({ message: 'Notification not found' });

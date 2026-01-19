@@ -19,27 +19,10 @@ const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const redis_1 = require("../lib/redis");
 const validate_1 = require("../middleware/validate");
+const database_1 = require("../lib/database");
 const joi_1 = __importDefault(require("joi"));
 const router = (0, express_1.Router)();
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/socialmedia';
 const JWT_SECRET = process.env.JWT_SECRET || '4d9f1c8c6b27a67e9f3a81d2e5b0f78c72d1e7a64d59c83fb20e5a72a8c4d192';
-// Connection pool - reuse connections
-let cachedClient = null;
-let cachedDb = null;
-function getDb() {
-    return __awaiter(this, void 0, void 0, function* () {
-        if (cachedDb && cachedClient) {
-            return cachedDb;
-        }
-        cachedClient = yield mongodb_1.MongoClient.connect(MONGODB_URI, {
-            maxPoolSize: 10,
-            minPoolSize: 2
-        });
-        cachedDb = cachedClient.db();
-        console.log('✅ MongoDB connection pool established');
-        return cachedDb;
-    });
-}
 // Simple auth middleware
 const authenticate = (req, res, next) => {
     try {
@@ -65,7 +48,7 @@ const authenticate = (req, res, next) => {
         try {
             const { token, platform } = req.body;
             const userId = req.params.id;
-            const db = yield getDb();
+            const db = yield (0, database_1.getDatabase)();
             const result = yield db.collection('users').updateOne({ _id: new mongodb_1.ObjectId(userId) }, { $set: { pushToken: token, pushTokenPlatform: platform, pushTokenUpdatedAt: new Date() } });
             if (result.matchedCount === 0)
                 return res.status(404).json({ message: 'User not found' });
@@ -87,7 +70,7 @@ router.get('/me', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, 
         if (cached) {
             return res.json(cached);
         }
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         const user = yield db.collection('users').findOne({ _id: new mongodb_1.ObjectId(userId) }, { projection: { password: 0 } });
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
@@ -141,8 +124,8 @@ router.get('/me', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, 
 // GET /api/users/list - List following users (for sharing, etc.)
 router.get('/list', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        const db = yield getDb();
-        const limit = parseInt(req.query.limit) || 50;
+        const db = yield (0, database_1.getDatabase)();
+        const limit = Math.min(parseInt(req.query.limit) || 50, 100);
         const mutual = req.query.mutual === 'true';
         const currentUserId = new mongodb_1.ObjectId(req.userId);
         let users = [];
@@ -243,11 +226,9 @@ router.get('/username/:username', (req, res) => __awaiter(void 0, void 0, void 0
             console.log(`✅ Cache hit for profile: ${username}`);
             return res.json(cached);
         }
-        const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
-        const db = client.db();
+        const db = yield (0, database_1.getDatabase)();
         const user = yield db.collection('users').findOne({ username });
         if (!user) {
-            yield client.close();
             return res.status(404).json({ message: 'User not found' });
         }
         // Check follow status if user is logged in
@@ -299,7 +280,6 @@ router.get('/username/:username', (req, res) => __awaiter(void 0, void 0, void 0
             user_id: user._id,
             is_archived: { $ne: true }
         });
-        yield client.close();
         const response = {
             _id: user._id.toString(),
             id: user._id.toString(),
@@ -343,6 +323,8 @@ router.get('/username/:username', (req, res) => __awaiter(void 0, void 0, void 0
 router.get('/:userId/mutual-followers', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { userId } = req.params;
+        const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+        const skip = parseInt(req.query.skip) || 0;
         // Validate ObjectId format
         if (!mongodb_1.ObjectId.isValid(userId)) {
             return res.status(400).json({
@@ -351,32 +333,64 @@ router.get('/:userId/mutual-followers', authenticate, (req, res) => __awaiter(vo
                 data: []
             });
         }
-        const db = yield getDb();
-        // Get users that this user follows
-        const following = yield db.collection('follows').find({
-            follower_id: new mongodb_1.ObjectId(userId)
-        }).toArray();
-        const followingIds = following.map(f => f.following_id.toString());
-        // Get users that follow this user
-        const followers = yield db.collection('follows').find({
-            following_id: new mongodb_1.ObjectId(userId)
-        }).toArray();
-        const followerIds = followers.map(f => f.follower_id.toString());
-        // Find mutual followers (intersection)
-        const mutualIds = followingIds.filter(id => followerIds.includes(id));
-        // Get user details for mutual followers
-        const mutualUsers = yield db.collection('users').find({
-            _id: { $in: mutualIds.map(id => new mongodb_1.ObjectId(id)) }
-        }).project({
-            password: 0
-        }).toArray();
+        const db = yield (0, database_1.getDatabase)();
+        // Optimized Mutual Followers with Aggregation
+        // Find users I follow (follower_id = userId) who also follow me (following_id = userId)
+        const mutualUsers = yield db.collection('follows').aggregate([
+            { $match: { follower_id: new mongodb_1.ObjectId(userId) } }, // 1. Users userId follows
+            {
+                $lookup: {
+                    from: 'follows',
+                    let: { their_id: '$following_id' },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $and: [
+                                        { $eq: ['$follower_id', '$$their_id'] },
+                                        { $eq: ['$following_id', new mongodb_1.ObjectId(userId)] }
+                                    ]
+                                }
+                            }
+                        }
+                    ],
+                    as: 'mutual_relation'
+                }
+            },
+            { $match: { 'mutual_relation.0': { $exists: true } } }, // 2. Must be mutual
+            { $skip: skip },
+            { $limit: limit },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'following_id',
+                    foreignField: '_id',
+                    as: 'user_details'
+                }
+            },
+            { $unwind: '$user_details' },
+            {
+                $project: {
+                    _id: '$user_details._id',
+                    username: '$user_details.username',
+                    fullName: { $ifNull: ['$user_details.full_name', '$user_details.name'] },
+                    profileImage: {
+                        $ifNull: [
+                            '$user_details.avatar_url',
+                            { $ifNull: ['$user_details.avatar', '/placeholder-user.jpg'] }
+                        ]
+                    },
+                    isVerified: { $ifNull: ['$user_details.is_verified', '$user_details.verified'] }
+                }
+            }
+        ]).toArray();
         // Format response
         const formattedUsers = mutualUsers.map(user => ({
             _id: user._id.toString(),
             username: user.username,
-            fullName: user.full_name || user.fullName || user.name || '',
-            profileImage: user.avatar_url || user.avatar || user.profile_picture || user.profileImage || '/placeholder-user.jpg',
-            isVerified: user.is_verified || user.verified || false
+            fullName: user.fullName || '',
+            profileImage: user.profileImage,
+            isVerified: !!user.isVerified
         }));
         return res.json({
             success: true,
@@ -397,10 +411,8 @@ router.get('/:userId/mutual-followers', authenticate, (req, res) => __awaiter(vo
 router.get('/:userId([0-9a-fA-F]{24})', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { userId } = req.params;
-        const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
-        const db = client.db();
+        const db = yield (0, database_1.getDatabase)();
         const user = yield db.collection('users').findOne({ _id: new mongodb_1.ObjectId(userId) });
-        yield client.close();
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
         }
@@ -456,11 +468,9 @@ router.get('/:username', (req, res) => __awaiter(void 0, void 0, void 0, functio
         catch (err) {
             // Token is optional, continue without it
         }
-        const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
-        const db = client.db();
+        const db = yield (0, database_1.getDatabase)();
         const user = yield db.collection('users').findOne({ username });
         if (!user) {
-            yield client.close();
             return res.status(404).json({ message: 'User not found' });
         }
         // Check follow status if user is logged in
@@ -494,7 +504,6 @@ router.get('/:username', (req, res) => __awaiter(void 0, void 0, void 0, functio
             user_id: user._id,
             is_archived: { $ne: true }
         });
-        yield client.close();
         const avatarUrl = user.avatar_url || user.avatar || user.profile_picture || user.profileImage || '/placeholder-user.jpg';
         return res.json({
             _id: user._id.toString(),
@@ -545,8 +554,7 @@ router.put('/profile', authenticate, (req, res) => __awaiter(void 0, void 0, voi
             console.error('[Backend] Missing userId in request');
             return res.status(400).json({ message: 'Missing user ID' });
         }
-        const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
-        const db = client.db();
+        const db = yield (0, database_1.getDatabase)();
         const updateData = { updatedAt: new Date() };
         if (name !== undefined) {
             updateData.name = name;
@@ -599,7 +607,6 @@ router.put('/profile', authenticate, (req, res) => __awaiter(void 0, void 0, voi
         }
         if (!user) {
             console.error('[Backend] User not found with either ObjectId or string ID');
-            yield client.close();
             return res.status(404).json({ message: 'User not found' });
         }
         // Handle username change with 15-day restriction
@@ -608,7 +615,6 @@ router.put('/profile', authenticate, (req, res) => __awaiter(void 0, void 0, voi
             // Validate username format - only letters, numbers, underscore, and period
             const usernameRegex = /^[a-zA-Z0-9_.]+$/;
             if (!usernameRegex.test(username)) {
-                yield client.close();
                 return res.status(400).json({
                     message: 'Username can only contain letters, numbers, underscores (_), and periods (.)',
                     error: 'INVALID_USERNAME_FORMAT'
@@ -616,7 +622,6 @@ router.put('/profile', authenticate, (req, res) => __awaiter(void 0, void 0, voi
             }
             // Check username length (3-30 characters)
             if (username.length < 3 || username.length > 30) {
-                yield client.close();
                 return res.status(400).json({
                     message: 'Username must be between 3 and 30 characters',
                     error: 'INVALID_USERNAME_LENGTH'
@@ -649,7 +654,6 @@ router.put('/profile', authenticate, (req, res) => __awaiter(void 0, void 0, voi
                         }
                     }
                 }
-                yield client.close();
                 return res.status(400).json({
                     message: 'Username is already taken',
                     error: 'USERNAME_TAKEN',
@@ -662,7 +666,6 @@ router.put('/profile', authenticate, (req, res) => __awaiter(void 0, void 0, voi
             console.log('[Backend] Days since last username change:', daysSinceLastChange);
             if (daysSinceLastChange < 15) {
                 const daysRemaining = Math.ceil(15 - daysSinceLastChange);
-                yield client.close();
                 return res.status(400).json({
                     message: `You can only change your username once every 15 days. Please wait ${daysRemaining} more day${daysRemaining > 1 ? 's' : ''}.`,
                     error: 'USERNAME_CHANGE_TOO_SOON',
@@ -682,7 +685,6 @@ router.put('/profile', authenticate, (req, res) => __awaiter(void 0, void 0, voi
             user = yield db.collection('users').findOne(idQuery);
             if (!user) {
                 console.error('[Backend] User not found after update');
-                yield client.close();
                 return res.status(500).json({ message: 'Failed to retrieve updated user' });
             }
             console.log('[Backend] Updated user data:', {
@@ -696,7 +698,6 @@ router.put('/profile', authenticate, (req, res) => __awaiter(void 0, void 0, voi
                 website: user === null || user === void 0 ? void 0 : user.website,
                 location: user === null || user === void 0 ? void 0 : user.location
             });
-            yield client.close();
             // Add timestamp to avatar URLs for cache busting
             const timestamp = Date.now();
             const avatarUrl = (user === null || user === void 0 ? void 0 : user.avatar_url) || (user === null || user === void 0 ? void 0 : user.avatar) || '/placeholder-user.jpg';
@@ -724,7 +725,6 @@ router.put('/profile', authenticate, (req, res) => __awaiter(void 0, void 0, voi
         }
         catch (updateError) {
             console.error('[Backend] Error updating user:', updateError);
-            yield client.close();
             return res.status(500).json({ message: 'Failed to update profile' });
         }
     }
@@ -740,15 +740,13 @@ router.get('/search', (req, res) => __awaiter(void 0, void 0, void 0, function* 
         if (!q) {
             return res.status(400).json({ message: 'Search query required' });
         }
-        const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
-        const db = client.db();
+        const db = yield (0, database_1.getDatabase)();
         const users = yield db.collection('users').find({
             $or: [
                 { username: { $regex: q, $options: 'i' } },
                 { name: { $regex: q, $options: 'i' } }
             ]
         }).limit(20).toArray();
-        yield client.close();
         return res.json(users.map(user => ({
             id: user._id.toString(),
             username: user.username,
@@ -771,12 +769,10 @@ router.post('/:userId/follow', authenticate, (req, res) => __awaiter(void 0, voi
         if (currentUserId === userId) {
             return res.status(400).json({ message: 'Cannot follow yourself' });
         }
-        const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
-        const db = client.db();
+        const db = yield (0, database_1.getDatabase)();
         // Get target user to check if private
         const targetUser = yield db.collection('users').findOne({ _id: new mongodb_1.ObjectId(userId) });
         if (!targetUser) {
-            yield client.close();
             return res.status(404).json({ message: 'User not found' });
         }
         const isPrivate = targetUser.is_private || false;
@@ -816,7 +812,6 @@ router.post('/:userId/follow', authenticate, (req, res) => __awaiter(void 0, voi
                 following_id: new mongodb_1.ObjectId(userId),
                 status: 'accepted'
             });
-            yield client.close();
             // Invalidate profile cache for both users
             yield (0, redis_1.cacheInvalidate)(`profile:*`);
             return res.json({
@@ -841,7 +836,6 @@ router.post('/:userId/follow', authenticate, (req, res) => __awaiter(void 0, voi
                 yield db.collection('followRequests').deleteOne({
                     _id: existingRequest._id
                 });
-                yield client.close();
                 // Invalidate profile cache
                 yield (0, redis_1.cacheInvalidate)(`profile:*`);
                 return res.json({
@@ -864,7 +858,6 @@ router.post('/:userId/follow', authenticate, (req, res) => __awaiter(void 0, voi
                     created_at: new Date(),
                     updated_at: new Date()
                 });
-                yield client.close();
                 // Send notification (non-blocking)
                 setImmediate(() => __awaiter(void 0, void 0, void 0, function* () {
                     try {
@@ -911,7 +904,6 @@ router.post('/:userId/follow', authenticate, (req, res) => __awaiter(void 0, voi
                     follower_id: new mongodb_1.ObjectId(userId),
                     following_id: new mongodb_1.ObjectId(currentUserId)
                 });
-                yield client.close();
                 // Invalidate profile cache
                 yield (0, redis_1.cacheInvalidate)(`profile:*`);
                 // Create notification (non-blocking)
@@ -945,8 +937,7 @@ router.get('/:userId/follow-status', authenticate, (req, res) => __awaiter(void 
     try {
         const currentUserId = req.userId;
         const { userId } = req.params;
-        const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
-        const db = client.db();
+        const db = yield (0, database_1.getDatabase)();
         // Check if current user follows target user
         const isFollowing = yield db.collection('follows').findOne({
             follower_id: new mongodb_1.ObjectId(currentUserId),
@@ -963,7 +954,6 @@ router.get('/:userId/follow-status', authenticate, (req, res) => __awaiter(void 
             requested_id: new mongodb_1.ObjectId(userId),
             status: 'pending'
         });
-        yield client.close();
         return res.json({
             isFollowing: !!isFollowing,
             isPending: !!pendingRequest,
@@ -981,8 +971,7 @@ router.delete('/:userId/follow', authenticate, (req, res) => __awaiter(void 0, v
     try {
         const currentUserId = req.userId;
         const { userId } = req.params;
-        const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
-        const db = client.db();
+        const db = yield (0, database_1.getDatabase)();
         // Remove from following
         yield db.collection('follows').deleteOne({
             follower_id: new mongodb_1.ObjectId(currentUserId),
@@ -991,7 +980,6 @@ router.delete('/:userId/follow', authenticate, (req, res) => __awaiter(void 0, v
         // Update counts
         yield db.collection('users').updateOne({ _id: new mongodb_1.ObjectId(currentUserId) }, { $inc: { following: -1 } });
         yield db.collection('users').updateOne({ _id: new mongodb_1.ObjectId(userId) }, { $inc: { followers: -1 } });
-        yield client.close();
         return res.json({ message: 'Unfollowed successfully' });
     }
     catch (error) {
@@ -1012,12 +1000,10 @@ router.get('/:userId/followers', authenticate, (req, res) => __awaiter(void 0, v
             console.log(`✅ Cache hit for followers: ${userId}`);
             return res.json(cached);
         }
-        const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
-        const db = client.db();
+        const db = yield (0, database_1.getDatabase)();
         // Check if target user is private
         const targetUser = yield db.collection('users').findOne({ _id: new mongodb_1.ObjectId(userId) });
         if (!targetUser) {
-            yield client.close();
             return res.status(404).json({ message: 'User not found' });
         }
         const isPrivate = targetUser.is_private || false;
@@ -1033,7 +1019,6 @@ router.get('/:userId/followers', authenticate, (req, res) => __awaiter(void 0, v
         // If private account, check if current user is following
         if (isPrivate && !isOwnProfile) {
             if (!currentUserId) {
-                yield client.close();
                 return res.status(403).json({ message: 'This account is private' });
             }
             const isFollowing = yield db.collection('follows').findOne({
@@ -1042,7 +1027,6 @@ router.get('/:userId/followers', authenticate, (req, res) => __awaiter(void 0, v
                 status: 'accepted'
             });
             if (!isFollowing) {
-                yield client.close();
                 return res.status(403).json({ message: 'This account is private' });
             }
         }
@@ -1062,7 +1046,6 @@ router.get('/:userId/followers', authenticate, (req, res) => __awaiter(void 0, v
             status: 'accepted'
         }).toArray() : [];
         const followingIds = new Set(currentUserFollowing.map(f => f.following_id.toString()));
-        yield client.close();
         const result = followers.map(user => ({
             id: user._id.toString(),
             username: user.username,
@@ -1088,8 +1071,7 @@ router.get('/:userId/followers', authenticate, (req, res) => __awaiter(void 0, v
 router.get('/:userId/followers/debug', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { userId } = req.params;
-        const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
-        const db = client.db();
+        const db = yield (0, database_1.getDatabase)();
         // Get all follow records
         const follows = yield db.collection('follows').find({
             following_id: new mongodb_1.ObjectId(userId)
@@ -1104,7 +1086,6 @@ router.get('/:userId/followers/debug', (req, res) => __awaiter(void 0, void 0, v
         const userProfile = yield db.collection('users').findOne({
             _id: new mongodb_1.ObjectId(userId)
         });
-        yield client.close();
         return res.json({
             userId,
             followRecordsCount: follows.length,
@@ -1134,12 +1115,10 @@ router.get('/:userId/following', authenticate, (req, res) => __awaiter(void 0, v
     try {
         const { userId } = req.params;
         const currentUserId = req.userId; // From auth middleware
-        const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
-        const db = client.db();
+        const db = yield (0, database_1.getDatabase)();
         // Check if target user is private
         const targetUser = yield db.collection('users').findOne({ _id: new mongodb_1.ObjectId(userId) });
         if (!targetUser) {
-            yield client.close();
             return res.status(404).json({ message: 'User not found' });
         }
         const isPrivate = targetUser.is_private || false;
@@ -1155,7 +1134,6 @@ router.get('/:userId/following', authenticate, (req, res) => __awaiter(void 0, v
         // If private account, check if current user is following
         if (isPrivate && !isOwnProfile) {
             if (!currentUserId) {
-                yield client.close();
                 return res.status(403).json({ message: 'This account is private' });
             }
             const isFollowing = yield db.collection('follows').findOne({
@@ -1164,7 +1142,6 @@ router.get('/:userId/following', authenticate, (req, res) => __awaiter(void 0, v
                 status: 'accepted'
             });
             if (!isFollowing) {
-                yield client.close();
                 return res.status(403).json({ message: 'This account is private' });
             }
         }
@@ -1178,7 +1155,6 @@ router.get('/:userId/following', authenticate, (req, res) => __awaiter(void 0, v
         }).toArray();
         // For following list, all users are already being followed (isFollowing = true)
         // This is because we're showing who the user is following
-        yield client.close();
         const result = following.map(user => ({
             id: user._id.toString(),
             username: user.username,
@@ -1200,8 +1176,7 @@ router.get('/:userId/following', authenticate, (req, res) => __awaiter(void 0, v
 router.delete('/delete', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const userId = req.userId;
-        const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
-        const db = client.db();
+        const db = yield (0, database_1.getDatabase)();
         // Delete user
         yield db.collection('users').deleteOne({ _id: new mongodb_1.ObjectId(userId) });
         // Delete user's posts
@@ -1213,7 +1188,6 @@ router.delete('/delete', authenticate, (req, res) => __awaiter(void 0, void 0, v
                 { following_id: new mongodb_1.ObjectId(userId) }
             ]
         });
-        yield client.close();
         return res.json({ message: 'Account deleted successfully' });
     }
     catch (error) {
@@ -1225,7 +1199,7 @@ router.delete('/delete', authenticate, (req, res) => __awaiter(void 0, void 0, v
 router.get('/blocked', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const userId = req.userId;
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         const blocks = yield db.collection('blocked_users').find({
             userId: new mongodb_1.ObjectId(userId)
         }).toArray();
@@ -1256,7 +1230,7 @@ router.post('/:userId/block', authenticate, (req, res) => __awaiter(void 0, void
         if (currentUserId === userId) {
             return res.status(400).json({ message: 'Cannot block yourself' });
         }
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         const targetUserId = new mongodb_1.ObjectId(userId);
         // Check if already blocked
         const existingBlock = yield db.collection('blocked_users').findOne({
@@ -1297,7 +1271,7 @@ router.post('/:userId/block', authenticate, (req, res) => __awaiter(void 0, void
 router.get('/restricted', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const userId = req.userId;
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         const restrictions = yield db.collection('restricted_users').find({
             userId: new mongodb_1.ObjectId(userId)
         }).toArray();
@@ -1328,7 +1302,7 @@ router.post('/:userId/restrict', authenticate, (req, res) => __awaiter(void 0, v
         if (currentUserId === userId) {
             return res.status(400).json({ message: 'Cannot restrict yourself' });
         }
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         const targetUserId = new mongodb_1.ObjectId(userId);
         // Check if already restricted
         const existingRestriction = yield db.collection('restricted_users').findOne({
@@ -1372,8 +1346,7 @@ router.get('/:userId/posts', (req, res) => __awaiter(void 0, void 0, void 0, fun
             console.log(`✅ Cache hit for user posts: ${userId} page ${page}`);
             return res.json(cached);
         }
-        const client = yield mongodb_1.MongoClient.connect(MONGODB_URI);
-        const db = client.db();
+        const db = yield (0, database_1.getDatabase)();
         // Check if userId is an ObjectId or username
         let userObjectId;
         let targetUser;
@@ -1386,13 +1359,11 @@ router.get('/:userId/posts', (req, res) => __awaiter(void 0, void 0, void 0, fun
             // It's a username, look up the user
             targetUser = yield db.collection('users').findOne({ username: userId });
             if (!targetUser) {
-                yield client.close();
                 return res.status(404).json({ success: false, message: 'User not found' });
             }
             userObjectId = targetUser._id;
         }
         if (!targetUser) {
-            yield client.close();
             return res.status(404).json({ success: false, message: 'User not found' });
         }
         // Get current user ID from token (optional)
@@ -1420,7 +1391,6 @@ router.get('/:userId/posts', (req, res) => __awaiter(void 0, void 0, void 0, fun
             }) : null;
             if (!isFollowing) {
                 // Private account and not following - return empty
-                yield client.close();
                 return res.json({
                     success: true,
                     data: [],
@@ -1500,7 +1470,6 @@ router.get('/:userId/posts', (req, res) => __awaiter(void 0, void 0, void 0, fun
                 is_liked
             };
         })));
-        yield client.close();
         const response = {
             success: true,
             data: postsWithCounts,
@@ -1532,7 +1501,7 @@ router.post('/conversations', authenticate, (req, res) => __awaiter(void 0, void
         if (currentUserId === recipientId) {
             return res.status(400).json({ message: 'Cannot create conversation with yourself' });
         }
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         // Get both users
         const [currentUser, recipient] = yield Promise.all([
             db.collection('users').findOne({ _id: new mongodb_1.ObjectId(currentUserId) }),
@@ -1614,7 +1583,7 @@ router.post('/conversations', authenticate, (req, res) => __awaiter(void 0, void
 router.get('/message-requests', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const userId = req.userId;
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         // Get message requests where user is recipient and not mutual followers
         const requests = yield db.collection('message_requests').find({
             recipientId: new mongodb_1.ObjectId(userId),
@@ -1657,7 +1626,7 @@ router.post('/message-requests/:requestId/accept', authenticate, (req, res) => _
     try {
         const userId = req.userId;
         const { requestId } = req.params;
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         const request = yield db.collection('message_requests').findOne({
             _id: new mongodb_1.ObjectId(requestId),
             recipientId: new mongodb_1.ObjectId(userId)
@@ -1694,7 +1663,7 @@ router.delete('/message-requests/:requestId', authenticate, (req, res) => __awai
     try {
         const userId = req.userId;
         const { requestId } = req.params;
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         const result = yield db.collection('message_requests').deleteOne({
             _id: new mongodb_1.ObjectId(requestId),
             recipientId: new mongodb_1.ObjectId(userId)
@@ -1717,7 +1686,7 @@ router.post('/message-requests/:requestId/block', authenticate, (req, res) => __
     try {
         const userId = req.userId;
         const { requestId } = req.params;
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         const request = yield db.collection('message_requests').findOne({
             _id: new mongodb_1.ObjectId(requestId),
             recipientId: new mongodb_1.ObjectId(userId)
@@ -1758,7 +1727,7 @@ router.post('/message-requests/:requestId/report', authenticate, (req, res) => _
         const userId = req.userId;
         const { requestId } = req.params;
         const { reason } = req.body;
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         const request = yield db.collection('message_requests').findOne({
             _id: new mongodb_1.ObjectId(requestId),
             recipientId: new mongodb_1.ObjectId(userId)
@@ -1795,7 +1764,7 @@ router.put('/privacy', authenticate, (req, res) => __awaiter(void 0, void 0, voi
     try {
         const userId = req.userId;
         const { isPrivate } = req.body;
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         yield db.collection('users').updateOne({ _id: new mongodb_1.ObjectId(userId) }, { $set: { is_private: !!isPrivate, updatedAt: new Date() } });
         return res.json({
             success: true,
@@ -1812,7 +1781,7 @@ router.put('/privacy', authenticate, (req, res) => __awaiter(void 0, void 0, voi
 router.get('/follow-requests', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const currentUserId = req.userId;
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         const requests = yield db.collection('followRequests').find({
             requested_id: new mongodb_1.ObjectId(currentUserId),
             status: 'pending'
@@ -1860,7 +1829,7 @@ router.post('/follow-requests/:requestId/approve', authenticate, (req, res) => _
     try {
         const currentUserId = req.userId;
         const { requestId } = req.params;
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         // Find the request
         const request = yield db.collection('followRequests').findOne({
             _id: new mongodb_1.ObjectId(requestId),
@@ -1919,7 +1888,7 @@ router.post('/follow-requests/:requestId/decline', authenticate, (req, res) => _
     try {
         const currentUserId = req.userId;
         const { requestId } = req.params;
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         // Find the request
         const request = yield db.collection('followRequests').findOne({
             _id: new mongodb_1.ObjectId(requestId),
@@ -1957,7 +1926,7 @@ router.get('/:userId/follow-request-status', authenticate, (req, res) => __await
     try {
         const currentUserId = req.userId;
         const { userId } = req.params;
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         // Check for pending request
         const request = yield db.collection('followRequests').findOne({
             requester_id: new mongodb_1.ObjectId(currentUserId),
@@ -1995,7 +1964,7 @@ router.post('/push-token', authenticate, (req, res) => __awaiter(void 0, void 0,
             return res.status(400).json({ message: 'Push token is required' });
         }
         console.log('[PUSH TOKEN] Registering token for user:', userId, 'Platform:', platform);
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         // Update user's push token
         yield db.collection('users').updateOne({ _id: new mongodb_1.ObjectId(userId) }, {
             $set: {
@@ -2027,7 +1996,7 @@ router.post('/fcm-token', authenticate, (req, res) => __awaiter(void 0, void 0, 
             return res.status(400).json({ message: 'FCM token is required' });
         }
         console.log('[FCM] Registering token for user:', userId);
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         // Update user's FCM token
         yield db.collection('users').updateOne({ _id: new mongodb_1.ObjectId(userId) }, {
             $set: {
@@ -2054,7 +2023,7 @@ router.delete('/fcm-token', authenticate, (req, res) => __awaiter(void 0, void 0
     try {
         const userId = req.userId;
         console.log('[FCM] Unregistering token for user:', userId);
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         // Remove user's FCM token
         yield db.collection('users').updateOne({ _id: new mongodb_1.ObjectId(userId) }, {
             $set: {
@@ -2081,7 +2050,7 @@ router.delete('/delete', authenticate, (req, res) => __awaiter(void 0, void 0, v
     try {
         const userId = req.userId;
         const { password } = req.body;
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         // 1. Verify user exists and password is correct
         const user = yield db.collection('users').findOne({ _id: new mongodb_1.ObjectId(userId) });
         if (!user) {
@@ -2154,7 +2123,7 @@ router.post('/change-password', authenticate, (req, res) => __awaiter(void 0, vo
         if (newPassword.length < 6) {
             return res.status(400).json({ message: 'Password must be at least 6 characters' });
         }
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         const user = yield db.collection('users').findOne({ _id: new mongodb_1.ObjectId(userId) });
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
@@ -2185,7 +2154,7 @@ router.post('/change-password', authenticate, (req, res) => __awaiter(void 0, vo
 router.get('/muted', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const userId = req.userId;
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         // Get muted user IDs
         const mutedRecords = yield db.collection('muted').find({
             userId: new mongodb_1.ObjectId(userId)
@@ -2219,7 +2188,7 @@ router.post('/:userId/mute', authenticate, (req, res) => __awaiter(void 0, void 
         if (currentUserId === userId) {
             return res.status(400).json({ message: 'Cannot mute yourself' });
         }
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         // Check if already muted
         const existingMute = yield db.collection('muted').findOne({
             userId: new mongodb_1.ObjectId(currentUserId),
@@ -2252,7 +2221,7 @@ router.post('/:userId/mute', authenticate, (req, res) => __awaiter(void 0, void 
 router.get('/login-activity', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const userId = req.userId;
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         const activity = yield db.collection('loginActivity').find({
             userId: new mongodb_1.ObjectId(userId)
         }).sort({ timestamp: -1 }).limit(10).toArray();
@@ -2274,7 +2243,7 @@ router.patch('/me', authenticate, (req, res) => __awaiter(void 0, void 0, void 0
     try {
         const userId = req.userId;
         const { name, username, email, bio, website, gender, birthday, location } = req.body;
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         const updateData = { updatedAt: new Date() };
         if (name !== undefined) {
             updateData.name = name;
@@ -2291,8 +2260,8 @@ router.patch('/me', authenticate, (req, res) => __awaiter(void 0, void 0, void 0
             }
             updateData.username = username;
         }
-        if (email !== undefined)
-            updateData.email = email;
+        // Email is non-editable for security reasons
+        // if (email !== undefined) updateData.email = email
         if (bio !== undefined)
             updateData.bio = bio;
         if (website !== undefined)
@@ -2336,7 +2305,7 @@ router.patch('/me', authenticate, (req, res) => __awaiter(void 0, void 0, void 0
 router.post('/me/toggle-anonymous', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const userId = req.userId;
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         const user = yield db.collection('users').findOne({ _id: new mongodb_1.ObjectId(userId) });
         if (!user)
             return res.status(404).json({ message: 'User not found' });
@@ -2370,7 +2339,7 @@ router.get('/:username/posts', authenticate, (req, res) => __awaiter(void 0, voi
     try {
         const { username } = req.params;
         const currentUserId = req.userId;
-        const db = yield getDb();
+        const db = yield (0, database_1.getDatabase)();
         // Find user by username
         const targetUser = yield db.collection('users').findOne({ username });
         if (!targetUser) {

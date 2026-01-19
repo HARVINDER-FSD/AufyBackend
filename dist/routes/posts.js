@@ -319,7 +319,7 @@ router.get("/liked", auth_1.authenticateToken, (req, res) => __awaiter(void 0, v
     try {
         let userId = req.userId;
         const page = Number.parseInt(req.query.page) || 1;
-        const limit = Number.parseInt(req.query.limit) || 20;
+        const limit = Math.min(Number.parseInt(req.query.limit) || 20, 100);
         const skip = (page - 1) * limit;
         const db = yield (0, database_1.getDatabase)();
         console.log('[Posts/Liked] Raw userId:', userId, 'Type:', typeof userId);
@@ -452,7 +452,7 @@ router.get("/saved", auth_1.authenticateToken, (req, res) => __awaiter(void 0, v
     try {
         let userId = req.userId;
         const page = Number.parseInt(req.query.page) || 1;
-        const limit = Number.parseInt(req.query.limit) || 20;
+        const limit = Math.min(Number.parseInt(req.query.limit) || 20, 100);
         const skip = (page - 1) * limit;
         const db = yield (0, database_1.getDatabase)();
         console.log('[Posts/Saved] Raw userId:', userId, 'Type:', typeof userId);

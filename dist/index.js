@@ -1,37 +1,4 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -105,8 +72,33 @@ const httpServer = (0, http_1.createServer)(app);
 const PORT = parseInt(process.env.PORT || '8000');
 // Initialize Firebase for push notifications
 (0, firebase_messaging_1.initializeFirebase)();
-// Initialize Redis for caching
 (0, redis_1.initRedis)();
+let redisHealthy = false;
+let redisLastCheck = 0;
+const REDIS_CHECK_INTERVAL = 5000;
+const REDIS_CHECK_TIMEOUT = 150;
+const redisClient = (0, redis_1.getRedis)();
+const checkRedis = () => __awaiter(void 0, void 0, void 0, function* () {
+    if (!redisClient || typeof redisClient.ping !== 'function') {
+        redisHealthy = false;
+        redisLastCheck = Date.now();
+        return;
+    }
+    try {
+        const pingPromise = redisClient.ping();
+        const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve('timeout'), REDIS_CHECK_TIMEOUT));
+        const result = yield Promise.race([pingPromise, timeoutPromise]);
+        redisHealthy = result !== 'timeout';
+    }
+    catch (_a) {
+        redisHealthy = false;
+    }
+    finally {
+        redisLastCheck = Date.now();
+    }
+});
+checkRedis();
+setInterval(checkRedis, REDIS_CHECK_INTERVAL).unref();
 // Initialize WebSocket server
 const io = (0, websocket_1.initializeWebSocket)(httpServer);
 console.log('✅ WebSocket server initialized');
@@ -119,12 +111,16 @@ mongoose_1.default.connect(MONGODB_URI, {
 })
     .then(() => __awaiter(void 0, void 0, void 0, function* () {
     console.log('✅ MongoDB connected successfully');
-    // Create indexes for faster queries
     try {
         const db = mongoose_1.default.connection.db;
         if (db) {
             yield db.collection('users').createIndex({ email: 1 }, { unique: true });
             yield db.collection('users').createIndex({ username: 1 }, { unique: true });
+            yield db.collection('users').createIndex({ created_at: -1 });
+            yield db.collection('notifications').createIndex({ userId: 1, createdAt: -1 });
+            yield db.collection('notifications').createIndex({ userId: 1, isRead: 1, createdAt: -1 });
+            yield db.collection('follows').createIndex({ followerId: 1 });
+            yield db.collection('follows').createIndex({ followingId: 1 });
             console.log('✅ Database indexes created');
         }
     }
@@ -139,6 +135,7 @@ mongoose_1.default.connect(MONGODB_URI, {
 // Security Middleware
 const security_1 = require("./middleware/security");
 // Middleware
+app.use(security_1.securityHeaders); // Helmet security headers
 app.use((0, cors_1.default)({
     origin: '*', // Allow all origins for mobile app compatibility
     credentials: true,
@@ -150,7 +147,16 @@ app.use(security_1.xssProtection);
 app.use(security_1.ipFilter);
 app.use(security_1.detectSuspiciousActivity);
 app.use(security_1.sanitizeInput);
-app.use((0, security_1.rateLimiter)(100, 60000)); // 100 requests per minute
+// Global rate limiting:
+// - Production: 100 req/min (per IP)
+// - Non‑production (local/testing): very high limit to avoid 429 during load tests
+const isProduction = process.env.NODE_ENV === 'production';
+if (isProduction) {
+    app.use((0, security_1.rateLimiter)(100, 60000));
+}
+else {
+    app.use((0, security_1.rateLimiter)(100000, 60000));
+}
 app.use(security_1.validateRequestSignature);
 app.use(security_1.csrfProtection);
 app.use(security_1.secureSession);
@@ -187,22 +193,9 @@ const swaggerDocument = yamljs_1.default.load(swaggerPath);
 app.use('/api-docs', swagger_ui_express_1.default.serve, swagger_ui_express_1.default.setup(swaggerDocument));
 // Serve static files (for password reset redirect page)
 app.use(express_1.default.static(path_1.default.join(__dirname, '..', 'public')));
-// Health check
 app.get('/health', (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const dbStatus = mongoose_1.default.connection.readyState === 1;
-    let redisStatus = false;
-    try {
-        const { getRedis } = yield Promise.resolve().then(() => __importStar(require('./lib/redis')));
-        const redis = getRedis();
-        if (redis) {
-            // @ts-ignore
-            yield redis.ping();
-            redisStatus = true;
-        }
-    }
-    catch (err) {
-        logger_1.logger.warn('Health check Redis Error:', err);
-    }
+    const redisStatus = redisHealthy;
     const status = dbStatus && redisStatus ? 'ok' : 'degraded';
     res.status(status === 'ok' ? 200 : 503).json({
         status,

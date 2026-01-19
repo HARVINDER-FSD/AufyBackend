@@ -127,47 +127,54 @@ export class CommentService {
       .lean()
       .exec()
 
+    // Get users for main comments
     const userIds = comments.map((c: any) => c.user_id)
     const users = await User.find({ _id: { $in: userIds } })
       .select('id username full_name avatar_url is_verified badge_type')
       .lean()
       .exec()
 
-    const commentsWithData = await Promise.all(
-      comments.map(async (comment: any) => {
-        const user = users.find((u: any) => u._id.toString() === comment.user_id.toString())
+    // Get all comment IDs to fetch replies in batch
+    const commentIds = comments.map((c: any) => c._id)
+    
+    // Fetch all replies for these comments in one query
+    const allReplies = await Comment.find({
+      parent_comment_id: { $in: commentIds },
+      is_deleted: false
+    })
+      .sort({ created_at: 1 })
+      .lean()
+      .exec()
 
-        // Get replies for this comment
-        const replies = await Comment.find({
-          parent_comment_id: comment._id,
-          is_deleted: false
-        })
-          .sort({ created_at: 1 })
-          .limit(3)
-          .lean()
-          .exec()
+    // Get all user IDs from replies
+    const replyUserIds = [...new Set(allReplies.map((r: any) => r.user_id.toString()))]
+    const replyUsers = await User.find({ _id: { $in: replyUserIds } })
+      .select('id username full_name avatar_url is_verified badge_type')
+      .lean()
+      .exec()
 
-        const replyUserIds = replies.map((r: any) => r.user_id)
-        const replyUsers = await User.find({ _id: { $in: replyUserIds } })
-          .select('id username full_name avatar_url is_verified badge_type')
-          .lean()
-          .exec()
-
-        const repliesWithUsers = replies.map((reply: any) => {
-          const replyUser = replyUsers.find((u: any) => u._id.toString() === reply.user_id.toString())
-          return {
-            ...reply,
-            user: maskAnonymousUser({ ...replyUser, is_anonymous: reply.is_anonymous })
-          }
-        })
-
+    const commentsWithData = comments.map((comment: any) => {
+      const user = users.find((u: any) => u._id.toString() === comment.user_id.toString())
+      
+      // Filter replies for this comment (limit to 3 per comment as before)
+      const commentReplies = allReplies
+        .filter((r: any) => r.parent_comment_id.toString() === comment._id.toString())
+        .slice(0, 3)
+      
+      const repliesWithUsers = commentReplies.map((reply: any) => {
+        const replyUser = replyUsers.find((u: any) => u._id.toString() === reply.user_id.toString())
         return {
-          ...comment,
-          user: maskAnonymousUser({ ...user, is_anonymous: comment.is_anonymous }),
-          replies: repliesWithUsers
+          ...reply,
+          user: maskAnonymousUser({ ...replyUser, is_anonymous: reply.is_anonymous })
         }
-      }),
-    )
+      })
+
+      return {
+        ...comment,
+        user: maskAnonymousUser({ ...user, is_anonymous: comment.is_anonymous }),
+        replies: repliesWithUsers
+      }
+    })
 
     const totalPages = Math.ceil(total / validLimit)
 

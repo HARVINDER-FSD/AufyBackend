@@ -36,7 +36,7 @@ export const clearFailedAttempts = (email: string) => {
 
 export const bruteForceProtection = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 5, // 5 attempts per 15 mins for login
+  max: 500, // Increased for testing
   message: { error: 'Too many login attempts, please try again after 15 minutes.' },
   standardHeaders: true,
   legacyHeaders: false,

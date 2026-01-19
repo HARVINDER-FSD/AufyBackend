@@ -10,7 +10,7 @@ router.get("/my-comments", authenticateToken, async (req: any, res) => {
   try {
     let userId = req.userId!
     const page = Number.parseInt(req.query.page as string) || 1
-    const limit = Number.parseInt(req.query.limit as string) || 20
+    const limit = Math.min(Number.parseInt(req.query.limit as string) || 20, 100)
     const skip = (page - 1) * limit
 
     const db = await getDatabase()
