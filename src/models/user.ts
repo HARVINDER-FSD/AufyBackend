@@ -35,7 +35,15 @@ const userSchema = new mongoose.Schema({
   },
   date_of_birth: {
     type: Date,
-    required: true
+    default: null
+  },
+  gender: {
+    type: String,
+    default: ''
+  },
+  address: {
+    type: String,
+    default: ''
   },
   bio: {
     type: String,
@@ -273,7 +281,9 @@ export interface IUser extends Document {
   phone_verified: boolean;
   password?: string;
   full_name: string;
-  date_of_birth: Date;
+  date_of_birth?: Date;
+  gender?: string;
+  address?: string;
   bio: string;
   links: string[];
   avatar_url: string;

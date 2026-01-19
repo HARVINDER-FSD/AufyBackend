@@ -107,6 +107,10 @@ router.get('/me', authenticate, async (req: any, res: Response) => {
             posts_count: postsCount,
             isAnonymousMode: user.isAnonymousMode || false,
             anonymousPersona: user.anonymousPersona || null,
+            phone: user.phone || '',
+            birthday: user.date_of_birth ? new Date(user.date_of_birth).toISOString().split('T')[0] : '',
+            gender: user.gender || '',
+            address: user.address || '',
         };
         // Cache for 5 minutes (300 seconds)
         await cacheSet(cacheKey, response, 300);
@@ -114,6 +118,41 @@ router.get('/me', authenticate, async (req: any, res: Response) => {
     } catch (error: any) {
         console.error('Get user error:', error);
         return res.status(500).json({ message: error.message || 'Failed to get user' });
+    }
+});
+
+// PATCH /api/users/me - Update personal info
+router.patch('/me', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.userId;
+        const { phone, birthday, gender, address } = req.body;
+        const db = await getDatabase();
+
+        const updateData: any = { updated_at: new Date() };
+        if (phone !== undefined) updateData.phone = phone;
+        if (birthday !== undefined) {
+             updateData.date_of_birth = birthday ? new Date(birthday) : null;
+        }
+        if (gender !== undefined) updateData.gender = gender;
+        if (address !== undefined) updateData.address = address;
+
+        const result = await db.collection('users').updateOne(
+            { _id: new ObjectId(userId) },
+            { $set: updateData }
+        );
+
+        // Invalidate cache
+        const cacheKey = `userProfile:${userId}`;
+        await cacheDel(cacheKey);
+
+        if (result.matchedCount === 0) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        return res.json({ message: 'Personal information updated successfully' });
+    } catch (error: any) {
+        console.error('Update personal info error:', error);
+        return res.status(500).json({ message: error.message || 'Failed to update information' });
     }
 });
 
