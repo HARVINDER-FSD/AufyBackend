@@ -87,28 +87,37 @@ router.get('/', authenticate, (req, res) => __awaiter(void 0, void 0, void 0, fu
         yield client.close();
         // Format notifications
         const formattedNotifications = notifications.map(notif => {
-            var _a, _b, _c;
-            return ({
+            var _a, _b, _c, _d;
+            const masked = (0, anonymous_utils_1.maskAnonymousUser)({
+                _id: notif.actor._id,
+                id: notif.actor._id.toString(),
+                username: notif.actor.username,
+                full_name: notif.actor.full_name,
+                avatar: notif.actor.avatar_url || notif.actor.avatar || '/placeholder-user.jpg',
+                avatar_url: notif.actor.avatar_url || notif.actor.avatar || '/placeholder-user.jpg',
+                is_verified: notif.actor.is_verified || notif.actor.verified || false,
+                badge_type: null,
+                is_anonymous: notif.is_anonymous
+            });
+            return {
                 id: notif._id.toString(),
                 type: notif.type,
-                user: (0, anonymous_utils_1.maskAnonymousUser)({
-                    id: notif.actor._id.toString(),
-                    username: notif.actor.username,
-                    avatar: notif.actor.avatar_url || notif.actor.avatar || '/placeholder-user.jpg',
-                    avatar_url: notif.actor.avatar_url || notif.actor.avatar || '/placeholder-user.jpg',
-                    verified: notif.actor.is_verified || notif.actor.verified || false,
-                    is_verified: notif.actor.is_verified || notif.actor.verified || false,
-                    is_anonymous: notif.is_anonymous
-                }),
+                user: {
+                    id: masked.id,
+                    username: masked.username,
+                    avatar: masked.avatar_url,
+                    verified: masked.is_verified,
+                    is_anonymous: (_a = masked.is_anonymous) !== null && _a !== void 0 ? _a : false
+                },
                 content: notif.content,
-                post: ((_a = notif.post) === null || _a === void 0 ? void 0 : _a._id) ? {
+                post: ((_b = notif.post) === null || _b === void 0 ? void 0 : _b._id) ? {
                     id: notif.post._id.toString(),
-                    image: notif.post.image_url || ((_c = (_b = notif.post.media) === null || _b === void 0 ? void 0 : _b[0]) === null || _c === void 0 ? void 0 : _c.url)
+                    image: notif.post.image_url || ((_d = (_c = notif.post.media) === null || _c === void 0 ? void 0 : _c[0]) === null || _d === void 0 ? void 0 : _d.url)
                 } : undefined,
                 conversationId: notif.conversationId,
                 timestamp: getTimeAgo(notif.createdAt),
                 isRead: notif.isRead
-            });
+            };
         });
         res.json({
             notifications: formattedNotifications,

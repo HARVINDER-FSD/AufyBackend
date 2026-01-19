@@ -81,27 +81,39 @@ router.get('/', authenticate, async (req: any, res: Response) => {
     await client.close();
 
     // Format notifications
-    const formattedNotifications = notifications.map(notif => ({
-      id: notif._id.toString(),
-      type: notif.type,
-      user: maskAnonymousUser({
+    const formattedNotifications = notifications.map(notif => {
+      const masked = maskAnonymousUser({
+        _id: notif.actor._id,
         id: notif.actor._id.toString(),
         username: notif.actor.username,
+        full_name: notif.actor.full_name,
         avatar: notif.actor.avatar_url || notif.actor.avatar || '/placeholder-user.jpg',
         avatar_url: notif.actor.avatar_url || notif.actor.avatar || '/placeholder-user.jpg',
-        verified: notif.actor.is_verified || notif.actor.verified || false,
         is_verified: notif.actor.is_verified || notif.actor.verified || false,
+        badge_type: null,
         is_anonymous: notif.is_anonymous
-      }),
-      content: notif.content,
-      post: notif.post?._id ? {
-        id: notif.post._id.toString(),
-        image: notif.post.image_url || notif.post.media?.[0]?.url
-      } : undefined,
-      conversationId: notif.conversationId,
-      timestamp: getTimeAgo(notif.createdAt),
-      isRead: notif.isRead
-    }));
+      });
+
+      return {
+        id: notif._id.toString(),
+        type: notif.type,
+        user: {
+          id: masked.id,
+          username: masked.username,
+          avatar: masked.avatar_url,
+          verified: masked.is_verified,
+          is_anonymous: masked.is_anonymous ?? false
+        },
+        content: notif.content,
+        post: notif.post?._id ? {
+          id: notif.post._id.toString(),
+          image: notif.post.image_url || notif.post.media?.[0]?.url
+        } : undefined,
+        conversationId: notif.conversationId,
+        timestamp: getTimeAgo(notif.createdAt),
+        isRead: notif.isRead
+      };
+    });
 
     res.json({
       notifications: formattedNotifications,
