@@ -730,7 +730,30 @@ router.post('/reset-password-otp', async (req: Request, res: Response) => {
 router.post('/send-verification-otp', authenticateToken, async (req: any, res: Response) => {
   try {
     const userId = req.userId;
+    const { targetEmail, targetPhone } = req.body;
     const db = await getDatabase();
+
+    // Check if target email/phone already exists
+    if (targetEmail) {
+        const existingUser = await db.collection('users').findOne({ 
+            email: targetEmail, 
+            _id: { $ne: new ObjectId(userId) } 
+        });
+        if (existingUser) {
+            return res.status(400).json({ message: 'Email already exists' });
+        }
+    }
+    
+    if (targetPhone) {
+        const existingUser = await db.collection('users').findOne({ 
+            phone: targetPhone, 
+            _id: { $ne: new ObjectId(userId) } 
+        });
+        if (existingUser) {
+            return res.status(400).json({ message: 'Phone number already exists' });
+        }
+    }
+
     const user = await db.collection('users').findOne({ _id: new ObjectId(userId) });
 
     if (!user) {

@@ -2505,6 +2505,75 @@ router.delete('/delete', authenticate, async (req: any, res: Response) => {
     }
 })
 
+// POST /api/users/me/contact - Update email or phone with verification
+router.post('/me/contact', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.userId;
+        const { verificationToken, email, phone } = req.body;
+
+        if (!verificationToken) {
+            return res.status(400).json({ message: 'Verification token is required' });
+        }
+
+        if (!email && !phone) {
+            return res.status(400).json({ message: 'Email or phone is required' });
+        }
+
+        // Verify the token
+        let decoded: any;
+        try {
+            decoded = jwt.verify(verificationToken, JWT_SECRET);
+        } catch (err) {
+            return res.status(403).json({ message: 'Invalid or expired verification token' });
+        }
+
+        if (decoded.userId !== userId || decoded.scope !== 'update_contact') {
+            return res.status(403).json({ message: 'Invalid verification token' });
+        }
+
+        const db = await getDatabase();
+        const updateData: any = { updated_at: new Date() };
+
+        if (email) {
+            // Check if email is already taken
+            const existingUser = await db.collection('users').findOne({ 
+                email, 
+                _id: { $ne: new ObjectId(userId) } 
+            });
+            if (existingUser) {
+                return res.status(400).json({ message: 'Email is already taken' });
+            }
+            updateData.email = email;
+        }
+
+        if (phone) {
+             // Check if phone is already taken
+             const existingUser = await db.collection('users').findOne({ 
+                phone, 
+                _id: { $ne: new ObjectId(userId) } 
+            });
+            if (existingUser) {
+                return res.status(400).json({ message: 'Phone number is already taken' });
+            }
+            updateData.phone = phone;
+        }
+
+        await db.collection('users').updateOne(
+            { _id: new ObjectId(userId) },
+            { $set: updateData }
+        );
+
+        // Invalidate cache
+        await cacheInvalidate(`userProfile:${userId}`);
+
+        return res.json({ message: 'Contact information updated successfully' });
+
+    } catch (error: any) {
+        console.error('Update contact error:', error);
+        return res.status(500).json({ message: 'Failed to update contact information' });
+    }
+});
+
 export default router
 
 
