@@ -3,7 +3,7 @@ import { faker } from '@faker-js/faker';
 
 // Configuration
 const BASE_URL = process.env.TARGET_URL || 'https://aufybackend.onrender.com';
-const NUM_USERS = 200; // 200 concurrent users (Heavy Load)
+const NUM_USERS = parseInt(process.env.NUM_USERS || '200'); // Default to 200, but allow override
 const RAMP_UP_MS = 20000; // 20 seconds ramp up
 
 // Stats Tracker

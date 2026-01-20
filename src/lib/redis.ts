@@ -3,6 +3,39 @@ import { Redis as UpstashRedis } from '@upstash/redis';
 
 let redis: Redis | UpstashRedis | null = null;
 
+// Simple In-Memory Cache Fallback for Local Development/Testing when Redis is missing
+class MemoryCache {
+  private cache = new Map<string, { value: any, expiry: number }>();
+
+  async get(key: string) {
+    const item = this.cache.get(key);
+    if (!item) return null;
+    if (Date.now() > item.expiry) {
+      this.cache.delete(key);
+      return null;
+    }
+    return item.value; // Already parsed
+  }
+
+  async set(key: string, value: any, ttlSeconds?: number | string) {
+    // Handle 'EX', ttl syntax from ioredis if passed as args, but here we just take the 3rd arg
+    const ttl = typeof ttlSeconds === 'number' ? ttlSeconds : 60;
+    this.cache.set(key, {
+      value,
+      expiry: Date.now() + (ttl * 1000)
+    });
+    return 'OK';
+  }
+
+  async del(key: string) {
+    this.cache.delete(key);
+    return 1;
+  }
+}
+
+const memoryCache = new MemoryCache();
+let useMemoryFallback = false;
+
 export const initRedis = () => {
   if (redis) return redis;
 
@@ -30,13 +63,14 @@ export const initRedis = () => {
         client = new Redis(process.env.REDIS_URL, {
           retryStrategy: (times) => {
             if (times > 3) {
-              console.warn('⚠️  Redis connection failed, continuing without cache');
+              console.warn('⚠️  Redis connection failed, switching to In-Memory Cache');
+              useMemoryFallback = true;
               return null;
             }
             return Math.min(times * 50, 2000);
           },
           maxRetriesPerRequest: null,
-          connectTimeout: 5000,
+          connectTimeout: 2000, // Faster timeout
           lazyConnect: true
         });
       } else {
@@ -47,28 +81,31 @@ export const initRedis = () => {
           password: process.env.REDIS_PASSWORD,
           retryStrategy: (times) => {
             if (times > 3) {
-              console.warn('⚠️  Redis connection failed, continuing without cache');
+              console.warn('⚠️  Redis connection failed, switching to In-Memory Cache');
+              useMemoryFallback = true;
               return null;
             }
             return Math.min(times * 50, 2000);
           },
           maxRetriesPerRequest: null,
-          connectTimeout: 5000,
+          connectTimeout: 2000, // Faster timeout
           lazyConnect: true
         });
       }
 
       client.on('connect', () => {
         console.log('✅ Redis connected successfully');
+        useMemoryFallback = false;
       });
 
       client.on('error', (err) => {
-        console.warn('⚠️  Redis error (continuing without cache):', err.message);
+        // console.warn('⚠️  Redis error (continuing without cache):', err.message);
       });
 
       // Try to connect but don't block if it fails
       client.connect().catch(() => {
-        console.warn('⚠️  Redis unavailable, app will work without caching');
+        console.warn('⚠️  Redis unavailable, switching to In-Memory Cache');
+        useMemoryFallback = true;
       });
 
       redis = client;
@@ -76,6 +113,7 @@ export const initRedis = () => {
     }
   } catch (error) {
     console.warn('⚠️  Failed to initialize Redis:', error);
+    useMemoryFallback = true;
     return null;
   }
 };
@@ -90,36 +128,63 @@ export const getRedis = () => {
 // Cache helpers
 export const cacheGet = async (key: string) => {
   try {
+    if (useMemoryFallback) {
+        return memoryCache.get(key);
+    }
     const redis = getRedis();
-    if (!redis) return null;
+    if (!redis) {
+        useMemoryFallback = true;
+        return memoryCache.get(key);
+    }
+    // Check if it's ioredis (status property) and if it's connected
+    if ((redis as any).status && (redis as any).status !== 'ready') {
+         return memoryCache.get(key);
+    }
+
     const data = await redis.get(key);
     // Upstash might return object if it was stored as JSON? No, we stringify.
     // ioredis returns string or null. Upstash returns string or null or number etc.
     // We assume string for JSON.parse
     return data ? (typeof data === 'string' ? JSON.parse(data) : data) : null;
   } catch (error) {
-    console.error('Cache get error:', error);
+    // console.warn('Cache get error:', error);
     return null;
   }
 };
 
-export const cacheSet = async (key: string, value: any, ttl: number = 3600) => {
+export const cacheSet = async (key: string, data: any, ttlSeconds: number = 3600) => {
   try {
-    const redis = getRedis();
-    if (!redis) return false;
-
-    const stringValue = JSON.stringify(value);
-
-    if (redis instanceof Redis) {
-      await redis.setex(key, ttl, stringValue);
-    } else {
-      // Upstash Redis
-      await redis.set(key, stringValue, { ex: ttl });
+    if (useMemoryFallback) {
+        return memoryCache.set(key, data, ttlSeconds);
     }
-    return true;
+
+    const redis = getRedis();
+    if (!redis) {
+         useMemoryFallback = true;
+         return memoryCache.set(key, data, ttlSeconds);
+    }
+
+    // Check if it's ioredis (status property) and if it's connected
+    if ((redis as any).status && (redis as any).status !== 'ready') {
+        return memoryCache.set(key, data, ttlSeconds);
+    }
+
+    const value = JSON.stringify(data);
+    
+    // Handle both ioredis and Upstash signatures
+    // ioredis: set(key, value, 'EX', ttl)
+    // Upstash: set(key, value, { ex: ttl }) or set(key, value, 'EX', ttl)
+    
+    // We'll try the common denominator or check type
+    if ((redis as any).setex) {
+        // ioredis often has setex
+         await (redis as any).setex(key, ttlSeconds, value);
+    } else {
+         // Upstash or generic
+         await redis.set(key, value, { ex: ttlSeconds } as any);
+    }
   } catch (error) {
-    console.error('Cache set error:', error);
-    return false;
+    // console.warn('Cache set error:', error);
   }
 };
 
