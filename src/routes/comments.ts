@@ -1,9 +1,48 @@
 import { Router } from "express"
+import Joi from "joi"
 import { authenticateToken } from "../middleware/auth"
+import { validateBody } from "../middleware/validate"
 import { getDatabase } from "../lib/database"
+import { CommentService } from "../services/comment"
 import { ObjectId } from "mongodb"
 
 const router = Router()
+
+const createCommentSchema = Joi.object({
+  post_id: Joi.string().regex(/^[0-9a-fA-F]{24}$/).required(),
+  content: Joi.string().max(1000).required(),
+  parent_comment_id: Joi.string().regex(/^[0-9a-fA-F]{24}$/).optional(),
+  is_anonymous: Joi.boolean().optional()
+})
+
+// Create comment
+router.post("/", authenticateToken, validateBody(createCommentSchema), async (req, res) => {
+  try {
+    const { post_id, content, parent_comment_id, is_anonymous } = req.body
+    
+    // Check if user is in anonymous mode
+    const db = await getDatabase();
+    const user = await db.collection('users').findOne({ _id: new ObjectId(req.userId!) });
+    
+    // Determine effective anonymous state:
+    // 1. Explicitly requested via is_anonymous param (highest priority)
+    // 2. User's global anonymous mode setting
+    const effectiveIsAnonymous = is_anonymous !== undefined ? is_anonymous : (user?.isAnonymousMode || false);
+
+    const result = await CommentService.createComment(
+      req.userId!,
+      post_id,
+      { content, parent_comment_id, is_anonymous: effectiveIsAnonymous }
+    )
+
+    res.status(201).json(result)
+  } catch (error: any) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      error: error.message,
+    })
+  }
+})
 
 // Get user's comments
 router.get("/my-comments", authenticateToken, async (req: any, res) => {

@@ -10,6 +10,17 @@ const router = express.Router();
 
 // --- Anonymous Chat Routes ---
 
+// Get Users Online Count (for a tag)
+router.get('/anonymous/count', async (req, res) => {
+  try {
+    const { interest } = req.query;
+    const count = await AnonymousChatService.getQueueLength(interest as string);
+    res.json({ count });
+  } catch (error: any) {
+    res.status(500).json({ message: error.message || 'Server error' });
+  }
+});
+
 // Join Anonymous Queue (Random Stranger)
 router.post('/anonymous/join', auth, async (req, res) => {
   try {
@@ -37,15 +48,15 @@ router.post('/anonymous/skip', auth, async (req, res) => {
   try {
     const { interests, currentConversationId } = req.body;
     
-    // 1. Leave current conversation (if any)
-    // In a real app, we might want to notify the other user that they were skipped.
-    // For now, let's just leave the queue (if we were in it) or queue up again.
+    // 1. End current conversation (if any)
+    if (currentConversationId) {
+        await AnonymousChatService.endAnonymousConversation(currentConversationId, req.userId!);
+    }
     
-    // If user was in a conversation, they are "leaving" it. 
-    // If they were just in queue, they are leaving queue.
+    // 2. Leave queue (just in case they were waiting)
     await AnonymousChatService.leaveQueue(req.userId!, interests);
     
-    // 2. Join Queue Immediately
+    // 3. Join Queue Immediately
     const result = await AnonymousChatService.joinQueue(req.userId!, interests);
     res.json(result);
   } catch (error: any) {

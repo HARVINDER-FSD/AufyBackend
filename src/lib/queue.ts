@@ -51,6 +51,7 @@ export const QUEUE_NAMES = {
   FEED_UPDATES: 'feed-updates-queue',
   ANALYTICS: 'analytics-queue',
   TASKS: 'tasks-queue',
+  LIKES: 'likes-queue', // Added for async likes
 };
 
 // Initialize Queues (only if Redis is available)
@@ -58,6 +59,7 @@ export const notificationQueue = connection ? new Queue(QUEUE_NAMES.NOTIFICATION
 export const feedUpdateQueue = connection ? new Queue(QUEUE_NAMES.FEED_UPDATES, { connection }) : null;
 export const analyticsQueue = connection ? new Queue(QUEUE_NAMES.ANALYTICS, { connection }) : null;
 export const tasksQueue = connection ? new Queue(QUEUE_NAMES.TASKS, { connection }) : null;
+export const likesQueue = connection ? new Queue(QUEUE_NAMES.LIKES, { connection }) : null;
 
 export const isQueueAvailable = () => redisAvailable && connection !== null;
 
@@ -83,6 +85,9 @@ export const addJob = async (queueName: string, jobName: string, data: any, opti
         break;
       case QUEUE_NAMES.TASKS:
         queue = tasksQueue;
+        break;
+      case QUEUE_NAMES.LIKES:
+        queue = likesQueue;
         break;
       default:
         throw new Error(`Unknown queue name: ${queueName}`);

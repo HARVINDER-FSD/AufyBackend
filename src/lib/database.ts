@@ -34,8 +34,8 @@ export async function connectToDatabase() {
         serverSelectionTimeoutMS: 10000,
         socketTimeoutMS: 45000,
         connectTimeoutMS: 10000,
-        maxPoolSize: 50,
-        minPoolSize: 5,
+        maxPoolSize: 200, // Increased for heavy load (was 50)
+        minPoolSize: 20, // Increased minimum (was 5)
         maxIdleTimeMS: 60000,
       });
       mongooseConnected = true;
@@ -46,15 +46,9 @@ export async function connectToDatabase() {
   }
 
   if (cachedClient && cachedDb) {
-    // Test if connection is still alive
-    try {
-      await cachedDb.admin().ping();
-      return { client: cachedClient, db: cachedDb };
-    } catch (error) {
-      console.log('Cached connection is stale, reconnecting...');
-      cachedClient = null;
-      cachedDb = null;
-    }
+    // Return cached connection directly
+    // The driver handles reconnection automatically
+    return { client: cachedClient, db: cachedDb };
   }
 
   try {
@@ -62,8 +56,8 @@ export async function connectToDatabase() {
       serverSelectionTimeoutMS: 10000,
       socketTimeoutMS: 45000,
       connectTimeoutMS: 10000,
-      maxPoolSize: 50,
-      minPoolSize: 5,
+      maxPoolSize: 200, // Increased for heavy load (was 50)
+      minPoolSize: 20, // Increased minimum (was 5)
       maxIdleTimeMS: 60000,
       retryWrites: true,
       retryReads: true,

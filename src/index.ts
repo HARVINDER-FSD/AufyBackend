@@ -58,6 +58,8 @@ import YAML from 'yamljs'
 
 
 import { initializeFirebase } from './services/firebase-messaging'
+import { setupLikeWorker } from './workers/like-worker'
+import Redis from 'ioredis'
 
 const app = express()
 const httpServer = createServer(app)
@@ -67,6 +69,21 @@ const PORT = parseInt(process.env.PORT || '8000')
 initializeFirebase()
 
 initRedis()
+
+// Initialize Workers
+const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
+const queueRedis = new Redis(redisUrl, {
+  maxRetriesPerRequest: null, // Required by BullMQ
+});
+
+queueRedis.on('connect', () => {
+  console.log('👷 Like Worker connected to Redis');
+  setupLikeWorker(queueRedis);
+});
+
+queueRedis.on('error', (err) => {
+  console.warn('⚠️ Like Worker Redis error:', err.message);
+});
 
 let redisHealthy = false
 let redisLastCheck = 0
@@ -123,6 +140,15 @@ mongoose.connect(MONGODB_URI, {
         await db.collection('notifications').createIndex({ userId: 1, isRead: 1, createdAt: -1 })
         await db.collection('follows').createIndex({ followerId: 1 })
         await db.collection('follows').createIndex({ followingId: 1 })
+        
+        // 🚀 MILLION-USER SCALE INDEXES
+        // Critical for Feed Performance: Compound index for filtering by user and sorting by time
+        await db.collection('posts').createIndex({ user_id: 1, created_at: -1 })
+        // Critical for Global/Trending Feed
+        await db.collection('posts').createIndex({ created_at: -1 })
+        // Critical for Like Checks
+        await db.collection('likes').createIndex({ user_id: 1, post_id: 1 }, { unique: true })
+        
         console.log('✅ Database indexes created')
       }
     } catch (error) {

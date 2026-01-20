@@ -1,8 +1,10 @@
 import { getDatabase } from "../lib/database"
 import type { Post, CreatePostRequest, PaginatedResponse } from "../lib/types"
-import { pagination, errors } from "../lib/utils"
+import { pagination, errors, cacheKeys } from "../lib/utils"
 import { ObjectId } from "mongodb"
 import { maskAnonymousUser } from "../lib/anonymous-utils"
+import { addJob, QUEUE_NAMES, isQueueAvailable } from "../lib/queue"
+import { cacheGet, cacheSet } from "../lib/redis"
 
 export class PostService {
   // Create new post
@@ -26,7 +28,14 @@ export class PostService {
     const postsCollection = db.collection('posts')
     const usersCollection = db.collection('users')
 
-    const user = await usersCollection.findOne({ _id: new ObjectId(userId) })
+    // Optimized: Check cache first
+    const cacheKey = `${cacheKeys.user(userId)}:profile`
+    let user: any = await cacheGet(cacheKey);
+
+    if (!user) {
+       user = await usersCollection.findOne({ _id: new ObjectId(userId) })
+    }
+
     if (!user) {
       throw errors.notFound("User not found")
     }
@@ -57,7 +66,7 @@ export class PostService {
       is_archived: postDoc.is_archived,
       created_at: postDoc.created_at,
       updated_at: postDoc.updated_at,
-      user: maskAnonymousUser({ ...user, is_anonymous: postDoc.is_anonymous }),
+      user: maskAnonymousUser({ ...user, is_anonymous: postDoc.is_anonymous, anonymousPersona: user.anonymousPersona }),
       likes_count: 0,
       comments_count: 0,
       is_liked: false,
@@ -70,42 +79,46 @@ export class PostService {
   static async getAnonymousTrendingFeed(currentUserId: string, page: number = 1, limit: number = 20): Promise<PaginatedResponse<Post>> {
     const db = await getDatabase()
     const postsCollection = db.collection('posts')
+    const usersCollection = db.collection('users')
     
     // Calculate skip
     const skip = (page - 1) * limit
 
-    // Pipeline to:
-    // 1. Lookup users to check for verification status (Creator check)
-    // 2. Filter only posts from verified users
-    // 3. Sort by engagement (likes + comments)
-    // 4. Pagination
+    // Optimization: Get verified user IDs first to avoid expensive $lookup on all posts
+    // This dramatically reduces the workload for the database
+    const verifiedUsers = await usersCollection.find(
+      { 
+        $or: [
+          { is_verified: true },
+          { badge_type: { $in: ['blue', 'gold', 'purple'] } }
+        ] 
+      },
+      { projection: { _id: 1 } }
+    ).toArray()
+
+    const verifiedUserIds = verifiedUsers.map(u => u._id)
+
+    // If no verified users, return empty result early
+    if (verifiedUserIds.length === 0) {
+      return {
+        success: true,
+        data: [],
+        pagination: pagination.getMetadata(page, limit, 0)
+      }
+    }
+
+    const matchQuery = {
+      is_archived: { $ne: true },
+      is_deleted: { $ne: true },
+      user_id: { $in: verifiedUserIds }
+    }
+
+    // Get total count for pagination
+    const total = await postsCollection.countDocuments(matchQuery)
+
+    // Pipeline to sort by engagement and paginate
     const pipeline = [
-      {
-        $match: {
-          is_archived: { $ne: true },
-          is_deleted: { $ne: true }
-        }
-      },
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'user_id',
-          foreignField: '_id',
-          as: 'author'
-        }
-      },
-      {
-        $unwind: '$author'
-      },
-      {
-        // Filter: Author must be verified OR have a specific badge (Creator logic)
-        $match: {
-          $or: [
-            { 'author.is_verified': true },
-            { 'author.badge_type': { $in: ['blue', 'gold', 'purple'] } }
-          ]
-        }
-      },
+      { $match: matchQuery },
       {
         // Add a field for engagement score
         $addFields: {
@@ -120,6 +133,18 @@ export class PostService {
       },
       {
         $limit: limit
+      },
+      // Lookup author only for the paginated results
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'user_id',
+          foreignField: '_id',
+          as: 'author'
+        }
+      },
+      {
+        $unwind: '$author'
       }
     ]
 
@@ -175,7 +200,7 @@ export class PostService {
     return {
       success: true,
       data: enrichedPosts,
-      pagination: pagination.getMetadata(page, limit, 1000) // 1000 is dummy total for now
+      pagination: pagination.getMetadata(page, limit, total)
     }
   }
 
@@ -361,6 +386,9 @@ export class PostService {
 
     const posts = await postsCollection.aggregate([
       { $match: matchQuery },
+      { $sort: { created_at: -1 } },
+      { $skip: offset },
+      { $limit: validLimit },
       {
         $lookup: {
           from: 'users',
@@ -369,10 +397,7 @@ export class PostService {
           as: 'user'
         }
       },
-      { $unwind: '$user' },
-      { $sort: { created_at: -1 } },
-      { $skip: offset },
-      { $limit: validLimit }
+      { $unwind: '$user' }
     ]).toArray()
 
     const transformedPosts = await PostService.enrichPosts(posts, currentUserId)
@@ -388,6 +413,13 @@ export class PostService {
 
   // Get feed posts
   static async getFeedPosts(userId: string, page = 1, limit = 20): Promise<PaginatedResponse<Post>> {
+    // 🚀 Cache Strategy for Main Feed
+    const cacheKey = `feed:main:${userId}:${page}:${limit}`;
+    const cached = await cacheGet(cacheKey);
+    if (cached) {
+       return cached;
+    }
+
     const { page: validPage, limit: validLimit } = pagination.validateParams(page.toString(), limit.toString())
     const offset = pagination.getOffset(validPage, validLimit)
 
@@ -396,19 +428,29 @@ export class PostService {
     const followsCollection = db.collection('follows')
 
     // Get users that current user follows (check both field formats)
-    const follows = await followsCollection.find({
-      $or: [
-        { follower_id: new ObjectId(userId) },
-        { followerId: new ObjectId(userId) }
-      ],
-      status: 'accepted' // Only accepted follows
-    }).toArray()
+    const followsCacheKey = `user:following_ids:${userId}`;
+    let followingIds: string[] | null = await cacheGet(followsCacheKey);
 
-    const followingIds = follows.map(f => f.following_id || f.followingId)
-    followingIds.push(new ObjectId(userId)) // Include own posts
+    if (!followingIds) {
+      const follows = await followsCollection.find({
+        $or: [
+          { follower_id: new ObjectId(userId) },
+          { followerId: new ObjectId(userId) }
+        ],
+        status: 'accepted' // Only accepted follows
+      }).toArray()
+
+      followingIds = follows.map(f => (f.following_id || f.followingId).toString())
+      followingIds.push(userId) // Include own posts
+
+      // Cache following list for 5 minutes
+      await cacheSet(followsCacheKey, followingIds, 300);
+    }
+    
+    const followingObjectIds = followingIds.map(id => new ObjectId(id))
 
     const matchQuery = {
-      user_id: { $in: followingIds },
+      user_id: { $in: followingObjectIds },
       is_archived: { $ne: true }
     }
 
@@ -416,6 +458,9 @@ export class PostService {
 
     const posts = await postsCollection.aggregate([
       { $match: matchQuery },
+      { $sort: { created_at: -1 } },
+      { $skip: offset },
+      { $limit: validLimit },
       {
         $lookup: {
           from: 'users',
@@ -424,21 +469,23 @@ export class PostService {
           as: 'user'
         }
       },
-      { $unwind: '$user' },
-      { $sort: { created_at: -1 } },
-      { $skip: offset },
-      { $limit: validLimit }
+      { $unwind: '$user' }
     ]).toArray()
 
     const transformedPosts = await PostService.enrichPosts(posts, userId)
 
     const paginationMeta = pagination.getMetadata(validPage, validLimit, total)
 
-    return {
+    const result = {
       success: true,
       data: transformedPosts,
       pagination: paginationMeta,
     }
+
+    // Cache for 60 seconds
+    await cacheSet(cacheKey, result, 60);
+
+    return result;
   }
 
   // Update post
@@ -532,34 +579,45 @@ export class PostService {
 
   // Like post
   static async likePost(userId: string, postId: string, is_anonymous: boolean = false): Promise<void> {
+    // 🚀 Async Like Optimization for Million-User Scale
+    // Push to queue immediately for instant response
+    // A background worker will handle the DB write
+    
+    // 1. Check if queue is available
+    const queueAvailable = await isQueueAvailable();
+    if (queueAvailable) {
+       // console.log('⚡ Using Async Like Queue');
+       await addJob(QUEUE_NAMES.LIKES, 'process-like', {
+         userId,
+         postId,
+         is_anonymous,
+         action: 'like',
+         timestamp: new Date()
+       });
+       return; // Return immediately!
+    } else {
+       console.warn('⚠️ Async Like Queue Unavailable - Falling back to sync DB write');
+    }
+
+    // Fallback to synchronous DB write if queue is down
     const db = await getDatabase()
     const postsCollection = db.collection('posts')
     const likesCollection = db.collection('likes')
 
-    const post = await postsCollection.findOne({
-      _id: new ObjectId(postId),
-      is_archived: { $ne: true }
-    })
-
-    if (!post) {
-      throw errors.notFound("Post not found")
+    // Optimistic Like: Try to insert directly. Unique index prevents duplicates.
+    try {
+      await likesCollection.insertOne({
+        user_id: new ObjectId(userId),
+        post_id: new ObjectId(postId),
+        created_at: new Date(),
+        is_anonymous: is_anonymous
+      })
+    } catch (error: any) {
+      if (error.code === 11000) {
+        throw errors.conflict("Post already liked")
+      }
+      throw error;
     }
-
-    const existingLike = await likesCollection.findOne({
-      user_id: new ObjectId(userId),
-      post_id: new ObjectId(postId)
-    })
-
-    if (existingLike) {
-      throw errors.conflict("Post already liked")
-    }
-
-    await likesCollection.insertOne({
-      user_id: new ObjectId(userId),
-      post_id: new ObjectId(postId),
-      created_at: new Date(),
-      is_anonymous: is_anonymous
-    })
 
     // Increment likes count on post
     await postsCollection.updateOne(
@@ -570,6 +628,17 @@ export class PostService {
 
   // Unlike post
   static async unlikePost(userId: string, postId: string): Promise<void> {
+     // 🚀 Async Unlike Optimization
+     if (await isQueueAvailable()) {
+        await addJob(QUEUE_NAMES.LIKES, 'process-like', {
+          userId,
+          postId,
+          action: 'unlike',
+          timestamp: new Date()
+        });
+        return;
+     }
+
     const db = await getDatabase()
     const likesCollection = db.collection('likes')
     const postsCollection = db.collection('posts')
@@ -602,6 +671,9 @@ export class PostService {
 
     const likes = await likesCollection.aggregate([
       { $match: { post_id: new ObjectId(postId) } },
+      { $sort: { created_at: -1 } },
+      { $skip: offset },
+      { $limit: validLimit },
       {
         $lookup: {
           from: 'users',
@@ -611,9 +683,6 @@ export class PostService {
         }
       },
       { $unwind: '$user' },
-      { $sort: { created_at: -1 } },
-      { $skip: offset },
-      { $limit: validLimit },
       {
         $project: {
           id: '$user._id',

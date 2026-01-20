@@ -96,66 +96,72 @@ export class UserService {
       is_followed_by?: boolean
     }
   > {
-    // Check cache first
+    // Check cache for base profile first
     const cacheKey = `${cacheKeys.user(userId)}:profile`
-    const cachedProfile = await cache.get(cacheKey)
+    let profile: any = await cache.get(cacheKey)
 
-    if (cachedProfile && !currentUserId) {
-      return cachedProfile
-    }
+    if (!profile) {
+      const user: any = await User.findOne({ _id: userId, is_active: true }).lean().exec()
 
-    const user: any = await User.findOne({ _id: userId, is_active: true }).lean().exec()
+      if (!user) {
+        throw errors.notFound("User not found")
+      }
 
-    if (!user) {
-      throw errors.notFound("User not found")
-    }
+      // Get counts (expensive operations)
+      const [followersCount, followingCount, postsCount] = await Promise.all([
+        Follow.countDocuments({ following_id: userId, status: 'active' }).exec(),
+        Follow.countDocuments({ follower_id: userId, status: 'active' }).exec(),
+        Post.countDocuments({ user_id: userId, is_archived: false }).exec()
+      ])
 
-    // Get counts
-    const followersCount = await Follow.countDocuments({ following_id: userId, status: 'active' }).exec()
-    const followingCount = await Follow.countDocuments({ follower_id: userId, status: 'active' }).exec()
-    const postsCount = await Post.countDocuments({ user_id: userId, is_archived: false }).exec()
-
-    const profile: any = {
-      id: user._id,
-      username: user.username,
-      email: user.email,
-      full_name: user.full_name,
-      bio: user.bio,
-      avatar_url: user.avatar_url,
-      phone: user.phone,
-      is_verified: user.is_verified,
-      is_private: user.is_private,
-      is_active: user.is_active,
-      last_seen: user.last_seen,
-      created_at: user.created_at,
-      updated_at: user.updated_at,
-      followers_count: followersCount,
-      following_count: followingCount,
-      posts_count: postsCount,
-    }
-
-    // Check follow status if current user is provided
-    if (currentUserId && currentUserId !== userId) {
-      const isFollowing: any = await Follow.findOne({ 
-        follower_id: currentUserId, 
-        following_id: userId 
-      }).lean().exec()
+      profile = {
+        id: user._id,
+        username: user.username,
+        email: user.email,
+        full_name: user.full_name,
+        bio: user.bio,
+        avatar_url: user.avatar_url,
+        phone: user.phone,
+        is_verified: user.is_verified,
+        badge_type: user.badge_type,
+        verification_type: user.verification_type,
+        isAnonymousMode: user.isAnonymousMode,
+        anonymousPersona: user.anonymousPersona,
+        is_private: user.is_private,
+        is_active: user.is_active,
+        last_seen: user.last_seen,
+        created_at: user.created_at,
+        updated_at: user.updated_at,
+        followers_count: followersCount,
+        following_count: followingCount,
+        posts_count: postsCount,
+      }
       
-      const isFollowedBy: any = await Follow.findOne({ 
-        follower_id: userId, 
-        following_id: currentUserId 
-      }).lean().exec()
-
-      profile.is_following = isFollowing?.status === "active"
-      profile.is_followed_by = isFollowedBy?.status === "active"
+      // Cache base profile for 60 seconds
+      await cache.set(cacheKey, profile, 60)
     }
 
-    // Cache the profile (without follow status for general caching)
-    if (!currentUserId) {
-      await cache.set(cacheKey, profile, config.redis.ttl.user)
-    }
+    // Check follow status if current user is provided (always real-time)
+    if (currentUserId && currentUserId !== userId) {
+      const [isFollowing, isFollowedBy] = await Promise.all([
+        Follow.findOne({ 
+          follower_id: currentUserId, 
+          following_id: userId 
+        }).select('status').lean().exec() as Promise<any>,
+        
+        Follow.findOne({ 
+          follower_id: userId, 
+          following_id: currentUserId 
+        }).select('status').lean().exec() as Promise<any>
+      ])
 
-    return profile
+      return {
+        ...profile,
+        is_following: isFollowing?.status === "active",
+        is_followed_by: isFollowedBy?.status === "active"
+      }
+    }
+    
   }
 
   // Follow user

@@ -3,11 +3,24 @@ import { ChatService } from "./chat"
 import { errors } from "../lib/utils"
 import MessageModel from "../models/message"
 import ConversationModel from "../models/conversation"
+import UserModel from "../models/user"
 import { getWebSocketService } from "../lib/websocket"
 import { ModerationService } from "./moderation"
 
 export class AnonymousChatService {
   private static QUEUE_PREFIX = "anon_chat_queue:"
+
+  // Get Queue Length (for "Users Online" count)
+  static async getQueueLength(interest: string = 'general'): Promise<number> {
+    const redis = getRedis()
+    if (!redis) return 0
+    const tag = interest.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+    const queueKey = `${this.QUEUE_PREFIX}${tag || 'general'}`
+    if ('llen' in redis) {
+        return await redis.llen(queueKey)
+    }
+    return 0
+  }
 
   // Join the random chat queue with Interests (Tags)
   static async joinQueue(userId: string, interests: string[] = []): Promise<{ status: "queued" | "matched", conversationId?: string }> {
@@ -16,14 +29,23 @@ export class AnonymousChatService {
       throw errors.internal("Chat service unavailable")
     }
 
-    // Normalize interests (lowercase, trim, max 5)
-    // ONLY ALLOW 'general' OR 'fun'
-    // If user sends anything else, we default to 'general' or ignore the extra tags.
-    // For simplicity, let's strictly filter.
-    const allowedTags = ['general', 'fun'];
+    // Check Reputation
+    const user = await UserModel.findById(userId);
+    if (!user) throw errors.notFound("User not found");
+    
+    // Default to 100 if undefined
+    const reputation = user.anonymousReputation !== undefined ? user.anonymousReputation : 100;
+    
+    if (reputation < 50) {
+        throw errors.forbidden("Your anonymous reputation is too low to join random chat.");
+    }
+
+    // Normalize interests (lowercase, trim, max 5, max length 20, no special chars)
+    // We allow any alphanumeric tag now for "Omegle++" experience
     const tags = interests
-      .map(t => t.toLowerCase().trim())
-      .filter(t => allowedTags.includes(t));
+      .map(t => t.toLowerCase().trim().replace(/[^a-z0-9]/g, '')) // Remove non-alphanumeric
+      .filter(t => t.length > 0 && t.length <= 20)
+      .slice(0, 5); // Max 5 tags
     
     // If no valid tags, default to "general"
     if (tags.length === 0) tags.push("general")
@@ -109,8 +131,8 @@ export class AnonymousChatService {
     
     // We only put them in the FIRST tag queue in joinQueue, so we only remove from there
     // Ensure tag is valid
-    let primaryTag = tags[0].toLowerCase().trim()
-    if (!['general', 'fun'].includes(primaryTag)) {
+    let primaryTag = tags[0].toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+    if (primaryTag.length === 0 || primaryTag.length > 20) {
         primaryTag = 'general'
     }
     
@@ -120,6 +142,30 @@ export class AnonymousChatService {
     if ('lrem' in redis) {
       await redis.lrem(queueKey, 0, userId)
     }
+  }
+
+  // End Anonymous Conversation (Skip/Next or User Leaves)
+  static async endAnonymousConversation(conversationId: string, endedByUserId: string) {
+     const conversation = await ConversationModel.findById(conversationId);
+     if (!conversation) return;
+
+     const now = new Date();
+     // Set left_at for ALL participants to effectively close it
+     conversation.participants.forEach(p => {
+        if (!p.left_at) {
+             p.left_at = now;
+        }
+     });
+     
+     await conversation.save();
+
+     // Notify all participants
+     const wsService = getWebSocketService();
+     wsService.sendMessageToConversation(conversationId, {
+        type: 'conversation_ended',
+        endedBy: endedByUserId,
+        timestamp: now
+     });
   }
 
   // Create Anonymous Conversation
