@@ -17,6 +17,10 @@ const likeSchema = new mongoose.Schema({
     enum: ['Post', 'Reel', 'Comment'],
     required: true
   },
+  is_anonymous: {
+    type: Boolean,
+    default: false
+  },
   created_at: {
     type: Date,
     default: Date.now

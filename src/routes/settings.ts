@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express';
 import { ObjectId } from 'mongodb';
 import { getDatabase } from '../lib/database';
 import { authenticateToken } from '../middleware/auth';
+import { cacheDel } from '../lib/redis';
 
 const router = express.Router();
 
@@ -71,6 +72,9 @@ router.patch('/', authenticateToken, async (req: AuthRequest, res: Response) => 
       { _id: user._id },
       { $set: updateFields }
     );
+
+    // Invalidate user profile cache
+    await cacheDel(`userProfile:${req.userId}`);
 
     res.json({
       message: 'Settings updated successfully',

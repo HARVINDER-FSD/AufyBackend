@@ -35,7 +35,8 @@ const updatePostSchema = Joi.object({
 })
 
 const postReactionSchema = Joi.object({
-  reaction: Joi.string().max(50).optional()
+  reaction: Joi.string().max(50).optional(),
+  is_anonymous: Joi.boolean().optional()
 })
 
 const createCommentSchema = Joi.object({
@@ -175,7 +176,7 @@ router.delete("/:postId", authenticateToken, async (req, res) => {
 router.post("/:postId/like", authenticateToken, validateBody(postReactionSchema), async (req, res) => {
   try {
     const { postId } = req.params
-    const { reaction } = req.body // Get reaction from request body
+    const { reaction, is_anonymous } = req.body // Get reaction from request body
     const userId = req.userId!
 
     let userObjectId: ObjectId
@@ -235,7 +236,7 @@ router.post("/:postId/like", authenticateToken, validateBody(postReactionSchema)
       userReaction = reaction
     } else {
       const user = await db.collection('users').findOne({ _id: userObjectId });
-      const isAnonymous = user?.isAnonymousMode === true;
+      const isAnonymous = is_anonymous !== undefined ? is_anonymous : (user?.isAnonymousMode === true);
 
       await likesCollection.insertOne({
         user_id: userObjectId,

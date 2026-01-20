@@ -38,6 +38,10 @@ const conversationSchema = new mongoose.Schema({
   last_message: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Message'
+  },
+  is_anonymous: {
+    type: Boolean,
+    default: false
   }
 }, {
   timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' }
@@ -58,6 +62,7 @@ export interface IConversation extends Document {
     left_at?: Date;
   }[];
   last_message?: mongoose.Types.ObjectId;
+  is_anonymous?: boolean;
   created_at: Date;
   updated_at: Date;
 }

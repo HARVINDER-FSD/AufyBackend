@@ -1,13 +1,14 @@
 import { cache } from "../lib/database"
 import { getWebSocketService } from "../lib/websocket"
 import type { Conversation, Message, SendMessageRequest, PaginatedResponse } from "../lib/types"
-import { pagination, errors, cacheKeys } from "../lib/utils"
+import { errors, pagination, cacheKeys } from "../lib/utils"
 import { maskAnonymousUser } from "../lib/anonymous-utils"
 import { config } from "../lib/config"
 import ConversationModel from "../models/conversation"
 import MessageModel from "../models/message"
 import UserModel from "../models/user"
 import mongoose from "mongoose"
+import { ModerationService } from "./moderation"
 
 export class ChatService {
   // Create or get direct conversation

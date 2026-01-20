@@ -23,6 +23,17 @@ export class WebSocketService {
     return WebSocketService.instance;
   }
 
+  public sendMessageToConversation(conversationId: string, message: any) {
+    if (!this.io) return;
+    this.io.to(`chat:${conversationId}`).emit('message:received', message);
+  }
+
+  public notifyAnonymousMatch(userId: string, data: { conversationId: string; partnerPersona: any }) {
+    if (!this.io) return;
+    // Send to user's personal room
+    this.io.to(`user:${userId}`).emit('anonymous:matched', data);
+  }
+
   public initialize(httpServer: HTTPServer) {
     this.io = new SocketIOServer(httpServer, {
       cors: {
@@ -220,12 +231,6 @@ export class WebSocketService {
   public sendNotificationToUser(userId: string, notification: any) {
     if (this.io) {
       this.io.to(`user:${userId}`).emit('notification:new', notification);
-    }
-  }
-
-  public sendMessageToConversation(conversationId: string, message: any) {
-    if (this.io) {
-      this.io.to(`chat:${conversationId}`).emit('message:new', message);
     }
   }
 }

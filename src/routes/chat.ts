@@ -4,8 +4,67 @@ import Message from '../models/message';
 import Conversation from '../models/conversation';
 import mongoose from 'mongoose';
 import { ChatService } from '../services/chat';
+import { AnonymousChatService } from '../services/anonymous-chat';
 
 const router = express.Router();
+
+// --- Anonymous Chat Routes ---
+
+// Join Anonymous Queue (Random Stranger)
+router.post('/anonymous/join', auth, async (req, res) => {
+  try {
+    const { interests } = req.body; // Changed from topic to interests (array)
+    const result = await AnonymousChatService.joinQueue(req.userId!, interests);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ message: error.message || 'Server error' });
+  }
+});
+
+// Leave Anonymous Queue
+router.post('/anonymous/leave', auth, async (req, res) => {
+  try {
+    const { interests } = req.body;
+    await AnonymousChatService.leaveQueue(req.userId!, interests);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ message: error.message || 'Server error' });
+  }
+});
+
+// Skip & Next (Combined Action for efficiency)
+router.post('/anonymous/skip', auth, async (req, res) => {
+  try {
+    const { interests, currentConversationId } = req.body;
+    
+    // 1. Leave current conversation (if any)
+    // In a real app, we might want to notify the other user that they were skipped.
+    // For now, let's just leave the queue (if we were in it) or queue up again.
+    
+    // If user was in a conversation, they are "leaving" it. 
+    // If they were just in queue, they are leaving queue.
+    await AnonymousChatService.leaveQueue(req.userId!, interests);
+    
+    // 2. Join Queue Immediately
+    const result = await AnonymousChatService.joinQueue(req.userId!, interests);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ message: error.message || 'Server error' });
+  }
+});
+
+// Send Anonymous Request to Creator
+router.post('/anonymous/request', auth, async (req, res) => {
+  try {
+    const { recipientId, content } = req.body;
+    const message = await AnonymousChatService.sendAnonymousRequest(req.userId!, recipientId, content);
+    res.json(message);
+  } catch (error: any) {
+    res.status(500).json({ message: error.message || 'Server error' });
+  }
+});
+
+// --- Standard Chat Routes ---
 
 // Get all conversations for current user
 router.get('/conversations', auth, async (req, res) => {

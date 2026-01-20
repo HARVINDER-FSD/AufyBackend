@@ -48,13 +48,20 @@ router.get("/", async (req: any, res) => {
         const { ObjectId } = require('mongodb')
         const db = await getDatabase()
 
-        // Add to search history
-        await db.collection('search_history').insertOne({
-          user_id: new ObjectId(userId),
-          query: q,
-          type: 'search',
-          created_at: new Date()
-        })
+        // Check if user is in anonymous mode
+        const user = await db.collection('users').findOne({ _id: new ObjectId(userId) })
+        
+        if (user?.isAnonymousMode) {
+          console.log('[Search] Anonymous mode: Skipping history tracking')
+        } else {
+          // Add to search history
+          await db.collection('search_history').insertOne({
+            user_id: new ObjectId(userId),
+            query: q,
+            type: 'search',
+            created_at: new Date()
+          })
+        }
       } catch (err) {
         console.log('[Search] Could not track search history:', err)
       }

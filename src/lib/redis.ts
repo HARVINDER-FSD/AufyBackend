@@ -23,22 +23,40 @@ export const initRedis = () => {
       // Fallback to local Redis or standard TCP Redis
       console.log('🔗 Connecting to local/TCP Redis');
 
-      const client = new Redis({
-        host: process.env.REDIS_HOST || 'localhost',
-        port: parseInt(process.env.REDIS_PORT || '6379'),
-        password: process.env.REDIS_PASSWORD,
-        retryStrategy: (times) => {
-          if (times > 3) {
-            console.warn('⚠️  Redis connection failed, continuing without cache');
-            return null;
-          }
-          const delay = Math.min(times * 50, 2000);
-          return delay;
-        },
-        maxRetriesPerRequest: null,
-        connectTimeout: 5000,
-        lazyConnect: true
-      });
+      let client: Redis;
+      
+      // Support REDIS_URL (Standard on Render/Heroku)
+      if (process.env.REDIS_URL) {
+        client = new Redis(process.env.REDIS_URL, {
+          retryStrategy: (times) => {
+            if (times > 3) {
+              console.warn('⚠️  Redis connection failed, continuing without cache');
+              return null;
+            }
+            return Math.min(times * 50, 2000);
+          },
+          maxRetriesPerRequest: null,
+          connectTimeout: 5000,
+          lazyConnect: true
+        });
+      } else {
+        // Manual configuration
+        client = new Redis({
+          host: process.env.REDIS_HOST || 'localhost',
+          port: parseInt(process.env.REDIS_PORT || '6379'),
+          password: process.env.REDIS_PASSWORD,
+          retryStrategy: (times) => {
+            if (times > 3) {
+              console.warn('⚠️  Redis connection failed, continuing without cache');
+              return null;
+            }
+            return Math.min(times * 50, 2000);
+          },
+          maxRetriesPerRequest: null,
+          connectTimeout: 5000,
+          lazyConnect: true
+        });
+      }
 
       client.on('connect', () => {
         console.log('✅ Redis connected successfully');

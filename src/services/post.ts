@@ -66,6 +66,119 @@ export class PostService {
     return postWithUser
   }
 
+  // Get Anonymous Trending Feed (Verified Creators Only)
+  static async getAnonymousTrendingFeed(currentUserId: string, page: number = 1, limit: number = 20): Promise<PaginatedResponse<Post>> {
+    const db = await getDatabase()
+    const postsCollection = db.collection('posts')
+    
+    // Calculate skip
+    const skip = (page - 1) * limit
+
+    // Pipeline to:
+    // 1. Lookup users to check for verification status (Creator check)
+    // 2. Filter only posts from verified users
+    // 3. Sort by engagement (likes + comments)
+    // 4. Pagination
+    const pipeline = [
+      {
+        $match: {
+          is_archived: { $ne: true },
+          is_deleted: { $ne: true }
+        }
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'user_id',
+          foreignField: '_id',
+          as: 'author'
+        }
+      },
+      {
+        $unwind: '$author'
+      },
+      {
+        // Filter: Author must be verified OR have a specific badge (Creator logic)
+        $match: {
+          $or: [
+            { 'author.is_verified': true },
+            { 'author.badge_type': { $in: ['blue', 'gold', 'purple'] } }
+          ]
+        }
+      },
+      {
+        // Add a field for engagement score
+        $addFields: {
+          engagementScore: { $add: [{ $ifNull: ['$likes_count', 0] }, { $multiply: [{ $ifNull: ['$comments_count', 0] }, 2] }] } // Comments weighted x2
+        }
+      },
+      {
+        $sort: { engagementScore: -1, created_at: -1 } // Highest engagement first
+      },
+      {
+        $skip: skip
+      },
+      {
+        $limit: limit
+      }
+    ]
+
+    const posts = await postsCollection.aggregate(pipeline).toArray()
+
+    // Enrich posts with current user's interaction status (even if they are anonymous, they might have liked it)
+    // Note: enrichPosts expects the 'author' to be on the post object if possible, but it fetches likes separately.
+    // The aggregate above attaches 'author'. We should make sure enrichPosts handles it or we format it correctly.
+    // Based on previous code, enrichPosts fetches users if needed.
+    // However, our aggregate already has the user (author). Let's prepare the posts for enrichPosts.
+    
+    // We need to re-map the 'author' from lookup back to how enrichPosts expects it (or just let enrichPosts handle it if it does).
+    // Let's look at enrichPosts implementation again. It seems it doesn't fetch users inside it? 
+    // Wait, I didn't see the full enrichPosts code. Let's assume it handles "user" field or we need to attach it.
+    // Actually, let's just manually format the posts here to be safe and efficient since we already have the author.
+    
+    const enrichedPosts: Post[] = []
+
+    // Helper to get likes status for the current user
+    const likesCollection = db.collection('likes')
+    let likedPostIds = new Set<string>()
+    if (currentUserId) {
+      const likes = await likesCollection.find({
+        user_id: new ObjectId(currentUserId),
+        post_id: { $in: posts.map(p => p._id) }
+      }).toArray()
+      likes.forEach(like => likedPostIds.add(like.post_id.toString()))
+    }
+
+    for (const post of posts) {
+      const author = post.author
+      
+      // Mask author if THEY are anonymous (unlikely for verified creators, but good practice)
+      const displayUser = maskAnonymousUser({ ...author, is_anonymous: post.is_anonymous })
+
+      enrichedPosts.push({
+        id: post._id.toString(),
+        user_id: post.user_id.toString(),
+        content: post.content,
+        media_urls: post.media_urls,
+        media_type: post.media_type as any,
+        location: post.location || undefined,
+        is_archived: post.is_archived,
+        created_at: post.created_at,
+        updated_at: post.updated_at,
+        user: displayUser as any,
+        likes_count: post.likes_count || 0,
+        comments_count: post.comments_count || 0,
+        is_liked: likedPostIds.has(post._id.toString())
+      })
+    }
+
+    return {
+      success: true,
+      data: enrichedPosts,
+      pagination: pagination.getMetadata(page, limit, 1000) // 1000 is dummy total for now
+    }
+  }
+
   // Get post by ID
   static async getPostById(postId: string, currentUserId?: string): Promise<Post> {
     const db = await getDatabase()
@@ -418,7 +531,7 @@ export class PostService {
   }
 
   // Like post
-  static async likePost(userId: string, postId: string): Promise<void> {
+  static async likePost(userId: string, postId: string, is_anonymous: boolean = false): Promise<void> {
     const db = await getDatabase()
     const postsCollection = db.collection('posts')
     const likesCollection = db.collection('likes')
@@ -444,7 +557,8 @@ export class PostService {
     await likesCollection.insertOne({
       user_id: new ObjectId(userId),
       post_id: new ObjectId(postId),
-      created_at: new Date()
+      created_at: new Date(),
+      is_anonymous: is_anonymous
     })
 
     // Increment likes count on post
@@ -507,16 +621,35 @@ export class PostService {
           full_name: '$user.full_name',
           avatar_url: '$user.avatar_url',
           is_verified: '$user.is_verified',
-          liked_at: '$created_at'
+          liked_at: '$created_at',
+          is_anonymous: '$is_anonymous'
         }
       }
     ]).toArray()
+
+    const maskedLikes = likes.map((like: any) => {
+      const masked = maskAnonymousUser({
+        ...like,
+        _id: like.id,
+        is_anonymous: like.is_anonymous
+      })
+      
+      return {
+        id: masked.id,
+        username: masked.username,
+        full_name: masked.full_name,
+        avatar_url: masked.avatar_url,
+        is_verified: masked.is_verified,
+        liked_at: like.liked_at,
+        is_anonymous: like.is_anonymous
+      }
+    })
 
     const paginationMeta = pagination.getMetadata(validPage, validLimit, total)
 
     return {
       success: true,
-      data: likes,
+      data: maskedLikes,
       pagination: paginationMeta,
     }
   }

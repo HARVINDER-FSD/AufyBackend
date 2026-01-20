@@ -35,7 +35,7 @@ const MessageSchema = new Schema({
   },
   status: {
     type: String,
-    enum: ['sent', 'delivered', 'read'],
+    enum: ['sent', 'delivered', 'read', 'request'],
     default: 'sent',
   },
   reactions: [{

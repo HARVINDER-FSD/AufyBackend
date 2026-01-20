@@ -261,13 +261,18 @@ const userSchema = new mongoose.Schema({
     type: Date,
     default: Date.now
   },
+  // Anonymous Mode Features
   isAnonymousMode: {
     type: Boolean,
     default: false
   },
   anonymousPersona: {
-    type: Object,
+    type: Object, // { username: 'Ghost123', avatar: '...', id: 'masked_id' }
     default: null
+  },
+  anonymousReputation: {
+    type: Number,
+    default: 100 // Starts at 100, goes up/down based on behavior
   }
 });
 

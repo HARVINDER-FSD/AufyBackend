@@ -2,6 +2,7 @@ import { Router, Response } from 'express'
 import { ObjectId } from 'mongodb'
 import { getDatabase } from '../lib/database'
 import { authenticateToken as authenticate } from '../middleware/auth'
+import { cacheDelete } from '../lib/cache'
 
 const router = Router()
 
@@ -14,9 +15,9 @@ router.get('/status', authenticate as any, async (req: any, res: Response) => {
         const user = await db.collection('users').findOne({ _id: new ObjectId(userId) })
 
         const status = {
-            isVerified: user?.verified || false,
+            isVerified: user?.is_verified || user?.verified || false,
             verificationStatus: user?.verificationStatus || 'none', // none, pending, rejected
-            verificationType: user?.verificationType || null,
+            verificationType: user?.badge_type || user?.verificationType || null,
             verificationDate: user?.verificationDate || null,
             rejectionReason: user?.rejectionReason || null
         }
@@ -132,7 +133,7 @@ router.post('/verify-payment', authenticate as any, async (req: any, res: Respon
         )
 
         // Invalidate cache if using Redis
-        // await cacheInvalidate(`userProfile:${userId}`);
+        await cacheDelete(`userProfile:${userId}`);
 
         res.json({
             success: true,
@@ -166,6 +167,8 @@ router.post('/remove', authenticate as any, async (req: any, res: Response) => {
                 }
             }
         )
+
+        await cacheDelete(`userProfile:${userId}`);
 
         res.json({
             success: true,

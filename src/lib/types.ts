@@ -45,6 +45,7 @@ export interface Comment {
   parent_comment_id?: string
   content: string
   is_deleted: boolean
+  is_anonymous?: boolean
   created_at: Date
   updated_at: Date
   user?: User
@@ -175,6 +176,7 @@ export interface CreatePostRequest {
 export interface CreateCommentRequest {
   content: string
   parent_comment_id?: string
+  is_anonymous?: boolean
 }
 
 export interface CreateStoryRequest {

@@ -7,6 +7,8 @@ import CommentModel from "../models/comment"
 import PostModel from "../models/post"
 import UserModel from "../models/user"
 import type { Model } from "mongoose"
+import { addJob, QUEUE_NAMES } from "../lib/queue"
+import { ModerationService } from "./moderation"
 
 // Type assertions to fix Mongoose model type issues
 const Comment = CommentModel as any as Model<any>
@@ -17,7 +19,7 @@ export class CommentService {
   // Create comment
   static async createComment(userId: string, postId: string, commentData: CreateCommentRequest): Promise<Comment> {
     try {
-      const { content, parent_comment_id } = commentData
+      const { content, parent_comment_id, is_anonymous } = commentData
 
       console.log('[COMMENT CREATE] Starting:', { userId, postId, content: content?.substring(0, 50) })
 
@@ -28,6 +30,11 @@ export class CommentService {
 
       if (content.length > 2200) {
         throw new Error("Comment too long (max 2200 characters)")
+      }
+
+      // Moderation Check (Safety)
+      if (is_anonymous) {
+        await ModerationService.checkContent(content);
       }
 
       // Check if post exists
@@ -60,13 +67,15 @@ export class CommentService {
 
       // Create comment
       console.log('[COMMENT CREATE] Creating comment...')
+      const isAnonymous = is_anonymous !== undefined ? is_anonymous : (user.isAnonymousMode === true);
+
       const newComment = await Comment.create({
         user_id: userId,
         post_id: postId,
         parent_comment_id: parent_comment_id || null,
         content: content.trim(),
         is_deleted: false,
-        is_anonymous: user.isAnonymousMode === true,
+        is_anonymous: isAnonymous,
         likes_count: 0,
         replies_count: 0,
       })
@@ -85,7 +94,26 @@ export class CommentService {
         is_deleted: newComment.is_deleted,
         created_at: newComment.created_at,
         updated_at: newComment.updated_at,
-        user: maskAnonymousUser({ ...user, is_anonymous: newComment.is_anonymous })
+        user: maskAnonymousUser({ ...user, is_anonymous: newComment.is_anonymous }) as any
+      }
+
+      // Send Notification (if not own post)
+      try {
+        const postOwnerId = (postExists as any).user_id?.toString()
+        if (postOwnerId && postOwnerId !== userId) {
+          await addJob(QUEUE_NAMES.NOTIFICATIONS, 'comment-notification', {
+            recipientId: postOwnerId,
+            title: 'New Comment 💬',
+            body: isAnonymous ? 'A Ghost User 👻 commented on your post.' : `${user.username} commented on your post.`,
+            data: { 
+              postId, 
+              commentId: newComment._id.toString(),
+              type: 'comment' 
+            }
+          })
+        }
+      } catch (err) {
+        console.error('[COMMENT CREATE] Notification error:', err)
       }
 
       console.log('[COMMENT CREATE] Success!')

@@ -30,6 +30,73 @@ const authenticate = (req: any, res: Response, next: any) => {
     }
 }
 
+// Toggle anonymous mode
+router.post('/anonymous/toggle', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.userId
+        const db = await getDatabase()
+        
+        const user = await db.collection('users').findOne({ _id: new ObjectId(userId) })
+        if (!user) return res.status(404).json({ message: 'User not found' })
+
+        const newMode = !user.isAnonymousMode
+        const update: any = { 
+            isAnonymousMode: newMode,
+            updated_at: new Date()
+        }
+
+        // Generate persona if missing and turning on
+        if (newMode && !user.anonymousPersona) {
+            update.anonymousPersona = generateAnonymousPersona()
+        }
+
+        await db.collection('users').updateOne(
+            { _id: new ObjectId(userId) },
+            { $set: update }
+        )
+
+        // Invalidate cache
+        await cacheDel(`userProfile:${userId}`)
+
+        res.json({ 
+            success: true, 
+            isAnonymousMode: newMode,
+            anonymousPersona: user.anonymousPersona || update.anonymousPersona
+        })
+    } catch (error: any) {
+        res.status(500).json({ message: error.message })
+    }
+})
+
+// Update anonymous persona
+router.post('/anonymous/persona', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.userId
+        const { name, avatar } = req.body
+        const db = await getDatabase()
+
+        const update: any = {
+            'anonymousPersona.updated_at': new Date()
+        }
+        if (name) update['anonymousPersona.name'] = name
+        if (avatar) update['anonymousPersona.avatar'] = avatar
+
+        const result = await db.collection('users').updateOne(
+            { _id: new ObjectId(userId) },
+            { $set: update }
+        )
+
+        if (result.matchedCount === 0) return res.status(404).json({ message: 'User not found' })
+
+        // Invalidate cache
+        await cacheDel(`userProfile:${userId}`)
+
+        res.json({ success: true, message: 'Anonymous persona updated' })
+    } catch (error: any) {
+        res.status(500).json({ message: error.message })
+    }
+})
+
 // Register push token (Expo/FCM)
 // Register push token (Expo/FCM) with validation
 const pushTokenSchema = Joi.object({
@@ -105,6 +172,9 @@ router.get('/me', authenticate, async (req: any, res: Response) => {
             badge_type: user.badge_type || user.verification_type || null,
             badgeType: user.badge_type || user.verification_type || null,
             posts_count: postsCount,
+            isPrivate: user.is_private || false,
+            is_private: user.is_private || false,
+            show_online_status: user.settings?.showOnlineStatus !== false,
             isAnonymousMode: user.isAnonymousMode || false,
             anonymousPersona: user.anonymousPersona || null,
             phone: user.phone || '',
@@ -2931,15 +3001,16 @@ router.get('/:username/posts', authenticate, async (req: any, res: Response) => 
         // Transform reels to match post format
         const transformedReels = reels.map(reel => ({
             id: reel._id.toString(),
-            user: {
+            user: maskAnonymousUser({
                 id: targetUser._id.toString(),
                 username: targetUser.username,
                 avatar: targetUser.avatar_url || targetUser.avatar || '/placeholder-user.jpg',
                 avatar_url: targetUser.avatar_url || targetUser.avatar || '/placeholder-user.jpg',
                 verified: targetUser.is_verified || targetUser.verified || false,
                 is_verified: targetUser.is_verified || targetUser.verified || false,
-                badge_type: targetUser.badge_type || targetUser.verification_type || null
-            },
+                badge_type: targetUser.badge_type || targetUser.verification_type || null,
+                is_anonymous: reel.is_anonymous
+            }),
             content: reel.description || '',
             caption: reel.description || reel.title || '',
             media_type: 'video',
