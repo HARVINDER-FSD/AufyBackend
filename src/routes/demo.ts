@@ -1,7 +1,18 @@
 import { Router } from "express"
 import { getDatabase } from "../lib/database"
+import { createIndexes } from "../scripts/create-indexes"
 
 const router = Router()
+
+// Trigger manual index creation (useful for production updates)
+router.post("/create-indexes", async (req, res) => {
+  try {
+    await createIndexes();
+    res.json({ message: "Indexes created successfully" });
+  } catch (error: any) {
+    res.status(500).json({ message: "Failed to create indexes", error: error.message });
+  }
+});
 
 // Demo data seeder - adds sample posts and reels
 router.post("/seed", async (req, res) => {
