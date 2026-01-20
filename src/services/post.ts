@@ -249,6 +249,7 @@ export class PostService {
     }
 
     // Get reaction summary
+    // Single post view - we definitely need reactions
     const reactionSummary = await likesCollection.aggregate([
       { $match: { post_id: post._id } },
       {
@@ -286,7 +287,7 @@ export class PostService {
   }
 
   // Helper to enrich posts with user info, likes, reactions, etc. efficiently
-  private static async enrichPosts(posts: any[], currentUserId?: string): Promise<Post[]> {
+  private static async enrichPosts(posts: any[], currentUserId?: string, includeReactionSummary: boolean = false): Promise<Post[]> {
     if (posts.length === 0) return []
 
     const db = await getDatabase()
@@ -300,10 +301,11 @@ export class PostService {
     let userReactions = new Map<string, string>()
     
     if (userId) {
-      const likes = await likesCollection.find({
-        user_id: userId,
-        post_id: { $in: postIds }
-      }).toArray()
+      // Optimize: Only fetch necessary fields
+      const likes = await likesCollection.find(
+        { user_id: userId, post_id: { $in: postIds } },
+        { projection: { post_id: 1, reaction: 1 } }
+      ).toArray()
       
       likes.forEach(like => {
         likedPostIds.add(like.post_id.toString())
@@ -313,32 +315,34 @@ export class PostService {
       })
     }
 
-    // 2. Batch fetch reaction summaries
-    const reactionSummaries = await likesCollection.aggregate([
-      { $match: { post_id: { $in: postIds } } },
-      {
-        $group: {
-          _id: { post_id: '$post_id', reaction: '$reaction' },
-          count: { $sum: 1 }
-        }
-      }
-    ]).toArray()
-
+    // 2. Batch fetch reaction summaries (Only if requested - Expensive operation)
     const reactionsMap = new Map<string, Record<string, number>>()
-    reactionSummaries.forEach((item: any) => {
-        const postId = item._id.post_id.toString()
-        const reaction = item._id.reaction || '❤️'
-        if (!reactionsMap.has(postId)) {
-            reactionsMap.set(postId, {})
-        }
-        reactionsMap.get(postId)![reaction] = item.count
-    })
+    
+    if (includeReactionSummary) {
+        const reactionSummaries = await likesCollection.aggregate([
+          { $match: { post_id: { $in: postIds } } },
+          {
+            $group: {
+              _id: { post_id: '$post_id', reaction: '$reaction' },
+              count: { $sum: 1 }
+            }
+          }
+        ]).toArray()
+
+        reactionSummaries.forEach((item: any) => {
+            const postId = item._id.post_id.toString()
+            const reaction = item._id.reaction || '❤️'
+            if (!reactionsMap.has(postId)) {
+                reactionsMap.set(postId, {})
+            }
+            reactionsMap.get(postId)![reaction] = item.count
+        })
+    }
 
     // 3. Map everything back
     return posts.map(post => {
       const postId = post._id.toString()
       const isLiked = likedPostIds.has(postId)
-      const reactions = reactionsMap.get(postId) || {}
       
       return {
         id: postId,
@@ -358,8 +362,8 @@ export class PostService {
         
         is_liked: isLiked,
         userReaction: userReactions.get(postId) || null,
-        reactions: reactions,
-        likedBy: [] // Optimization: skip fetching recent likes usernames for feed performance
+        reactions: reactionsMap.get(postId) || {}, // Empty if not requested
+        likedBy: [] 
       } as Post
     })
   }
@@ -400,7 +404,7 @@ export class PostService {
       { $unwind: '$user' }
     ]).toArray()
 
-    const transformedPosts = await PostService.enrichPosts(posts, currentUserId)
+    const transformedPosts = await PostService.enrichPosts(posts, currentUserId, true) // Need reactions for user profile posts
 
     const paginationMeta = pagination.getMetadata(validPage, validLimit, total)
 
@@ -489,7 +493,8 @@ export class PostService {
     // Let's modify posts to have 'user' field as expected.
     posts.forEach((p: any) => { p.user = p.author; });
 
-    const transformedPosts = await PostService.enrichPosts(posts, userId)
+    // Optimize: Skip reaction summary for feed (saves aggregation cost)
+    const transformedPosts = await PostService.enrichPosts(posts, userId, false)
 
     const paginationMeta = pagination.getMetadata(validPage, validLimit, total)
 
