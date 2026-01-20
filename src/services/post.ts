@@ -456,21 +456,38 @@ export class PostService {
 
     const total = await postsCollection.countDocuments(matchQuery)
 
-    const posts = await postsCollection.aggregate([
-      { $match: matchQuery },
-      { $sort: { created_at: -1 } },
-      { $skip: offset },
-      { $limit: validLimit },
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'user_id',
-          foreignField: '_id',
-          as: 'user'
-        }
-      },
-      { $unwind: '$user' }
-    ]).toArray()
+    // Optimization: Use find() + manual join instead of expensive aggregate $lookup
+    const rawPosts = await postsCollection.find(matchQuery)
+      .sort({ created_at: -1 })
+      .skip(offset)
+      .limit(validLimit)
+      .toArray();
+
+    // Collect user IDs to fetch in bulk
+    const userIds = [...new Set(rawPosts.map(p => p.user_id))];
+    const usersCollection = db.collection('users');
+    const users = await usersCollection.find(
+        { _id: { $in: userIds } },
+        { projection: { _id: 1, username: 1, name: 1, full_name: 1, avatar: 1, avatar_url: 1, is_verified: 1, badge_type: 1, verification_type: 1, isAnonymousMode: 1, anonymousPersona: 1 } }
+    ).toArray();
+
+    // Map users for quick lookup
+    const userMap = new Map<string, any>();
+    users.forEach(u => userMap.set(u._id.toString(), u));
+
+    // Attach users to posts
+    const posts = rawPosts.map(post => {
+        const user = userMap.get(post.user_id.toString());
+        return {
+            ...post,
+            author: user // Mimic the structure expected by enrichPosts or internal logic
+        };
+    });
+
+    // Note: enrichPosts handles the final transformation, including masking anonymous users.
+    // However, enrichPosts previously expected 'user' field populated from aggregation.
+    // Let's modify posts to have 'user' field as expected.
+    posts.forEach((p: any) => { p.user = p.author; });
 
     const transformedPosts = await PostService.enrichPosts(posts, userId)
 
