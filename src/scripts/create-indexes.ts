@@ -45,8 +45,12 @@ export async function createIndexes() {
   await follows.createIndex({ following_id: 1, status: 1 });
   // 2. Get following
   await follows.createIndex({ follower_id: 1, status: 1 });
-  // 3. Unique Relationship
+  // 3. Get following (Legacy support)
+  await follows.createIndex({ followerId: 1, status: 1 });
+  await follows.createIndex({ followingId: 1, status: 1 });
+  // 4. Unique Relationship
   await follows.createIndex({ follower_id: 1, following_id: 1 }, { unique: true });
+  await follows.createIndex({ followerId: 1, followingId: 1 }, { unique: true, sparse: true });
 
   logger.info("✅ All Indexes Created Successfully!");
 }

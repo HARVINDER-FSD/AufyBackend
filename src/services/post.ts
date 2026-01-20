@@ -417,10 +417,12 @@ export class PostService {
 
   // Get feed posts
   static async getFeedPosts(userId: string, page = 1, limit = 20): Promise<PaginatedResponse<Post>> {
+    const startTime = Date.now();
     // 🚀 Cache Strategy for Main Feed
     const cacheKey = `feed:main:${userId}:${page}:${limit}`;
     const cached = await cacheGet(cacheKey);
     if (cached) {
+       console.log(`[Perf] Feed Cache Hit: ${Date.now() - startTime}ms`);
        return cached;
     }
 
@@ -432,6 +434,7 @@ export class PostService {
     const followsCollection = db.collection('follows')
 
     // Get users that current user follows (check both field formats)
+    const t1 = Date.now();
     const followsCacheKey = `user:following_ids:${userId}`;
     let followingIds: string[] | null = await cacheGet(followsCacheKey);
 
@@ -450,6 +453,7 @@ export class PostService {
       // Cache following list for 5 minutes
       await cacheSet(followsCacheKey, followingIds, 300);
     }
+    console.log(`[Perf] Fetch Following IDs: ${Date.now() - t1}ms (Count: ${followingIds.length})`);
     
     const followingObjectIds = followingIds.map(id => new ObjectId(id))
 
@@ -458,22 +462,29 @@ export class PostService {
       is_archived: { $ne: true }
     }
 
+    const t2 = Date.now();
     const total = await postsCollection.countDocuments(matchQuery)
+    console.log(`[Perf] Count Documents: ${Date.now() - t2}ms`);
 
     // Optimization: Use find() + manual join instead of expensive aggregate $lookup
+    const t3 = Date.now();
     const rawPosts = await postsCollection.find(matchQuery)
       .sort({ created_at: -1 })
       .skip(offset)
       .limit(validLimit)
       .toArray();
+    console.log(`[Perf] Fetch Raw Posts: ${Date.now() - t3}ms`);
 
     // Collect user IDs to fetch in bulk
     const userIds = [...new Set(rawPosts.map(p => p.user_id))];
     const usersCollection = db.collection('users');
+    
+    const t4 = Date.now();
     const users = await usersCollection.find(
         { _id: { $in: userIds } },
         { projection: { _id: 1, username: 1, name: 1, full_name: 1, avatar: 1, avatar_url: 1, is_verified: 1, badge_type: 1, verification_type: 1, isAnonymousMode: 1, anonymousPersona: 1 } }
     ).toArray();
+    console.log(`[Perf] Fetch Users: ${Date.now() - t4}ms`);
 
     // Map users for quick lookup
     const userMap = new Map<string, any>();
@@ -494,7 +505,9 @@ export class PostService {
     posts.forEach((p: any) => { p.user = p.author; });
 
     // Optimize: Skip reaction summary for feed (saves aggregation cost)
+    const t5 = Date.now();
     const transformedPosts = await PostService.enrichPosts(posts, userId, false)
+    console.log(`[Perf] Enrich Posts: ${Date.now() - t5}ms`);
 
     const paginationMeta = pagination.getMetadata(validPage, validLimit, total)
 
@@ -506,6 +519,7 @@ export class PostService {
 
     // Cache for 60 seconds
     await cacheSet(cacheKey, result, 60);
+    console.log(`[Perf] Total Feed Time: ${Date.now() - startTime}ms`);
 
     return result;
   }

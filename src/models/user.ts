@@ -341,6 +341,7 @@ export interface IUser extends Document {
   updated_at: Date;
   isAnonymousMode?: boolean;
   anonymousPersona?: any;
+  anonymousReputation?: number;
 
   comparePassword(candidatePassword: string): Promise<boolean>;
 }
