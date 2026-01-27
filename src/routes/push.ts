@@ -156,7 +156,7 @@ router.post('/send-bulk', authenticateToken, async (req: AuthRequest, res: Respo
     const messages: ExpoPushMessage[] = users
       .filter(user => Expo.isExpoPushToken(user.pushToken))
       .map(user => ({
-        to: user.pushToken,
+        to: user.pushToken as string,
         sound: 'default',
         title: notification.title,
         body: notification.body,

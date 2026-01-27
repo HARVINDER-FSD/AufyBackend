@@ -75,7 +75,7 @@ export class MongoAuthService {
       }
 
       // Compare passwords
-      const isPasswordValid = await bcrypt.compare(password, user.password);
+      const isPasswordValid = await bcrypt.compare(password, user.password || '');
       if (!isPasswordValid) {
         throw { status: 401, message: 'Invalid credentials' };
       }

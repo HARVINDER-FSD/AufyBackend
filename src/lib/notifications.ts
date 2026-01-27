@@ -426,18 +426,47 @@ async function sendPushNotificationToUser(
         body = 'You have a new notification';
     }
     
-    // Get user's FCM token
+    // Get user's FCM token or Expo push token
     const client = await MongoClient.connect(MONGODB_URI);
     const db = client.db();
     const user = await db.collection('users').findOne({ _id: new ObjectId(userId) });
     await client.close();
     
-    if (!user?.fcmToken) {
-      console.log('⚠️ No FCM token for user:', userId);
+    if (!user) {
+      console.log('⚠️ User not found for notification:', userId);
+      return;
+    }
+
+    // Try sending via Expo Push Token first (since mobile app registers this)
+    if (user.pushToken) {
+      console.log(`📱 Sending Expo push notification to ${userId}`);
+      await sendExpoPushNotification(user.pushToken, {
+        title,
+        body,
+        data: {
+          type,
+          notificationId: data.notificationId,
+          userId: actor._id?.toString() || '',
+          username: actorName,
+          avatar: actorAvatar,
+          postId: data.postId || '',
+          commentId: data.commentId || '',
+          conversationId: data.conversationId || '',
+        }
+      });
+      // We can continue to try FCM if we want, or return here.
+      // Usually one is enough. If Expo works, we're good.
+      // But for backward compatibility, we can leave the FCM check below if we want.
+      // However, duplicate notifications are annoying. Let's prefer Expo if available.
+      return; 
+    }
+    
+    if (!user.fcmToken) {
+      console.log('⚠️ No push token (FCM or Expo) for user:', userId);
       return;
     }
     
-    // Send Firebase push notification with avatar and name
+    // Fallback: Send Firebase push notification (legacy/Android native)
     await sendPushNotification(user.fcmToken, {
       title,
       body,

@@ -194,11 +194,13 @@ export const cacheKeys = {
   post: (id: string) => `${config.redis.keyPrefix}post:${id}`,
   postLikes: (id: string) => `${config.redis.keyPrefix}post:${id}:likes`,
   postComments: (id: string) => `${config.redis.keyPrefix}post:${id}:comments`,
-  userFeed: (id: string) => `${config.redis.keyPrefix}feed:${id}`,
+  userFeed: (id: string, page: number, limit: number) => `${config.redis.keyPrefix}feed:${id}:${page}:${limit}`,
   userStories: (id: string) => `${config.redis.keyPrefix}stories:${id}`,
   conversation: (id: string) => `${config.redis.keyPrefix}conversation:${id}`,
   userFollowers: (id: string) => `${config.redis.keyPrefix}followers:${id}`,
   userFollowing: (id: string) => `${config.redis.keyPrefix}following:${id}`,
+  anonymousTrending: (page: number, limit: number) => `${config.redis.keyPrefix}feed:anonymous:trending:${page}:${limit}`,
+  userPosts: (userId: string, page: number, limit: number) => `${config.redis.keyPrefix}posts:user:${userId}:${page}:${limit}`,
 }
 
 export function cn(...inputs: ClassValue[]) {

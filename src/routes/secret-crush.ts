@@ -104,7 +104,7 @@ router.post('/add/:userId', authenticateToken, async (req: AuthRequest, res: Res
       if (!mutualCrush.notifiedAt) {
         try {
           await createNotification({
-            userId: currentUserId,
+            userId: currentUserId!,
             actorId: crushUserId,
             type: 'secret_crush_match',
             conversationId: chatId,
@@ -113,7 +113,7 @@ router.post('/add/:userId', authenticateToken, async (req: AuthRequest, res: Res
 
           await createNotification({
             userId: crushUserId,
-            actorId: currentUserId,
+            actorId: currentUserId!,
             type: 'secret_crush_match',
             conversationId: chatId,
             content: `💕 You both are secret crushes! You and @${currentUser.username} both added each other as favorites!`
@@ -203,7 +203,7 @@ router.delete('/remove/:userId', authenticateToken, async (req: AuthRequest, res
       if (otherCrush) {
         // Break the mutual connection
         otherCrush.isMutual = false;
-        otherCrush.mutualChatId = null;
+        otherCrush.mutualChatId = undefined;
         otherCrush.mutualBrokenAt = new Date();
         await otherCrush.save();
 
@@ -216,7 +216,7 @@ router.delete('/remove/:userId', authenticateToken, async (req: AuthRequest, res
             // Notify other user that mutual connection ended
             await createNotification({
               userId: crushUserId,
-              actorId: currentUserId,
+              actorId: currentUserId!,
               type: 'secret_crush_removed',
               content: `💔 Your favorites connection with @${currentUser.username} has ended`
             });

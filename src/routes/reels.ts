@@ -39,7 +39,7 @@ router.get("/", optionalAuth, async (req: any, res: Response) => {
         Number.parseInt(limit as string) || 20,
       )
 
-      console.log('[Reels Route] Returning', result.data.length, 'reels for user', username)
+      console.log('[Reels Route] Returning', result.data?.length || 0, 'reels for user', username)
       return res.json(result)
     }
 

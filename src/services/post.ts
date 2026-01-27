@@ -4,7 +4,7 @@ import { pagination, errors, cacheKeys } from "../lib/utils"
 import { ObjectId } from "mongodb"
 import { maskAnonymousUser } from "../lib/anonymous-utils"
 import { addJob, QUEUE_NAMES, isQueueAvailable } from "../lib/queue"
-import { cacheGet, cacheSet } from "../lib/redis"
+import { cacheGet, cacheSet, cacheDel } from "../lib/redis"
 
 export class PostService {
   // Create new post
@@ -56,13 +56,16 @@ export class PostService {
 
     const result = await postsCollection.insertOne(postDoc)
 
+    // Invalidate user posts cache (first page)
+    await cacheDel(cacheKeys.userPosts(userId, 1, 20))
+
     const postWithUser: Post = {
       id: result.insertedId.toString(),
       user_id: userId,
-      content: postDoc.content,
-      media_urls: postDoc.media_urls,
+      content: postDoc.content || undefined,
+      media_urls: postDoc.media_urls || undefined,
       media_type: postDoc.media_type as any,
-      location: postDoc.location,
+      location: postDoc.location || undefined,
       is_archived: postDoc.is_archived,
       created_at: postDoc.created_at,
       updated_at: postDoc.updated_at,
@@ -77,78 +80,94 @@ export class PostService {
 
   // Get Anonymous Trending Feed (Verified Creators Only)
   static async getAnonymousTrendingFeed(currentUserId: string, page: number = 1, limit: number = 20): Promise<PaginatedResponse<Post>> {
+    // Try to get from cache first (just the raw posts and total count)
+    const cacheKey = cacheKeys.anonymousTrending(page, limit)
+    const cachedData = await cacheGet(cacheKey)
+
+    let posts: any[] = []
+    let total = 0
+
     const db = await getDatabase()
-    const postsCollection = db.collection('posts')
-    const usersCollection = db.collection('users')
-    
-    // Calculate skip
-    const skip = (page - 1) * limit
 
-    // Optimization: Get verified user IDs first to avoid expensive $lookup on all posts
-    // This dramatically reduces the workload for the database
-    const verifiedUsers = await usersCollection.find(
-      { 
-        $or: [
-          { is_verified: true },
-          { badge_type: { $in: ['blue', 'gold', 'purple'] } }
-        ] 
-      },
-      { projection: { _id: 1 } }
-    ).toArray()
+    if (cachedData) {
+      posts = cachedData.posts
+      total = cachedData.total
+    } else {
+      const postsCollection = db.collection('posts')
+      const usersCollection = db.collection('users')
+      
+      // Calculate skip
+      const skip = (page - 1) * limit
 
-    const verifiedUserIds = verifiedUsers.map(u => u._id)
+      // Optimization: Get verified user IDs first to avoid expensive $lookup on all posts
+      // This dramatically reduces the workload for the database
+      const verifiedUsers = await usersCollection.find(
+        { 
+          $or: [
+            { is_verified: true },
+            { badge_type: { $in: ['blue', 'gold', 'purple'] } }
+          ] 
+        },
+        { projection: { _id: 1 } }
+      ).toArray()
 
-    // If no verified users, return empty result early
-    if (verifiedUserIds.length === 0) {
-      return {
-        success: true,
-        data: [],
-        pagination: pagination.getMetadata(page, limit, 0)
-      }
-    }
+      const verifiedUserIds = verifiedUsers.map(u => u._id)
 
-    const matchQuery = {
-      is_archived: { $ne: true },
-      is_deleted: { $ne: true },
-      user_id: { $in: verifiedUserIds }
-    }
-
-    // Get total count for pagination
-    const total = await postsCollection.countDocuments(matchQuery)
-
-    // Pipeline to sort by engagement and paginate
-    const pipeline = [
-      { $match: matchQuery },
-      {
-        // Add a field for engagement score
-        $addFields: {
-          engagementScore: { $add: [{ $ifNull: ['$likes_count', 0] }, { $multiply: [{ $ifNull: ['$comments_count', 0] }, 2] }] } // Comments weighted x2
+      // If no verified users, return empty result early
+      if (verifiedUserIds.length === 0) {
+        return {
+          success: true,
+          data: [],
+          pagination: pagination.getMetadata(page, limit, 0)
         }
-      },
-      {
-        $sort: { engagementScore: -1, created_at: -1 } // Highest engagement first
-      },
-      {
-        $skip: skip
-      },
-      {
-        $limit: limit
-      },
-      // Lookup author only for the paginated results
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'user_id',
-          foreignField: '_id',
-          as: 'author'
-        }
-      },
-      {
-        $unwind: '$author'
       }
-    ]
 
-    const posts = await postsCollection.aggregate(pipeline).toArray()
+      const matchQuery = {
+        is_archived: { $ne: true },
+        is_deleted: { $ne: true },
+        user_id: { $in: verifiedUserIds }
+      }
+
+      // Get total count for pagination
+      total = await postsCollection.countDocuments(matchQuery)
+
+      // Pipeline to sort by engagement and paginate
+      const pipeline = [
+        { $match: matchQuery },
+        {
+          // Add a field for engagement score
+          $addFields: {
+            engagementScore: { $add: [{ $ifNull: ['$likes_count', 0] }, { $multiply: [{ $ifNull: ['$comments_count', 0] }, 2] }] } // Comments weighted x2
+          }
+        },
+        {
+          $sort: { engagementScore: -1, created_at: -1 } // Highest engagement first
+        },
+        {
+          $skip: skip
+        },
+        {
+          $limit: limit
+        },
+        // Lookup author only for the paginated results
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'user_id',
+            foreignField: '_id',
+            as: 'author'
+          }
+        },
+        {
+          $unwind: '$author'
+        }
+      ]
+
+      posts = await postsCollection.aggregate(pipeline).toArray()
+      
+      // Cache the raw results for 60 seconds
+      await cacheSet(cacheKey, { posts, total }, 60)
+    }
 
     // Enrich posts with current user's interaction status (even if they are anonymous, they might have liked it)
     // Note: enrichPosts expects the 'author' to be on the post object if possible, but it fetches likes separately.
@@ -167,9 +186,14 @@ export class PostService {
     const likesCollection = db.collection('likes')
     let likedPostIds = new Set<string>()
     if (currentUserId) {
+      // Need to convert string IDs from cache back to ObjectId if needed, but here we just compare strings usually
+      // MongoDB driver returns ObjectId. JSON.parse returns string.
+      // We should map posts to get IDs.
+      const postIds = posts.map(p => new ObjectId(p._id))
+      
       const likes = await likesCollection.find({
         user_id: new ObjectId(currentUserId),
-        post_id: { $in: posts.map(p => p._id) }
+        post_id: { $in: postIds }
       }).toArray()
       likes.forEach(like => likedPostIds.add(like.post_id.toString()))
     }
@@ -188,7 +212,7 @@ export class PostService {
         media_type: post.media_type as any,
         location: post.location || undefined,
         is_archived: post.is_archived,
-        created_at: post.created_at,
+        created_at: post.created_at, // Date string if from cache, Date object if from DB
         updated_at: post.updated_at,
         user: displayUser as any,
         likes_count: post.likes_count || 0,
@@ -378,31 +402,61 @@ export class PostService {
     const { page: validPage, limit: validLimit } = pagination.validateParams(page.toString(), limit.toString())
     const offset = pagination.getOffset(validPage, validLimit)
 
-    const db = await getDatabase()
-    const postsCollection = db.collection('posts')
+    // Try cache first
+    const cacheKey = cacheKeys.userPosts(userId, validPage, validLimit)
+    const cachedData = await cacheGet(cacheKey)
 
-    const matchQuery = {
-      user_id: new ObjectId(userId),
-      is_archived: { $ne: true }
+    let posts: any[] = []
+    let total = 0
+
+    const db = await getDatabase()
+
+    if (cachedData) {
+      posts = cachedData.posts
+      total = cachedData.total
+    } else {
+      const postsCollection = db.collection('posts')
+
+      const matchQuery = {
+        user_id: new ObjectId(userId),
+        is_archived: { $ne: true }
+      }
+
+      // Get total count for pagination
+      total = await postsCollection.countDocuments(matchQuery)
+
+      // Pipeline
+      posts = await postsCollection.aggregate([
+        { $match: matchQuery },
+        { $sort: { created_at: -1 } },
+        { $skip: offset },
+        { $limit: validLimit },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'user_id',
+            foreignField: '_id',
+            as: 'user'
+          }
+        },
+        { $unwind: '$user' }
+      ]).toArray()
+
+      // Cache raw data
+      await cacheSet(cacheKey, { posts, total }, 60)
     }
 
-    const total = await postsCollection.countDocuments(matchQuery)
-
-    const posts = await postsCollection.aggregate([
-      { $match: matchQuery },
-      { $sort: { created_at: -1 } },
-      { $skip: offset },
-      { $limit: validLimit },
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'user_id',
-          foreignField: '_id',
-          as: 'user'
-        }
-      },
-      { $unwind: '$user' }
-    ]).toArray()
+    // Ensure dates are Date objects for enrichPosts if needed, or rely on enrichPosts handling it
+    // To be safe, let's map dates back to objects if they are strings
+    if (cachedData) {
+        posts = posts.map(p => ({
+            ...p,
+            created_at: new Date(p.created_at),
+            updated_at: new Date(p.updated_at),
+            _id: new ObjectId(p._id), // enrichPosts might expect ObjectId for _id if it calls toString()
+            user_id: new ObjectId(p.user_id)
+        }))
+    }
 
     const transformedPosts = await PostService.enrichPosts(posts, currentUserId, true) // Need reactions for user profile posts
 
@@ -419,7 +473,7 @@ export class PostService {
   static async getFeedPosts(userId: string, page = 1, limit = 20): Promise<PaginatedResponse<Post>> {
     const startTime = Date.now();
     // 🚀 Cache Strategy for Main Feed
-    const cacheKey = `feed:main:${userId}:${page}:${limit}`;
+    const cacheKey = cacheKeys.userFeed(userId, page, limit);
     const cached = await cacheGet(cacheKey);
     if (cached) {
        console.log(`[Perf] Feed Cache Hit: ${Date.now() - startTime}ms`);
@@ -565,6 +619,9 @@ export class PostService {
 
     const user = await usersCollection.findOne({ _id: new ObjectId(userId) })
 
+    // Invalidate user posts cache (first page)
+    await cacheDel(cacheKeys.userPosts(userId, 1, 20))
+
     return {
       id: result._id.toString(),
       user_id: result.user_id.toString(),
@@ -611,6 +668,9 @@ export class PostService {
       { _id: new ObjectId(postId) },
       { $set: { is_archived: true, updated_at: new Date() } }
     )
+
+    // Invalidate user posts cache (first page)
+    await cacheDel(cacheKeys.userPosts(userId, 1, 20))
   }
 
   // Like post

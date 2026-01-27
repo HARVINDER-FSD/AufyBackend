@@ -81,7 +81,7 @@ const notificationWorker = connection ? new Worker(QUEUE_NAMES.NOTIFICATIONS, as
 }, { connection }) : null;
 
 // 2. Feed Update Worker (Invalidates cache for followers)
-const feedUpdateWorker = new Worker(QUEUE_NAMES.FEED_UPDATES, async (job: Job) => {
+const feedUpdateWorker = connection ? new Worker(QUEUE_NAMES.FEED_UPDATES, async (job: Job) => {
     const { userId, type } = job.data;
     const db = await getDatabase();
     const { cacheInvalidate } = await import('../lib/redis');
@@ -99,15 +99,19 @@ const feedUpdateWorker = new Worker(QUEUE_NAMES.FEED_UPDATES, async (job: Job) =
         }
         logger.info(`Invalidated feeds for ${followers.length} followers of ${userId}`);
     }
-}, { connection });
+}, { connection }) : null;
 
 // Error handling for workers
-notificationWorker.on('failed', (job, err) => {
-    logger.error(`Notification Job ${job?.id} failed:`, err);
-});
+if (notificationWorker) {
+    notificationWorker.on('failed', (job, err) => {
+        logger.error(`Notification Job ${job?.id} failed:`, err);
+    });
+}
 
-feedUpdateWorker.on('failed', (job, err) => {
-    logger.error(`Feed Update Job ${job?.id} failed:`, err);
-});
+if (feedUpdateWorker) {
+    feedUpdateWorker.on('failed', (job, err) => {
+        logger.error(`Feed Update Job ${job?.id} failed:`, err);
+    });
+}
 
 logger.info('🚀 Background Workers Started Successfully');

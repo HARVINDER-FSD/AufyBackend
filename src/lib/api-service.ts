@@ -17,10 +17,11 @@ const getAuthToken = (): string | null => {
     
     // Try cookies as final fallback
     if (!token) {
-      token = document.cookie
+      const cookieRow = document.cookie
         .split('; ')
-        .find(row => row.startsWith('token='))
-        ?.split('=')[1];
+        .find(row => row.startsWith('token='));
+      
+      token = cookieRow ? cookieRow.split('=')[1] : null;
     }
     
     // Clean token if it exists (remove quotes)
@@ -43,9 +44,9 @@ const apiRequest = async (
     const token = getAuthToken();
     
     // Set up headers with auth token if available
-    const headers: HeadersInit = {
+    const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      ...options.headers,
+      ...(options.headers as Record<string, string>),
     };
     
     if (token) {

@@ -206,10 +206,10 @@ export class AuthService {
 
     try {
       // Use in-memory user storage for demonstration
-      const users = global.users || [];
+      const users = (global as any).users || [];
 
       // Find user by username or email
-      const foundUser = users.find(u =>
+      const foundUser = users.find((u: any) =>
         u.username.toLowerCase() === sanitizedUsername.toLowerCase() ||
         u.email.toLowerCase() === sanitizedUsername.toLowerCase()
       );

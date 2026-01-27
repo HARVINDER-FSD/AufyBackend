@@ -5,6 +5,7 @@ import { config } from "../lib/config"
 import UserModel from "../models/user"
 import FollowModel from "../models/follow"
 import PostModel from "../models/post"
+import { NotificationService } from "./notification"
 import type { Model } from "mongoose"
 
 // Type assertions to fix Mongoose model type issues
@@ -162,6 +163,7 @@ export class UserService {
       }
     }
     
+    return profile
   }
 
   // Follow user
@@ -214,7 +216,12 @@ export class UserService {
     await cache.del(`${cacheKeys.user(followingId)}:profile`)
     await cache.del(`${cacheKeys.user(followerId)}:profile`)
 
-    // TODO: Send notification if follow is active or pending
+    // Send notification
+    if (status === 'active') {
+      await NotificationService.notifyFollow(followerId, followingId)
+    } else {
+      await NotificationService.notifyFollowRequest(followerId, followingId)
+    }
   }
 
   // Unfollow user

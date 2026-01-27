@@ -6,6 +6,7 @@ import jwt from 'jsonwebtoken'
 import { cacheGet, cacheSet, cacheDel, cacheInvalidate } from '../lib/redis';
 import { validateBody } from '../middleware/validate';
 import { getDatabase } from '../lib/database';
+import { PostService } from '../services/post';
 import Joi from 'joi';
 
 const router = Router()
@@ -980,6 +981,32 @@ return res.status(500).json({ message: 'Failed to update profile' })
     }
 })
 
+// GET /api/users/sent-requests - Get all pending follow requests sent by current user
+router.get('/sent-requests', authenticate, async (req: any, res: Response) => {
+    try {
+        const currentUserId = req.userId
+        const db = await getDatabase()
+
+        const requests = await db.collection('followRequests').find({
+            requester_id: new ObjectId(currentUserId),
+            status: 'pending'
+        }).toArray()
+
+        const requestedIds = requests.map(r => r.requested_id.toString())
+
+        return res.json({
+            success: true,
+            data: requestedIds
+        })
+    } catch (error: any) {
+        console.error('Get sent requests error:', error)
+        return res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to get sent requests'
+        })
+    }
+})
+
 // GET /api/users/search - Search users
 router.get('/search', async (req: Request, res: Response) => {
     try {
@@ -1690,13 +1717,7 @@ router.get('/:userId/posts', async (req: any, res: Response) => {
         const limit = parseInt(req.query.limit as string) || 20
         const offset = (page - 1) * limit
 
-        // Try cache first
-        const cacheKey = `user_posts:${userId}:${page}:${limit}`
-        const cached = await cacheGet(cacheKey)
-        if (cached) {
-            console.log(`✅ Cache hit for user posts: ${userId} page ${page}`)
-            return res.json(cached)
-        }
+
 
         const db = await getDatabase()
 
@@ -1762,92 +1783,15 @@ return res.json({
             }
         }
 
-        // Get total count
-        const total = await db.collection('posts').countDocuments({
-            user_id: userObjectId,
-            is_archived: { $ne: true }
-        })
-        // Get posts with user data
-        const posts = await db.collection('posts').aggregate([
-            {
-                $match: {
-                    user_id: userObjectId,
-                    is_archived: { $ne: true }
-                }
-            },
-            { $sort: { created_at: -1 } },
-            { $skip: offset },
-            { $limit: limit },
-            {
-                $lookup: {
-                    from: 'users',
-                    localField: 'user_id',
-                    foreignField: '_id',
-                    as: 'user'
-                }
-            },
-            { $unwind: '$user' }
-        ]).toArray()
-
-        // Get likes and comments count for each post
-        const postsWithCounts = await Promise.all(
-            posts.map(async (post) => {
-                const likesCount = await db.collection('likes').countDocuments({ post_id: post._id })
-                const commentsCount = await db.collection('comments').countDocuments({
-                    post_id: post._id,
-                    is_deleted: { $ne: true }
-                })
-
-                // Check if current user liked (if authenticated)
-                let is_liked = false
-                if (req.userId) {
-                    const like = await db.collection('likes').findOne({
-                        user_id: new ObjectId(req.userId),
-                        post_id: post._id
-                    })
-                    is_liked = !!like
-                }
-
-                return {
-                    id: post._id.toString(),
-                    user_id: post.user_id.toString(),
-                    content: post.content,
-                    media_urls: post.media_urls,
-                    image_url: post.media_urls && post.media_urls[0] ? post.media_urls[0] : null,
-                    media_type: post.media_type,
-                    type: post.type || (post.media_type === 'video' ? 'reel' : 'post'),
-                    location: post.location,
-                    created_at: post.created_at,
-                    updated_at: post.updated_at,
-                    user: {
-                        id: post.user._id.toString(),
-                        username: post.user.username,
-                        full_name: post.user.full_name,
-                        avatar_url: post.user.avatar_url,
-                        is_verified: post.user.is_verified || false
-                    },
-                    likes_count: likesCount,
-                    comments_count: commentsCount,
-                    is_liked
-                }
-            })
+        // Use PostService to get posts (handles caching and enrichment efficiently)
+        const result = await PostService.getUserPosts(
+            userObjectId.toString(),
+            currentUserId,
+            page,
+            limit
         )
-const response = {
-            success: true,
-            data: postsWithCounts,
-            pagination: {
-                page,
-                limit,
-                total,
-                totalPages: Math.ceil(total / limit),
-                hasMore: page * limit < total
-            }
-        }
 
-        // Cache for 3 minutes (180 seconds)
-        await cacheSet(cacheKey, response, 180)
-
-        return res.json(response)
+        return res.json(result)
     } catch (error: any) {
         console.error('Get user posts error:', error)
         return res.status(500).json({ message: error.message || 'Failed to get user posts' })

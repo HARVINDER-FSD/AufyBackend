@@ -57,7 +57,7 @@ export const validatePasswordStrength = (password: string) => {
 
 // Also restore other middlewares mentioned in index.ts imports
 import xss from 'xss';
-import sanitize from 'mongo-sanitize';
+const sanitize = require('mongo-sanitize');
 
 // Also restore other middlewares mentioned in index.ts imports
 export const xssProtection = (req: Request, _res: Response, next: NextFunction) => {
