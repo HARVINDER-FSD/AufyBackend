@@ -149,6 +149,12 @@ mongoose.connect(MONGODB_URI, {
         // Critical for Like Checks
         await db.collection('likes').createIndex({ user_id: 1, post_id: 1 }, { unique: true })
         
+        // 💬 Chat Performance Indexes (Makhan Mode)
+        await db.collection('messages').createIndex({ conversation_id: 1, created_at: -1 })
+        await db.collection('messages').createIndex({ sender_id: 1, created_at: -1 })
+        await db.collection('conversations').createIndex({ 'participants.user': 1 })
+        await db.collection('conversations').createIndex({ updated_at: -1 }) // For fast inbox sorting
+
         console.log('✅ Database indexes created')
       }
     } catch (error) {

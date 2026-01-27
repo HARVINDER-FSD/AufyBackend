@@ -11,10 +11,11 @@ export const setupLikeWorker = (connection: any) => {
 
   const worker = new Worker(QUEUE_NAMES.LIKES, async (job: Job) => {
     try {
-      const { userId, postId, action, is_anonymous } = job.data;
+      const { userId, postId, action, is_anonymous, type = 'post' } = job.data;
       const db = await getDatabase();
       const likesCollection = db.collection('likes');
       const postsCollection = db.collection('posts');
+      const reelsCollection = db.collection('reels');
 
       if (action === 'like') {
         // Optimistic Like: Try to insert directly
@@ -23,14 +24,22 @@ export const setupLikeWorker = (connection: any) => {
             user_id: new ObjectId(userId),
             post_id: new ObjectId(postId),
             created_at: new Date(),
-            is_anonymous: is_anonymous || false
+            is_anonymous: is_anonymous || false,
+            type: type // store type for future reference if needed
           });
           
-          // Increment likes count on post
-          await postsCollection.updateOne(
-              { _id: new ObjectId(postId) },
-              { $inc: { likes_count: 1 } }
-          );
+          // Increment likes count on post or reel
+          if (type === 'reel') {
+             await reelsCollection.updateOne(
+                { _id: new ObjectId(postId) },
+                { $inc: { likes_count: 1 } }
+             );
+          } else {
+             await postsCollection.updateOne(
+                { _id: new ObjectId(postId) },
+                { $inc: { likes_count: 1 } }
+             );
+          }
         } catch (error: any) {
           if (error.code === 11000) {
             // Duplicate key error - user already liked, ignore
@@ -45,11 +54,18 @@ export const setupLikeWorker = (connection: any) => {
         });
 
         if (result.deletedCount > 0) {
-            // Decrement likes count on post
-            await postsCollection.updateOne(
-                { _id: new ObjectId(postId) },
-                { $inc: { likes_count: -1 } }
-            );
+            // Decrement likes count
+            if (type === 'reel') {
+                await reelsCollection.updateOne(
+                    { _id: new ObjectId(postId) },
+                    { $inc: { likes_count: -1 } }
+                );
+            } else {
+                await postsCollection.updateOne(
+                    { _id: new ObjectId(postId) },
+                    { $inc: { likes_count: -1 } }
+                );
+            }
         }
       }
     } catch (error: any) {

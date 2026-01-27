@@ -6,6 +6,7 @@ import { config } from "../lib/config"
 import CommentModel from "../models/comment"
 import PostModel from "../models/post"
 import UserModel from "../models/user"
+import ReelModel from "../models/reel"
 import type { Model } from "mongoose"
 import { addJob, QUEUE_NAMES } from "../lib/queue"
 import { ModerationService } from "./moderation"
@@ -14,6 +15,7 @@ import { ModerationService } from "./moderation"
 const Comment = CommentModel as any as Model<any>
 const Post = PostModel as any as Model<any>
 const User = UserModel as any as Model<any>
+const Reel = ReelModel as any as Model<any>
 
 export class CommentService {
   // Create comment
@@ -37,13 +39,22 @@ export class CommentService {
         await ModerationService.checkContent(content);
       }
 
-      // Check if post exists
-      console.log('[COMMENT CREATE] Checking if post exists...')
-      const postExists = await Post.findById(postId).lean().exec()
-      if (!postExists) {
-        throw new Error("Post not found")
+      // Check if post or reel exists
+      console.log('[COMMENT CREATE] Checking if post/reel exists...')
+      let targetType = 'post';
+      let targetEntity: any = await Post.findById(postId).lean().exec();
+      
+      if (!targetEntity) {
+        targetEntity = await Reel.findById(postId).lean().exec();
+        if (targetEntity) {
+          targetType = 'reel';
+        }
       }
-      console.log('[COMMENT CREATE] Post found')
+
+      if (!targetEntity) {
+        throw new Error("Post or Reel not found")
+      }
+      console.log(`[COMMENT CREATE] ${targetType} found`)
 
       // Check if parent comment exists (if provided)
       if (parent_comment_id) {
@@ -81,6 +92,17 @@ export class CommentService {
       })
       console.log('[COMMENT CREATE] Comment created:', newComment._id)
 
+      // Increment comments count on Post or Reel
+      if (targetType === 'reel') {
+        await Reel.updateOne({ _id: postId }, { $inc: { comments_count: 1 } });
+      } else {
+        await Post.updateOne({ _id: postId }, { $inc: { comments_count: 1 } });
+      }
+      
+      // Increment replies count on parent comment if applicable
+      if (parent_comment_id) {
+        await Comment.updateOne({ _id: parent_comment_id }, { $inc: { replies_count: 1 } });
+      }
 
       const comment: any = {
         id: newComment._id.toString(),
@@ -99,12 +121,13 @@ export class CommentService {
 
       // Send Notification (if not own post)
       try {
-        const postOwnerId = (postExists as any).user_id?.toString()
+        const postOwnerId = (targetEntity as any).user_id?.toString()
         if (postOwnerId && postOwnerId !== userId) {
+          const entityName = targetType === 'reel' ? 'reel' : 'post';
           await addJob(QUEUE_NAMES.NOTIFICATIONS, 'comment-notification', {
             recipientId: postOwnerId,
             title: 'New Comment 💬',
-            body: isAnonymous ? 'A Ghost User 👻 commented on your post.' : `${user.username} commented on your post.`,
+            body: isAnonymous ? `A Ghost User 👻 commented on your ${entityName}.` : `${user.username} commented on your ${entityName}.`,
             data: { 
               postId, 
               commentId: newComment._id.toString(),

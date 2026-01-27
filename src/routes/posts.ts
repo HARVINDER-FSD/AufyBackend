@@ -172,172 +172,75 @@ router.delete("/:postId", authenticateToken, async (req, res) => {
   }
 })
 
-// Like post (toggle behavior with reactions)
-router.post("/:postId/like", authenticateToken, validateBody(postReactionSchema), async (req, res) => {
-  try {
-    const { postId } = req.params
-    const { reaction, is_anonymous } = req.body // Get reaction from request body
-    const userId = req.userId!
-
-    let userObjectId: ObjectId
-    let postObjectId: ObjectId
-    try {
-      userObjectId = new ObjectId(userId)
-      postObjectId = new ObjectId(postId)
-    } catch (err: any) {
-      console.error('[LIKE] ObjectId conversion error:', err)
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid ID format'
-      })
-    }
-
-    const db = await getDatabase()
-    const likesCollection = db.collection('likes')
-
-    const existingLike = await likesCollection.findOne({
-      user_id: userObjectId,
-      post_id: postObjectId
-    })
-
-    let isLiked: boolean
-    let userReaction: string | null = null
-
-    if (existingLike && !reaction) {
-      await likesCollection.deleteOne({
-        user_id: userObjectId,
-        post_id: postObjectId
-      })
-      isLiked = false
-
+    // Like post (toggle behavior with reactions)
+    router.post("/:postId/like", authenticateToken, validateBody(postReactionSchema), async (req, res) => {
       try {
-        const { deleteLikeNotification } = require('../lib/notifications');
-        const post = await db.collection('posts').findOne({ _id: postObjectId });
-        if (post && post.user_id) {
-          await deleteLikeNotification(post.user_id.toString(), userId, postId);
+        const { postId } = req.params
+        const { reaction, is_anonymous } = req.body // Get reaction from request body
+        const userId = req.userId!
+    
+        let userObjectId: ObjectId
+        let postObjectId: ObjectId
+        try {
+          userObjectId = new ObjectId(userId)
+          postObjectId = new ObjectId(postId)
+        } catch (err: any) {
+          console.error('[LIKE] ObjectId conversion error:', err)
+          return res.status(400).json({
+            success: false,
+            error: 'Invalid ID format'
+          })
         }
-      } catch (err) {
-        console.error('[LIKE] Notification deletion error:', err);
+    
+        // 🚀 ASYNC PROCESSING: Offload DB write to BullMQ
+        // This prevents DB choking during viral spikes
+        await addJob(QUEUE_NAMES.LIKES, 'like-post', {
+          userId,
+          postId,
+          action: 'like',
+          reaction: reaction || '❤️',
+          is_anonymous: is_anonymous
+        });
+    
+        // Return Optimistic Response immediately
+        res.json({
+          success: true,
+          liked: true,
+          message: "Like queued successfully",
+          // Note: Counts will update eventually
+        })
+      } catch (error: any) {
+        console.error('Like error:', error)
+        res.status(error.statusCode || 500).json({
+          success: false,
+          error: error.message,
+        })
       }
-    } else if (existingLike && reaction) {
-      await likesCollection.updateOne(
-        {
-          user_id: userObjectId,
-          post_id: postObjectId
-        },
-        {
-          $set: {
-            reaction: reaction,
-            updated_at: new Date()
-          }
-        }
-      )
-      isLiked = true
-      userReaction = reaction
-    } else {
-      const user = await db.collection('users').findOne({ _id: userObjectId });
-      const isAnonymous = is_anonymous !== undefined ? is_anonymous : (user?.isAnonymousMode === true);
-
-      await likesCollection.insertOne({
-        user_id: userObjectId,
-        post_id: postObjectId,
-        reaction: reaction || '❤️',
-        is_anonymous: isAnonymous,
-        created_at: new Date()
-      })
-      isLiked = true
-      userReaction = reaction || '❤️'
-
+    })
+    
+    // Unlike post
+    router.delete("/:postId/like", authenticateToken, async (req, res) => {
       try {
-        const post = await db.collection('posts').findOne({ _id: postObjectId });
-        if (post && post.user_id && post.user_id.toString() !== userId) {
-          const sender = await db.collection('users').findOne({ _id: userObjectId });
-
-          await addJob(QUEUE_NAMES.NOTIFICATIONS, 'like-notification', {
-            recipientId: post.user_id.toString(),
-            title: 'New Like! ❤️',
-            body: isAnonymous ? 'A Ghost User 👻 liked your post.' : `${sender?.username || 'Someone'} liked your post.`,
-            data: { postId, type: 'like' }
-          });
-        }
-      } catch (err) {
-        console.error('[LIKE] Queue error:', err);
-      }
-    }
-
-
-    const likeCount = await likesCollection.countDocuments({ post_id: postObjectId })
-
-    const recentLikes = await likesCollection.aggregate([
-      { $match: { post_id: postObjectId } },
-      { $sort: { created_at: -1 } },
-      { $limit: 3 },
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'user_id',
-          foreignField: '_id',
-          as: 'user'
-        }
-      },
-      { $unwind: '$user' },
-      { $project: { 'user.username': 1, 'is_anonymous': 1 } }
-    ]).toArray()
-
-    const likedBy = recentLikes.map((like: any) => like.is_anonymous ? 'Ghost User' : like.user.username)
-
-    const reactionSummary = await likesCollection.aggregate([
-      { $match: { post_id: postObjectId } },
-      {
-        $group: {
-          _id: '$reaction',
-          count: { $sum: 1 }
-        }
-      }
-    ]).toArray()
-
-    const reactions: { [emoji: string]: number } = {}
-    reactionSummary.forEach((item: any) => {
-      if (item._id) {
-        reactions[item._id] = item.count
+        const { postId } = req.params
+        
+        // 🚀 ASYNC PROCESSING
+        await addJob(QUEUE_NAMES.LIKES, 'unlike-post', {
+          userId: req.userId!,
+          postId,
+          action: 'unlike'
+        });
+    
+        res.json({
+          success: true,
+          message: "Unlike queued successfully",
+        })
+      } catch (error: any) {
+        res.status(error.statusCode || 500).json({
+          success: false,
+          error: error.message,
+        })
       }
     })
-
-    res.json({
-      success: true,
-      liked: isLiked,
-      likeCount,
-      likedBy,
-      reaction: userReaction, // User's current reaction
-      reactions, // Summary of all reactions on this post
-      message: isLiked ? "Post liked successfully" : "Post unliked successfully",
-    })
-  } catch (error: any) {
-    console.error('Like error:', error)
-    res.status(error.statusCode || 500).json({
-      success: false,
-      error: error.message,
-    })
-  }
-})
-
-// Unlike post
-router.delete("/:postId/like", authenticateToken, async (req, res) => {
-  try {
-    const { postId } = req.params
-    await PostService.unlikePost(req.userId!, postId)
-
-    res.json({
-      success: true,
-      message: "Post unliked successfully",
-    })
-  } catch (error: any) {
-    res.status(error.statusCode || 500).json({
-      success: false,
-      error: error.message,
-    })
-  }
-})
 
 // Get user's liked posts
 router.get("/liked", authenticateToken, async (req, res) => {

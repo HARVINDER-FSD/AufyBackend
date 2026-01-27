@@ -5,6 +5,8 @@ import { logger } from '../middleware/logger';
 import { Expo } from 'expo-server-sdk';
 import { getDatabase } from '../lib/database';
 import { ObjectId } from 'mongodb';
+import { setupLikeWorker } from './like-worker';
+import { setupChatWorker } from './chat-worker';
 
 const expo = new Expo();
 
@@ -43,6 +45,10 @@ try {
   logger.warn('⚠️  Failed to initialize Workers Redis:', error);
   connection = null;
 }
+
+// Initialize specialized workers
+setupLikeWorker(connection);
+setupChatWorker(connection);
 
 // 1. Notification Worker
 const notificationWorker = connection ? new Worker(QUEUE_NAMES.NOTIFICATIONS, async (job: Job) => {

@@ -3,6 +3,7 @@ import { ReelService } from "../services/reel"
 import { CommentService } from "../services/comment"
 import { authenticateToken, optionalAuth } from "../middleware/auth"
 import { validateAgeAndContent } from "../middleware/content-filter"
+import { addJob, QUEUE_NAMES } from "../lib/queue"
 
 const router = Router()
 
@@ -417,18 +418,23 @@ router.delete("/:reelId", authenticateToken, async (req: any, res: Response) => 
   }
 })
 
-// Toggle like reel (like/unlike)
+// Like reel (Async)
 router.post("/:reelId/like", authenticateToken, async (req: any, res: Response) => {
   try {
     const { reelId } = req.params
-    // Check if already liked, then toggle
-    const result = await ReelService.toggleLikeReel(req.userId!, reelId)
+    
+    // 🚀 ASYNC PROCESSING: Offload DB write to BullMQ
+    await addJob(QUEUE_NAMES.LIKES, 'like-reel', {
+      userId: req.userId!,
+      postId: reelId, // Worker expects 'postId'
+      action: 'like',
+      type: 'reel'
+    });
 
     res.json({
       success: true,
-      liked: result.liked,
-      likes: result.likes,
-      message: result.liked ? "Reel liked successfully" : "Reel unliked successfully",
+      liked: true,
+      message: "Like queued successfully",
     })
   } catch (error: any) {
     res.status(error.statusCode || 500).json({
@@ -438,15 +444,22 @@ router.post("/:reelId/like", authenticateToken, async (req: any, res: Response) 
   }
 })
 
-// Unlike reel (legacy endpoint)
+// Unlike reel (Async)
 router.delete("/:reelId/like", authenticateToken, async (req: any, res: Response) => {
   try {
     const { reelId } = req.params
-    await ReelService.unlikeReel(req.userId!, reelId)
+    
+    // 🚀 ASYNC PROCESSING
+    await addJob(QUEUE_NAMES.LIKES, 'unlike-reel', {
+      userId: req.userId!,
+      postId: reelId,
+      action: 'unlike',
+      type: 'reel'
+    });
 
     res.json({
       success: true,
-      message: "Reel unliked successfully",
+      message: "Unlike queued successfully",
     })
   } catch (error: any) {
     res.status(error.statusCode || 500).json({

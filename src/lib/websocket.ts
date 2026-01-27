@@ -3,6 +3,9 @@ import { Server as HTTPServer } from 'http';
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import MessageModel from '../models/message';
+import UserModel from '../models/user';
+import { addJob, QUEUE_NAMES } from '../lib/queue';
+import { ObjectId } from 'mongodb';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 
@@ -57,6 +60,12 @@ export class WebSocketService {
 
         const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
         socket.data.userId = decoded.userId;
+        
+        // Cache user info in socket for fast message composition
+        const user = await UserModel.findById(decoded.userId).select('username full_name avatar_url').lean();
+        if (user) {
+            socket.data.user = user;
+        }
 
         console.log(`✅ User ${decoded.userId} authenticated`);
         next();
@@ -107,8 +116,39 @@ export class WebSocketService {
         try {
           const { chatId, recipientId, content, type = 'text', mediaUrl, replyTo } = data;
 
-          // Save message to database
-          const message = new MessageModel({
+          const messageId = new ObjectId();
+          const createdAt = new Date();
+
+          // Construct message object for immediate emit (Optimistic Update)
+          // We use the cached user info from socket.data.user to avoid a DB call
+          const messageData = {
+            _id: messageId,
+            conversation_id: chatId,
+            sender_id: socket.data.user || { _id: userId }, // Populated sender
+            content,
+            message_type: type,
+            media_url: mediaUrl,
+            reply_to_id: replyTo, // Ideally this should be populated too if possible, but ID is okay for now
+            status: 'sent',
+            created_at: createdAt,
+            updated_at: createdAt,
+            is_deleted: false,
+            reactions: [],
+            read_by: []
+          };
+
+          // Emit to chat room IMMEDIATELY
+          // This ensures "Makhan" (smooth) experience - 0ms perceived latency
+          this.io?.to(`chat:${chatId}`).emit('message:received', messageData);
+
+          // If 1-on-1 and recipient not in room, emit to their personal room
+          if (recipientId) {
+            this.io?.to(`user:${recipientId}`).emit('message:new', messageData);
+          }
+
+          // Async Persistence: Offload DB write to worker
+          await addJob(QUEUE_NAMES.MESSAGES, 'save-message', {
+            _id: messageId.toString(),
             conversation_id: chatId,
             sender_id: userId,
             content,
@@ -116,23 +156,8 @@ export class WebSocketService {
             media_url: mediaUrl,
             reply_to_id: replyTo,
             status: 'sent',
+            created_at: createdAt
           });
-
-          await message.save();
-
-          // Populate sender info for real-time update
-          await message.populate('sender_id', 'username full_name avatar_url');
-          if (replyTo) {
-            await message.populate('reply_to_id');
-          }
-
-          // Emit to chat room
-          this.io?.to(`chat:${chatId}`).emit('message:received', message);
-
-          // If 1-on-1 and recipient not in room, emit to their personal room
-          if (recipientId) {
-            this.io?.to(`user:${recipientId}`).emit('message:new', message);
-          }
 
         } catch (error) {
           console.error('Error sending message:', error);

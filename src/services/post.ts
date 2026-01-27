@@ -5,6 +5,7 @@ import { ObjectId } from "mongodb"
 import { maskAnonymousUser } from "../lib/anonymous-utils"
 import { addJob, QUEUE_NAMES, isQueueAvailable } from "../lib/queue"
 import { cacheGet, cacheSet, cacheDel } from "../lib/redis"
+import { logger } from "../middleware/logger"
 
 export class PostService {
   // Create new post
@@ -106,7 +107,8 @@ export class PostService {
           $or: [
             { is_verified: true },
             { badge_type: { $in: ['blue', 'gold', 'purple'] } }
-          ] 
+          ],
+          isShadowBanned: { $ne: true } // 🛡️ EXCLUDE SHADOW BANNED USERS
         },
         { projection: { _id: 1 } }
       ).toArray()
@@ -476,7 +478,7 @@ export class PostService {
     const cacheKey = cacheKeys.userFeed(userId, page, limit);
     const cached = await cacheGet(cacheKey);
     if (cached) {
-       console.log(`[Perf] Feed Cache Hit: ${Date.now() - startTime}ms`);
+       logger.debug(`[Perf] Feed Cache Hit: ${Date.now() - startTime}ms`, { userId, page });
        return cached;
     }
 
@@ -507,7 +509,7 @@ export class PostService {
       // Cache following list for 5 minutes
       await cacheSet(followsCacheKey, followingIds, 300);
     }
-    console.log(`[Perf] Fetch Following IDs: ${Date.now() - t1}ms (Count: ${followingIds.length})`);
+    logger.debug(`[Perf] Fetch Following IDs: ${Date.now() - t1}ms`, { count: followingIds.length });
     
     const followingObjectIds = followingIds.map(id => new ObjectId(id))
 
@@ -518,7 +520,7 @@ export class PostService {
 
     const t2 = Date.now();
     const total = await postsCollection.countDocuments(matchQuery)
-    console.log(`[Perf] Count Documents: ${Date.now() - t2}ms`);
+    logger.debug(`[Perf] Count Documents: ${Date.now() - t2}ms`);
 
     // Optimization: Use find() + manual join instead of expensive aggregate $lookup
     const t3 = Date.now();
@@ -527,7 +529,7 @@ export class PostService {
       .skip(offset)
       .limit(validLimit)
       .toArray();
-    console.log(`[Perf] Fetch Raw Posts: ${Date.now() - t3}ms`);
+    logger.debug(`[Perf] Fetch Raw Posts: ${Date.now() - t3}ms`);
 
     // Collect user IDs to fetch in bulk
     const userIds = [...new Set(rawPosts.map(p => p.user_id))];
@@ -535,23 +537,26 @@ export class PostService {
     
     const t4 = Date.now();
     const users = await usersCollection.find(
-        { _id: { $in: userIds } },
+        { 
+          _id: { $in: userIds },
+          isShadowBanned: { $ne: true } // 🛡️ EXCLUDE SHADOW BANNED USERS
+        },
         { projection: { _id: 1, username: 1, name: 1, full_name: 1, avatar: 1, avatar_url: 1, is_verified: 1, badge_type: 1, verification_type: 1, isAnonymousMode: 1, anonymousPersona: 1 } }
     ).toArray();
-    console.log(`[Perf] Fetch Users: ${Date.now() - t4}ms`);
+    logger.debug(`[Perf] Fetch Users: ${Date.now() - t4}ms`);
 
     // Map users for quick lookup
     const userMap = new Map<string, any>();
     users.forEach(u => userMap.set(u._id.toString(), u));
 
-    // Attach users to posts
+    // Attach users to posts and filter out missing authors (shadow banned)
     const posts = rawPosts.map(post => {
         const user = userMap.get(post.user_id.toString());
         return {
             ...post,
             author: user // Mimic the structure expected by enrichPosts or internal logic
         };
-    });
+    }).filter(post => post.author); // 🛡️ Filter out posts from shadow-banned users
 
     // Note: enrichPosts handles the final transformation, including masking anonymous users.
     // However, enrichPosts previously expected 'user' field populated from aggregation.
@@ -561,7 +566,7 @@ export class PostService {
     // Optimize: Skip reaction summary for feed (saves aggregation cost)
     const t5 = Date.now();
     const transformedPosts = await PostService.enrichPosts(posts, userId, false)
-    console.log(`[Perf] Enrich Posts: ${Date.now() - t5}ms`);
+    logger.debug(`[Perf] Enrich Posts: ${Date.now() - t5}ms`);
 
     const paginationMeta = pagination.getMetadata(validPage, validLimit, total)
 
@@ -573,7 +578,7 @@ export class PostService {
 
     // Cache for 60 seconds
     await cacheSet(cacheKey, result, 60);
-    console.log(`[Perf] Total Feed Time: ${Date.now() - startTime}ms`);
+    logger.info(`[Perf] Total Feed Time: ${Date.now() - startTime}ms`, { userId, postCount: transformedPosts.length });
 
     return result;
   }
@@ -682,7 +687,7 @@ export class PostService {
     // 1. Check if queue is available
     const queueAvailable = await isQueueAvailable();
     if (queueAvailable) {
-       // console.log('⚡ Using Async Like Queue');
+       logger.debug('⚡ Using Async Like Queue', { userId, postId, action: 'like' });
        await addJob(QUEUE_NAMES.LIKES, 'process-like', {
          userId,
          postId,
@@ -692,7 +697,7 @@ export class PostService {
        });
        return; // Return immediately!
     } else {
-       console.warn('⚠️ Async Like Queue Unavailable - Falling back to sync DB write');
+       logger.warn('⚠️ Async Like Queue Unavailable - Falling back to sync DB write');
     }
 
     // Fallback to synchronous DB write if queue is down
