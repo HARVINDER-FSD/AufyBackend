@@ -1,6 +1,7 @@
 // Notification Helper Functions
 import { MongoClient, ObjectId } from 'mongodb';
 import { sendPushNotification } from '../services/firebase-messaging';
+import { sendExpoPushNotification } from '../services/expo-push';
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/social-media';
 

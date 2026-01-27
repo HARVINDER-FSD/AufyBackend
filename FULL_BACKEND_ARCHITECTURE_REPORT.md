@@ -55,64 +55,70 @@ graph TD
 | `/:id/like` | `POST` | *None* | **Async:** Adds like via BullMQ. |
 | `/:id/comments` | `GET` | `page`, `limit` | Fetches comments (paginated). |
 
-**Post Object Structure:**
-```json
-{
-  "_id": "ObjectId",
-  "user_id": "ObjectId (Ref: User)",
-  "caption": "String",
-  "media": [
-    { "url": "String", "type": "image/video" }
-  ],
-  "likes_count": "Number (Denormalized)",
-  "comments_count": "Number (Denormalized)",
-  "created_at": "Date (Indexed)"
-}
-```
-
 ### **C. Reels (`/api/reels`)**
 | Endpoint | Method | Body / Query | Description |
 | :--- | :--- | :--- | :--- |
-| `/` | `GET` | `page`, `limit` | **Infinite Scroll:** Returns random/algo-sorted reels. |
+| `/` | `GET` | `page`, `limit`, `username` | **Infinite Scroll:** Returns reels (CamelCase response). |
 | `/create` | `POST` | `video_url`, `thumbnail_url`, `description`, `duration` | Uploads a new reel. |
-| `/:id/like` | `POST` | *None* | **Async:** Adds like via BullMQ. |
+| `/:id/like` | `POST` | *None* | **Async:** Adds like via BullMQ (Zero Latency). |
 | `/:id/share` | `POST` | *None* | Increments share count. |
+| `/liked` | `GET` | `page`, `limit` | Get reels liked by current user. |
+| `/saved` | `GET` | `page`, `limit` | Get reels saved by current user. |
 
-**Reel Object Structure:**
+**Reel Response Object (CamelCase):**
 ```json
 {
   "_id": "ObjectId",
-  "user_id": "ObjectId",
-  "video_url": "String",
-  "thumbnail_url": "String",
-  "duration": "Number (seconds)",
-  "likes_count": "Number",
-  "views_count": "Number",
-  "shares_count": "Number"
+  "videoUrl": "String",
+  "thumbnail": "String",
+  "title": "String",
+  "description": "String",
+  "duration": "Number",
+  "likesCount": "Number",
+  "viewsCount": "Number",
+  "commentsCount": "Number",
+  "sharesCount": "Number",
+  "createdAt": "Date",
+  "author": {
+    "_id": "ObjectId",
+    "username": "String",
+    "avatar": "String"
+  }
 }
 ```
 
 ### **D. Chat & Messaging (`/api/chat`)**
 **Features:** 1-on-1, Group, Anonymous Mode (Omegle-style).
 
+**1. WebSocket Events (Primary - Zero Latency)**
+*   `message:send` (Client -> Server): `{ chatId, content, recipientId }`
+    *   **Behavior:** Emits `message:received` immediately to room, then queues DB save.
+*   `message:received` (Server -> Client): Full message object.
+*   `chat:join` / `chat:leave`: Manage room presence.
+
+**2. REST Endpoints (Secondary / History)**
 | Endpoint | Method | Body / Query | Description |
 | :--- | :--- | :--- | :--- |
-| `/conversations` | `GET` | *None* | List all active conversations (Inbox). |
-| `/conversations` | `POST` | `userId` | Start/Get conversation with a user. |
-| `/:id/messages` | `GET` | `limit`, `before` (Cursor) | Get chat history. |
-| `/:id/messages` | `POST` | `content`, `image` | **Optimistic:** Sends message & queues DB save. |
-| `/anonymous/join`| `POST` | `interests` (Array) | Join random chat queue. |
+| `/conversations` | `GET` | *None* | Inbox list (Last message, unread count). |
+| `/conversations/:id/messages` | `GET` | `limit`, `before` | Get chat history (Reverse chronological). |
+| `/conversations/:id/messages` | `POST` | `content`, `image` | **Sync:** Sends message (Use WebSocket for faster exp). |
+| `/anonymous/join`| `POST` | `interests` | Join random chat queue. |
 | `/anonymous/skip`| `POST` | `currentConversationId` | End current & find next partner. |
 
 **Message Object Structure:**
 ```json
 {
-  "_id": "ObjectId",
+  "id": "ObjectId",
   "conversation_id": "ObjectId",
-  "sender_id": "ObjectId",
+  "sender": {
+    "id": "ObjectId",
+    "username": "String",
+    "avatar_url": "String",
+    "is_anonymous": "Boolean"
+  },
   "content": "String",
-  "media_url": "String (Optional)",
-  "read": "Boolean (Default: false)",
+  "media_url": "String",
+  "is_read": "Boolean",
   "created_at": "Date"
 }
 ```
@@ -120,15 +126,44 @@ graph TD
 ### **E. Stories (`/api/stories`)**
 | Endpoint | Method | Body / Query | Description |
 | :--- | :--- | :--- | :--- |
-| `/` | `GET` | *None* | Get active stories of following users (24h expiry). |
-| `/` | `POST` | `media_url`, `media_type`, `caption` | Post a new story. |
-| `/:id/view` | `POST` | *None* | Mark story as viewed (Tracks viewer list). |
+| `/` | `GET` | *None* | Active stories of following users (Strict Privacy). |
+| `/` | `POST` | `media_url`, `media_type`, `caption` | Post a new story (24h expiry). |
+| `/:id/view` | `POST` | *None* | Track view (Upsert logic). |
+| `/:id/viewers` | `GET` | *None* | Get list of viewers (Owner only). |
+
+**Story Object Structure:**
+```json
+{
+  "id": "ObjectId",
+  "user_id": "ObjectId",
+  "username": "String",
+  "avatar_url": "String",
+  "media_url": "String",
+  "expires_at": "Date",
+  "views_count": "Number",
+  "is_verified": "Boolean"
+}
+```
 
 ### **F. Notifications (`/api/notifications`)**
 | Endpoint | Method | Query | Description |
 | :--- | :--- | :--- | :--- |
 | `/` | `GET` | `limit`, `skip`, `unreadOnly` | Get user notifications. |
+| `/unread-count` | `GET` | *None* | Get raw count of unread items. |
 | `/read-all` | `PUT` | *None* | Mark all as read. |
+
+**Notification Object Structure:**
+```json
+{
+  "id": "ObjectId",
+  "type": "String (like_post, comment, follow, etc.)",
+  "user": { "username": "String", "avatar": "String" },
+  "content": "String",
+  "post": { "id": "ObjectId", "image": "String" },
+  "isRead": "Boolean",
+  "timestamp": "String (e.g. '2m ago')"
+}
+```
 
 ---
 

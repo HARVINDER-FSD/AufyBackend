@@ -270,7 +270,7 @@ router.post('/register', validate(registerSchema), async (req: Request, res: Res
         userId: result.insertedId.toString(),
         email,
         username,
-        name: name || username
+        name: full_name || username
       },
       JWT_SECRET,
       { expiresIn: '90d' }
@@ -299,8 +299,8 @@ router.post('/register', validate(registerSchema), async (req: Request, res: Res
         id: result.insertedId.toString(),
         username,
         email,
-        name: name || username,
-        fullName: name || username,
+        name: full_name || username,
+        fullName: full_name || username,
         bio: "",
         avatar: defaultAvatar,
         avatar_url: defaultAvatar,

@@ -107,8 +107,7 @@ const userSchema = new mongoose.Schema({
   reports_count: {
     type: Number,
     default: 0
-  }
-});
+  },
   premium_auto_renew: {
     type: Boolean,
     default: true
