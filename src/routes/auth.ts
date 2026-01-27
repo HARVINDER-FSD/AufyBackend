@@ -10,6 +10,7 @@ import {
   clearFailedAttempts,
   validatePasswordStrength
 } from '../middleware/security'
+import { validate, loginSchema, registerSchema } from '../middleware/validation'
 import { generatePasswordResetToken, hash } from '../utils/encryption'
 
 const router = Router()
@@ -22,7 +23,7 @@ if (!JWT_SECRET) {
 }
 
 // POST /api/auth/login
-router.post('/login', bruteForceProtection as any, async (req: Request, res: Response) => {
+router.post('/login', bruteForceProtection as any, validate(loginSchema), async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body
 
@@ -154,9 +155,9 @@ router.post('/login', bruteForceProtection as any, async (req: Request, res: Res
 })
 
 // POST /api/auth/register
-router.post('/register', async (req: Request, res: Response) => {
+router.post('/register', validate(registerSchema), async (req: Request, res: Response) => {
   try {
-    const { email, password, username, name, dob } = req.body
+    const { email, password, username, full_name, dob } = req.body
 
     // Validate required fields
     if (!email || !password || !username || !dob) {
@@ -244,8 +245,8 @@ router.post('/register', async (req: Request, res: Response) => {
       email,
       password: hashedPassword,
       username,
-      name: name || username,
-      full_name: name || username,
+      name: full_name || username,
+      full_name: full_name || username,
       bio: "",
       avatar: defaultAvatar,
       avatar_url: defaultAvatar,

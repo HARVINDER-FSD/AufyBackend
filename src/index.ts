@@ -176,17 +176,18 @@ import {
   ipFilter,
   detectSuspiciousActivity,
   secureSession,
-  securityHeaders
+  securityHeaders,
+  corsOptions
 } from './middleware/security'
+
+// Body Parsing (Must be BEFORE security middleware that accesses req.body)
+app.use(express.json({ limit: '50mb' }))
+app.use(express.urlencoded({ extended: true, limit: '50mb' }))
+app.use(cookieParser())
 
 // Middleware
 app.use(securityHeaders) // Helmet security headers
-app.use(cors({
-  origin: '*', // Allow all origins for mobile app compatibility
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'X-Timestamp', 'X-Signature']
-}))
+app.use(corsOptions) // CORS
 
 // Security layers
 app.use(xssProtection as any)
@@ -221,12 +222,6 @@ const metricsMiddleware = promBundle({
   }
 });
 app.use(metricsMiddleware as any);
-
-
-app.use(express.json({ limit: '50mb' }))
-
-app.use(express.urlencoded({ extended: true, limit: '50mb' }))
-app.use(cookieParser())
 
 app.use(httpLogger)
 app.use(requestId)
