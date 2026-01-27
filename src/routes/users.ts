@@ -5,6 +5,7 @@ import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { cacheGet, cacheSet, cacheDel, cacheInvalidate } from '../lib/redis';
 import { validateBody } from '../middleware/validate';
+import { followLimiter } from '../middleware/rateLimiter';
 import { getDatabase } from '../lib/database';
 import { PostService } from '../services/post';
 import Joi from 'joi';

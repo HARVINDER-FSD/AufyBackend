@@ -101,7 +101,7 @@ graph TD
 | :--- | :--- | :--- | :--- |
 | `/conversations` | `GET` | *None* | Inbox list (Last message, unread count). |
 | `/conversations/:id/messages` | `GET` | `limit`, `before` | Get chat history (Reverse chronological). |
-| `/conversations/:id/messages` | `POST` | `content`, `image` | **Sync:** Sends message (Use WebSocket for faster exp). |
+| `/conversations/:id/messages` | `POST` | `content`, `image`, `type` | **Sync:** Send msg. Types: `text`, `image`, `lottie_voice`. |
 | `/anonymous/join`| `POST` | `interests` | Join random chat queue. |
 | `/anonymous/skip`| `POST` | `currentConversationId` | End current & find next partner. |
 
@@ -116,8 +116,9 @@ graph TD
     "avatar_url": "String",
     "is_anonymous": "Boolean"
   },
-  "content": "String",
-  "media_url": "String",
+  "content": "String (or Emoji ID)",
+  "message_type": "text | image | lottie_voice",
+  "media_url": "String (Audio URL for lottie_voice)",
   "is_read": "Boolean",
   "created_at": "Date"
 }

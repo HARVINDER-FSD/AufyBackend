@@ -1,3 +1,4 @@
+import { feedUpdateQueue, likesQueue, messagesQueue } from "../lib/queue"
 import { cache } from "../lib/database"
 import { getWebSocketService } from "../lib/websocket"
 import type { Conversation, Message, SendMessageRequest, PaginatedResponse } from "../lib/types"
@@ -254,35 +255,11 @@ export class ChatService {
       }
     }
 
-    // Create message
-    const message = await MessageModel.create({
-      conversation_id: conversationId,
-      sender_id: senderId,
-      content,
-      media_url,
-      media_type,
-      message_type: message_type || 'text',
-      reply_to_id,
-      is_anonymous: sender.isAnonymousMode === true,
-      status: 'sent',
-      read_by: [{ user_id: senderId, read_at: new Date() }]
-    });
+    // --- MAKHAN MODE: Async Write & Optimistic Response ---
+    const messageId = new mongoose.Types.ObjectId();
+    const createdAt = new Date();
 
-    const populatedMessage = await message.populate('sender_id', 'username full_name avatar_url is_verified')
-
-    // Mask sender if anonymous
-    const result = populatedMessage.toObject() as any;
-    if (result.is_anonymous) {
-      result.sender_id = maskAnonymousUser({ ...result.sender_id, is_anonymous: true })
-    }
-
-    // Update conversation last message
-    await ConversationModel.findByIdAndUpdate(conversationId, {
-      last_message: message._id,
-      updated_at: new Date()
-    });
-
-    // Get reply-to message details if exists
+    // 1. Get reply-to message details if exists (Read-only, fast)
     let replyToMessage: Message | undefined = undefined;
     if (reply_to_id) {
       const rt = await MessageModel.findById(reply_to_id).populate('sender_id', 'username full_name');
@@ -312,18 +289,19 @@ export class ChatService {
       }
     }
 
+    // 2. Construct Message Object (Optimistic)
     const messageWithDetails: Message = {
-      id: message._id.toString(),
+      id: messageId.toString(),
       conversation_id: conversationId,
       sender_id: senderId,
-      content: message.content,
-      media_url: message.media_url,
-      media_type: message.media_type as any,
-      message_type: message.message_type as any,
-      reply_to_id: message.reply_to_id ? message.reply_to_id.toString() : undefined,
-      is_deleted: message.is_deleted,
-      created_at: message.created_at,
-      updated_at: message.updated_at,
+      content,
+      media_url,
+      media_type,
+      message_type: message_type || 'text',
+      reply_to_id,
+      is_deleted: false,
+      created_at: createdAt,
+      updated_at: createdAt,
       sender: sender ? maskAnonymousUser({
         id: sender._id.toString(),
         username: sender.username,
@@ -334,12 +312,51 @@ export class ChatService {
       }) as any : undefined,
       reply_to: replyToMessage,
       is_read: false,
+      reactions: [],
+      read_by: [{ user_id: senderId, read_at: createdAt }]
     } as Message;
 
-    // Clear conversation cache
+    // 3. Push to Queue (Async Persistence)
+    if (messagesQueue) {
+      await messagesQueue.add('new_message', {
+        _id: messageId.toString(),
+        conversation_id: conversationId,
+        sender_id: senderId,
+        content,
+        message_type: message_type || 'text',
+        media_url,
+        reply_to_id,
+        status: 'sent',
+        created_at: createdAt
+      });
+    } else {
+        // Fallback to sync write if queue fails (Safety)
+        console.error("Messages queue missing, falling back to sync write");
+        await MessageModel.create({
+            _id: messageId,
+            conversation_id: conversationId,
+            sender_id: senderId,
+            content,
+            media_url,
+            media_type,
+            message_type: message_type || 'text',
+            reply_to_id,
+            is_anonymous: sender.isAnonymousMode === true,
+            status: 'sent',
+            read_by: [{ user_id: senderId, read_at: createdAt }],
+            created_at: createdAt,
+            updated_at: createdAt
+        });
+        await ConversationModel.findByIdAndUpdate(conversationId, {
+            last_message: messageId,
+            updated_at: createdAt
+        });
+    }
+
+    // 4. Clear conversation cache
     await cache.del(cacheKeys.conversation(conversationId))
 
-    // Send real-time message
+    // 5. Send real-time message
     const wsService = getWebSocketService()
     wsService.sendMessageToConversation(conversationId, messageWithDetails)
 

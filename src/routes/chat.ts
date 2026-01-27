@@ -5,6 +5,7 @@ import Conversation from '../models/conversation';
 import mongoose from 'mongoose';
 import { ChatService } from '../services/chat';
 import { AnonymousChatService } from '../services/anonymous-chat';
+import { messageLimiter } from '../middleware/rateLimiter';
 
 const router = express.Router();
 
@@ -150,10 +151,10 @@ router.get('/conversations/:conversationId/messages', auth, async (req, res) => 
 });
 
 // Send a message
-router.post('/conversations/:conversationId/messages', auth, async (req, res) => {
+router.post('/conversations/:conversationId/messages', auth, messageLimiter, async (req, res) => {
   try {
     const { conversationId } = req.params;
-    const { content, image, recipientId } = req.body;
+    const { content, image, recipientId, type } = req.body;
 
     const message = await ChatService.sendMessage(
       req.userId!,
@@ -162,7 +163,7 @@ router.post('/conversations/:conversationId/messages', auth, async (req, res) =>
         content,
         media_url: image, // mapping image to media_url
         media_type: image ? 'image' : undefined,
-        message_type: image ? 'image' : 'text'
+        message_type: type || (image ? 'image' : 'text')
       }
     );
 

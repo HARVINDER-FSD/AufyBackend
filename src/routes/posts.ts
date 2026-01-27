@@ -10,6 +10,7 @@ import { paginate } from "../middleware/pagination"
 import { addJob, QUEUE_NAMES } from "../lib/queue"
 import Joi from "joi"
 import { validateAgeAndContent } from "../middleware/content-filter"
+import { likeLimiter } from "../middleware/rateLimiter"
 
 const router = Router()
 
@@ -98,7 +99,8 @@ router.post("/", authenticateToken, validateAgeAndContent, validateBody(createPo
     // Trigger background feed update for followers
     await addJob(QUEUE_NAMES.FEED_UPDATES, 'post-created', {
       userId: req.userId,
-      type: 'new_post'
+      type: 'new_post',
+      postId: post.id // Ensure we pass the ID
     });
 
 
@@ -173,7 +175,7 @@ router.delete("/:postId", authenticateToken, async (req, res) => {
 })
 
     // Like post (toggle behavior with reactions)
-    router.post("/:postId/like", authenticateToken, validateBody(postReactionSchema), async (req, res) => {
+    router.post("/:postId/like", authenticateToken, likeLimiter, validateBody(postReactionSchema), async (req, res) => {
       try {
         const { postId } = req.params
         const { reaction, is_anonymous } = req.body // Get reaction from request body

@@ -20,7 +20,7 @@ const MessageSchema = new Schema({
   },
   message_type: { // Renamed from type to avoid conflict
     type: String,
-    enum: ['text', 'image', 'video', 'audio', 'file', 'post', 'reel'],
+    enum: ['text', 'image', 'video', 'audio', 'file', 'post', 'reel', 'lottie_voice'],
     default: 'text',
   },
   media_url: {
@@ -69,7 +69,7 @@ export interface IMessage extends Document {
   conversation_id: mongoose.Types.ObjectId;
   sender_id: mongoose.Types.ObjectId;
   content?: string;
-  message_type: 'text' | 'image' | 'video' | 'audio' | 'file' | 'post' | 'reel';
+  message_type: 'text' | 'image' | 'video' | 'audio' | 'file' | 'post' | 'reel' | 'lottie_voice';
   media_url?: string;
   media_type?: string;
   reply_to_id?: mongoose.Types.ObjectId;

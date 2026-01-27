@@ -5,6 +5,7 @@ import { validateBody } from "../middleware/validate"
 import { getDatabase } from "../lib/database"
 import { CommentService } from "../services/comment"
 import { ObjectId } from "mongodb"
+import { commentLimiter } from "../middleware/rateLimiter"
 
 const router = Router()
 

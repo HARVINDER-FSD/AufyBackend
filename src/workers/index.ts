@@ -88,24 +88,57 @@ const notificationWorker = connection ? new Worker(QUEUE_NAMES.NOTIFICATIONS, as
 
 // 2. Feed Update Worker (Invalidates cache for followers)
 const feedUpdateWorker = connection ? new Worker(QUEUE_NAMES.FEED_UPDATES, async (job: Job) => {
-    const { userId, type } = job.data;
+    const { userId, type, postId, reelId } = job.data;
     const db = await getDatabase();
-    const { cacheInvalidate } = await import('../lib/redis');
+    const { cacheInvalidate, cacheLPush, cacheLTrim } = await import('../lib/redis');
 
     if (type === 'new_post') {
-        // When someone posts, we might want to invalidate their followers' feeds
-        const followers = await db.collection('follows').find({
+        // Use cursor for memory efficiency with large follower counts
+        const cursor = db.collection('follows').find({
             following_id: new ObjectId(userId),
             status: 'accepted'
-        }).toArray();
+        });
 
-        for (const follow of followers) {
+        // Process in batches to prevent blocking event loop too long
+        while (await cursor.hasNext()) {
+            const follow = await cursor.next();
+            if (!follow) continue;
+            
             const followerId = follow.follower_id.toString();
+            
+            // 1. Fan-out: Push to Redis List
+            if (postId) {
+                await cacheLPush(`feed:${followerId}:list`, postId.toString());
+                // Keep only latest 500 posts in the feed list to save memory
+                await cacheLTrim(`feed:${followerId}:list`, 0, 499);
+            }
+
+            // 2. Invalidate API Cache (Page Cache)
             await cacheInvalidate(`feed:${followerId}:*`);
         }
-        logger.info(`Invalidated feeds for ${followers.length} followers of ${userId}`);
+    } else if (type === 'new_reel') {
+        const cursor = db.collection('follows').find({
+            following_id: new ObjectId(userId),
+            status: 'accepted'
+        });
+
+        while (await cursor.hasNext()) {
+            const follow = await cursor.next();
+            if (!follow) continue;
+
+            const followerId = follow.follower_id.toString();
+            
+            // Fan-out: Push to Redis List
+            if (reelId) {
+                await cacheLPush(`reels:feed:${followerId}:list`, reelId.toString());
+                // Keep only latest 200 reels in the feed list
+                await cacheLTrim(`reels:feed:${followerId}:list`, 0, 199);
+            }
+        }
     }
 }, { connection }) : null;
+
+
 
 // Error handling for workers
 if (notificationWorker) {

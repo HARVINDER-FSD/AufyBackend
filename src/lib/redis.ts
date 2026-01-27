@@ -31,6 +31,42 @@ class MemoryCache {
     this.cache.delete(key);
     return 1;
   }
+
+  async lrange(key: string, start: number, stop: number) {
+    const item = this.cache.get(key);
+    if (!item || !Array.isArray(item.value)) return [];
+    // Redis LRANGE is inclusive [start, stop]
+    // If stop is -1, it means end
+    const end = stop === -1 ? undefined : stop + 1;
+    return item.value.slice(start, end);
+  }
+
+  async lpush(key: string, ...values: any[]) {
+    let item = this.cache.get(key);
+    if (!item || !Array.isArray(item.value)) {
+      item = { value: [], expiry: Date.now() + (3600 * 1000 * 24) }; // Default 24h
+      this.cache.set(key, item);
+    }
+    // Redis lpush prepends
+    item.value.unshift(...values);
+    return item.value.length;
+  }
+
+  async ltrim(key: string, start: number, stop: number) {
+    const item = this.cache.get(key);
+    if (!item || !Array.isArray(item.value)) return 'OK';
+    
+    // Redis LTRIM keeps elements in range [start, stop]
+    const end = stop === -1 ? undefined : stop + 1;
+    item.value = item.value.slice(start, end);
+    return 'OK';
+  }
+
+  async llen(key: string) {
+    const item = this.cache.get(key);
+    if (!item || !Array.isArray(item.value)) return 0;
+    return item.value.length;
+  }
 }
 
 const memoryCache = new MemoryCache();
@@ -201,24 +237,98 @@ export const cacheDel = async (key: string) => {
 };
 
 export const cacheInvalidate = async (pattern: string) => {
-  try {
-    const redis = getRedis();
-    if (!redis) return false;
-
-    if (redis instanceof Redis) {
-      const keys = await redis.keys(pattern);
-      if (keys.length > 0) {
-        await redis.del(...keys);
+  const client = initRedis();
+  if (!client || useMemoryFallback) {
+    // Memory cache doesn't support pattern matching easily without iterating
+    // For now, ignore or implement simple scan if critical
+    // Simple implementation:
+    // @ts-ignore
+    for (const key of memoryCache.cache.keys()) {
+      // Simple wildcard match
+      const regex = new RegExp('^' + pattern.replace('*', '.*') + '$');
+      if (regex.test(key)) {
+        memoryCache.del(key);
       }
-    } else {
-      // Upstash Redis (REST) doesn't support keys() well in some versions or it's risky.
-      // For now, we log it. In a real app we'd use a better strategy.
-      console.warn('⚠️ Pattern invalidation not fully supported on Upstash REST');
     }
-    return true;
+    return;
+  }
+
+  try {
+    const keys = await client.keys(pattern);
+    if (keys.length > 0) {
+      await client.del(...keys);
+    }
   } catch (error) {
-    console.error('Cache invalidate error:', error);
-    return false;
+    console.error('Redis invalidate error:', error);
+  }
+};
+
+export const cacheLPush = async (key: string, ...values: any[]) => {
+  const client = initRedis();
+  try {
+    if (!client || useMemoryFallback) {
+      return await memoryCache.lpush(key, ...values);
+    }
+    // Handle both Redis and Upstash
+    // @ts-ignore - Upstash/IORedis compatible
+    return await client.lpush(key, ...values);
+  } catch (error) {
+    console.error('Redis LPUSH error:', error);
+    return 0;
+  }
+};
+
+export const cacheLTrim = async (key: string, start: number, stop: number) => {
+  const client = initRedis();
+  try {
+    if (!client || useMemoryFallback) {
+      return await memoryCache.ltrim(key, start, stop);
+    }
+    // @ts-ignore
+    return await client.ltrim(key, start, stop);
+  } catch (error) {
+    console.error('Redis LTRIM error:', error);
+    return 'OK';
+  }
+};
+
+export const cacheLLen = async (key: string): Promise<number> => {
+  try {
+    if (useMemoryFallback) {
+        return memoryCache.llen(key);
+    }
+    const redis = getRedis();
+    if (!redis) {
+        useMemoryFallback = true;
+        return memoryCache.llen(key);
+    }
+    if ((redis as any).status && (redis as any).status !== 'ready') {
+        return memoryCache.llen(key);
+    }
+    return await redis.llen(key);
+  } catch (error) {
+    // console.warn('Cache llen error:', error);
+    return 0;
+  }
+};
+
+export const cacheLRange = async (key: string, start: number, stop: number): Promise<string[]> => {
+  try {
+    if (useMemoryFallback) {
+        return memoryCache.lrange(key, start, stop);
+    }
+    const redis = getRedis();
+    if (!redis) {
+        useMemoryFallback = true;
+        return memoryCache.lrange(key, start, stop);
+    }
+    if ((redis as any).status && (redis as any).status !== 'ready') {
+        return memoryCache.lrange(key, start, stop);
+    }
+    return await redis.lrange(key, start, stop);
+  } catch (error) {
+    // console.warn('Cache lrange error:', error);
+    return [];
   }
 };
 

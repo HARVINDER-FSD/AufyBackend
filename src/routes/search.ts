@@ -82,14 +82,21 @@ router.get("/", async (req: any, res) => {
     const totalUsers = await User.countDocuments()
     console.log('[Search] Total users in database:', totalUsers)
 
-    // Search users with simpler query
+    // Optimized Search Strategy for Scale:
+    // 1. Prefix Match (Uses Index) - Fast for "harv" -> "harvinder"
+    // 2. Text Search (Uses Text Index) - Fast for "singh" -> "Harvinder Singh"
+    const prefixRegex = new RegExp(`^${q}`, 'i');
+    
     const users = await User.find({
       $or: [
-        { username: { $regex: q, $options: 'i' } },
-        { full_name: { $regex: q, $options: 'i' } }
+        { username: prefixRegex },
+        { full_name: prefixRegex },
+        // Fallback to text search if available (requires text index)
+        { $text: { $search: q } }
       ]
     })
-      .select('username full_name avatar_url is_verified followers_count is_active')
+      .select('username full_name avatar_url is_verified followers_count is_active score') // score is meta for text search
+      .sort({ followers_count: -1 }) // Show popular users first
       .limit(Number(limit))
       .lean()
 

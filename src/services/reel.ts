@@ -1,5 +1,7 @@
 import { getDatabase, cache } from "../lib/database"
 import { StorageService } from "../lib/storage"
+import { cacheLLen, cacheLRange } from "../lib/redis"
+import { logger } from "../middleware/logger"
 import type { Reel, CreateReelRequest, PaginatedResponse, User } from "../lib/types"
 import { pagination, errors } from "../lib/utils"
 import { maskAnonymousUser } from "../lib/anonymous-utils"
@@ -78,6 +80,43 @@ export class ReelService {
       const db = await getDatabase()
       const reelsCollection = db.collection('reels')
       const followsCollection = db.collection('follows')
+
+      // --- FAN-OUT READ STRATEGY (Hybrid) ---
+      // Try to read from Redis List first (Makhan Mode) for Followed Users
+      const listKey = `reels:feed:${currentUserId}:list`;
+      let fanOutReels: any[] = [];
+      let fanOutIds: string[] = [];
+      
+      if (currentUserId && page === 1) { // Only check fan-out on first page for speed
+          const listLen = await cacheLLen(listKey);
+          if (listLen > 0) {
+              const reelIds = await cacheLRange(listKey, 0, 9); // Get top 10 new reels
+              if (reelIds.length > 0) {
+                  fanOutIds = reelIds;
+                  const objectIds = reelIds.map(id => new ObjectId(id));
+                  
+                  // Fetch these specific reels efficiently
+                  const fetchedReels = await reelsCollection.aggregate([
+                      { $match: { _id: { $in: objectIds } } },
+                      {
+                          $lookup: {
+                              from: 'users',
+                              localField: 'user_id',
+                              foreignField: '_id',
+                              as: 'user'
+                          }
+                      },
+                      { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+                      { $addFields: { is_following_creator: true, is_liked: false, likes_count: 0, comments_count: 0 } } // Simplified for speed
+                  ]).toArray();
+                  
+                  // Re-order to match list order
+                  const reelMap = new Map(fetchedReels.map(r => [r._id.toString(), r]));
+                  fanOutReels = reelIds.map(id => reelMap.get(id)).filter(r => r);
+                  logger.debug(`[Perf] Reels Fan-out Hit: ${fanOutReels.length} items`);
+              }
+          }
+      }
 
       // 1. Get Social Graph (Who does the user follow?)
       let followedUserIds: ObjectId[] = []
@@ -271,7 +310,7 @@ export class ReelService {
           limit: validLimit,
           total,
           totalPages: Math.ceil(total / validLimit),
-          hasNext: validPage < Math.ceil(total / validLimit),
+          hasNext: validPage < Math.ceil((total + fanOutReels.length) / validLimit),
           hasPrev: validPage > 1
         }
       }

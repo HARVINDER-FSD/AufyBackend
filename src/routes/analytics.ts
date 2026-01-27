@@ -1,7 +1,31 @@
 import { Router } from "express"
 import { authenticateToken } from "../middleware/auth"
+import { feedUpdateQueue, likesQueue, messagesQueue } from "../lib/queue"
 
 const router = Router()
+
+// System Health & Queue Metrics (Observability)
+router.get("/system-health", authenticateToken, async (req, res) => {
+  try {
+     const feedCounts = feedUpdateQueue ? await feedUpdateQueue.getJobCounts() : { error: "Queue not initialized" };
+     const likeCounts = likesQueue ? await likesQueue.getJobCounts() : { error: "Queue not initialized" };
+     const messageCounts = messagesQueue ? await messagesQueue.getJobCounts() : { error: "Queue not initialized" };
+     
+     res.json({
+       success: true,
+       timestamp: new Date(),
+       uptime: process.uptime(),
+       queues: {
+         feed_updates: feedCounts,
+         likes: likeCounts,
+         messages: messageCounts
+       },
+       memory: process.memoryUsage()
+     });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 // Track event
 router.post("/track", authenticateToken, async (req, res) => {

@@ -17,6 +17,9 @@ export async function createIndexes() {
   await users.createIndex({ email: 1 }, { unique: true });
   await users.createIndex({ is_verified: 1 });
   await users.createIndex({ isAnonymousMode: 1 }); // For anonymous checks
+  await users.createIndex({ full_name: 1 }); // For name search
+  // Text Index for full-text search capabilities
+  await users.createIndex({ username: "text", full_name: "text" });
 
   // Posts Indexes
   // 1. Core Feed Index: Get posts by user, sorted by creation

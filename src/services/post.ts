@@ -4,7 +4,7 @@ import { pagination, errors, cacheKeys } from "../lib/utils"
 import { ObjectId } from "mongodb"
 import { maskAnonymousUser } from "../lib/anonymous-utils"
 import { addJob, QUEUE_NAMES, isQueueAvailable } from "../lib/queue"
-import { cacheGet, cacheSet, cacheDel } from "../lib/redis"
+import { cacheGet, cacheSet, cacheDel, cacheLLen, cacheLRange } from "../lib/redis"
 import { logger } from "../middleware/logger"
 
 export class PostService {
@@ -487,49 +487,88 @@ export class PostService {
 
     const db = await getDatabase()
     const postsCollection = db.collection('posts')
-    const followsCollection = db.collection('follows')
 
-    // Get users that current user follows (check both field formats)
-    const t1 = Date.now();
-    const followsCacheKey = `user:following_ids:${userId}`;
-    let followingIds: string[] | null = await cacheGet(followsCacheKey);
-
-    if (!followingIds) {
-      const follows = await followsCollection.find({
-        $or: [
-          { follower_id: new ObjectId(userId) },
-          { followerId: new ObjectId(userId) }
-        ],
-        status: 'accepted' // Only accepted follows
-      }).toArray()
-
-      followingIds = follows.map(f => (f.following_id || f.followingId).toString())
-      followingIds.push(userId) // Include own posts
-
-      // Cache following list for 5 minutes
-      await cacheSet(followsCacheKey, followingIds, 300);
-    }
-    logger.debug(`[Perf] Fetch Following IDs: ${Date.now() - t1}ms`, { count: followingIds.length });
+    // --- FAN-OUT READ STRATEGY (Hybrid) ---
+    // Try to read from Redis List first (Makhan Mode)
+    const listKey = `feed:${userId}:list`;
+    const listLen = await cacheLLen(listKey);
     
-    const followingObjectIds = followingIds.map(id => new ObjectId(id))
+    let rawPosts: any[] = [];
+    let total = 0;
+    let isFanOutHit = false;
 
-    const matchQuery = {
-      user_id: { $in: followingObjectIds },
-      is_archived: { $ne: true }
+    if (listLen > 0) {
+        // We have a feed list!
+        const start = offset;
+        const stop = offset + validLimit - 1;
+        const postIds = await cacheLRange(listKey, start, stop);
+        
+        if (postIds.length > 0) {
+            logger.debug(`[Perf] Feed Fan-out Hit: ${postIds.length} items from list`);
+            
+            const objectIds = postIds.map(id => new ObjectId(id));
+            
+            // Fetch posts by ID (Point Query - Very Fast)
+            const tList = Date.now();
+            const fetchedPosts = await postsCollection.find({ _id: { $in: objectIds } }).toArray();
+            logger.debug(`[Perf] Fan-out DB Fetch: ${Date.now() - tList}ms`);
+
+            // Re-order based on list order (MongoDB $in does not preserve order)
+            const postMap = new Map(fetchedPosts.map(p => [p._id.toString(), p]));
+            rawPosts = postIds.map(id => postMap.get(id)).filter(p => p); // Filter nulls
+            
+            total = listLen; // Approximate total from list (capped at 500 usually)
+            isFanOutHit = true;
+        }
     }
 
-    const t2 = Date.now();
-    const total = await postsCollection.countDocuments(matchQuery)
-    logger.debug(`[Perf] Count Documents: ${Date.now() - t2}ms`);
+    // Fallback to Pull Model if list is empty (Cold Start / Old Users)
+    if (!isFanOutHit) {
+        logger.debug(`[Perf] Feed Fan-out Miss/Empty - Fallback to Pull Model`);
+        const followsCollection = db.collection('follows')
 
-    // Optimization: Use find() + manual join instead of expensive aggregate $lookup
-    const t3 = Date.now();
-    const rawPosts = await postsCollection.find(matchQuery)
-      .sort({ created_at: -1 })
-      .skip(offset)
-      .limit(validLimit)
-      .toArray();
-    logger.debug(`[Perf] Fetch Raw Posts: ${Date.now() - t3}ms`);
+        // Get users that current user follows (check both field formats)
+        const t1 = Date.now();
+        const followsCacheKey = `user:following_ids:${userId}`;
+        let followingIds: string[] | null = await cacheGet(followsCacheKey);
+
+        if (!followingIds) {
+          const follows = await followsCollection.find({
+            $or: [
+              { follower_id: new ObjectId(userId) },
+              { followerId: new ObjectId(userId) }
+            ],
+            status: 'accepted' // Only accepted follows
+          }).toArray()
+
+          followingIds = follows.map(f => (f.following_id || f.followingId).toString())
+          followingIds.push(userId) // Include own posts
+
+          // Cache following list for 5 minutes
+          await cacheSet(followsCacheKey, followingIds, 300);
+        }
+        logger.debug(`[Perf] Fetch Following IDs: ${Date.now() - t1}ms`, { count: followingIds.length });
+        
+        const followingObjectIds = followingIds.map(id => new ObjectId(id))
+
+        const matchQuery = {
+          user_id: { $in: followingObjectIds },
+          is_archived: { $ne: true }
+        }
+
+        const t2 = Date.now();
+        total = await postsCollection.countDocuments(matchQuery)
+        logger.debug(`[Perf] Count Documents: ${Date.now() - t2}ms`);
+
+        // Optimization: Use find() + manual join instead of expensive aggregate $lookup
+        const t3 = Date.now();
+        rawPosts = await postsCollection.find(matchQuery)
+          .sort({ created_at: -1 })
+          .skip(offset)
+          .limit(validLimit)
+          .toArray();
+        logger.debug(`[Perf] Fetch Raw Posts: ${Date.now() - t3}ms`);
+    }
 
     // Collect user IDs to fetch in bulk
     const userIds = [...new Set(rawPosts.map(p => p.user_id))];

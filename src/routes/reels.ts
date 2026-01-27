@@ -3,6 +3,7 @@ import { ReelService } from "../services/reel"
 import { CommentService } from "../services/comment"
 import { authenticateToken, optionalAuth } from "../middleware/auth"
 import { validateAgeAndContent } from "../middleware/content-filter"
+import { likeLimiter } from "../middleware/rateLimiter"
 import { addJob, QUEUE_NAMES } from "../lib/queue"
 
 const router = Router()
@@ -419,7 +420,7 @@ router.delete("/:reelId", authenticateToken, async (req: any, res: Response) => 
 })
 
 // Like reel (Async)
-router.post("/:reelId/like", authenticateToken, async (req: any, res: Response) => {
+router.post("/:reelId/like", authenticateToken, likeLimiter, async (req: any, res: Response) => {
   try {
     const { reelId } = req.params
     

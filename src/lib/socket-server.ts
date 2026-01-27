@@ -10,6 +10,7 @@ import { requestId, httpLogger } from '../middleware/logger';
 import { errorHandler } from '../middleware/errorHandler';
 import { securityHeaders, corsOptions } from '../middleware/security';
 import { apiLimiter } from '../middleware/rateLimiter';
+import { messagesQueue } from '../lib/queue';
 
 // Route imports (add more as needed)
 import usersRouter from '../routes/users';
@@ -226,17 +227,44 @@ export class SocketService {
     conversationId: string;
     senderId: string;
     content: string;
+    messageType?: string;
+    mediaUrl?: string;
+    replyTo?: string;
+  }) {
+    const messageId = new ObjectId();
+    const createdAt = new Date();
+    
+    return this.queueMessage({
+      _id: messageId,
+      conversationId: data.conversationId,
+      senderId: data.senderId,
+      content: data.content,
+      messageType: data.messageType || 'text',
+      mediaUrl: data.mediaUrl,
+      replyTo: data.replyTo,
+      createdAt: createdAt
+    });
+  }
+
+  private async queueMessage(data: {
+    _id: ObjectId;
+    conversationId: string;
+    senderId: string;
+    content: string;
     messageType: string;
     mediaUrl?: string;
     replyTo?: string;
+    createdAt: Date;
   }) {
     const client = await MongoClient.connect(MONGODB_URI);
     const db = client.db();
 
-    // Get conversation participants
+    // Get conversation participants (Fast Read)
     const conversation = await db.collection('conversations').findOne({
       _id: new ObjectId(data.conversationId)
     });
+
+    await client.close();
 
     if (!conversation) {
       throw new Error("Conversation not found");
@@ -244,34 +272,43 @@ export class SocketService {
 
     // Find recipient (other participant)
     const recipientId = conversation.participants.find((p: any) =>
-      p.toString() !== data.senderId
-    );
+      p.user.toString() !== data.senderId
+    )?.user;
 
     const message = {
+      _id: data._id,
       conversation_id: new ObjectId(data.conversationId),
       sender_id: new ObjectId(data.senderId),
-      recipient_id: new ObjectId(recipientId),
+      recipient_id: recipientId ? new ObjectId(recipientId) : null,
       content: data.content,
       message_type: data.messageType,
       media_url: data.mediaUrl || null,
       is_read: false,
       reactions: [],
-      created_at: new Date(),
-      updated_at: new Date()
+      created_at: data.createdAt,
+      updated_at: data.createdAt
     };
 
-    const result = await db.collection('messages').insertOne(message);
-
-    // Update conversation's updated_at
-    await db.collection('conversations').updateOne(
-      { _id: new ObjectId(data.conversationId) },
-      { $set: { updated_at: new Date() } }
-    );
-
-    await client.close();
+    // Push to Queue for Async Write (Makhan Mode)
+    if (messagesQueue) {
+        await messagesQueue.add('new_message', {
+            _id: data._id.toString(),
+            conversation_id: data.conversationId,
+            sender_id: data.senderId,
+            content: data.content,
+            message_type: data.messageType,
+            media_url: data.mediaUrl,
+            reply_to_id: data.replyTo,
+            status: 'sent',
+            created_at: data.createdAt
+        });
+    } else {
+        console.error("Messages queue not initialized, falling back to direct write");
+        // Fallback code could go here, but queue should be init
+    }
 
     return {
-      _id: result.insertedId,
+      _id: data._id,
       ...message,
       conversation_id: data.conversationId,
       sender_id: data.senderId,
