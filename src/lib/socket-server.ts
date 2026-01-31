@@ -11,6 +11,7 @@ import { errorHandler } from '../middleware/errorHandler';
 import { securityHeaders, corsOptions } from '../middleware/security';
 import { apiLimiter } from '../middleware/rateLimiter';
 import { messagesQueue } from '../lib/queue';
+import { sendPushNotification } from '../lib/push-service';
 
 // Route imports (add more as needed)
 import usersRouter from '../routes/users';
@@ -141,6 +142,23 @@ export class SocketService {
 
           // Broadcast message to conversation participants
           this.io.to(`conversation:${data.conversationId}`).emit("new_message", message);
+          
+          // Send Push Notification to recipient
+          const recipientId = (message as any).recipient_id;
+          if (recipientId && recipientId.toString() !== socket.userId) {
+             sendPushNotification(recipientId.toString(), {
+               title: socket.username || "New Message",
+               body: data.content,
+               type: 'message',
+               channelId: 'messages',
+               categoryId: 'message.new', // Enable "Reply" and "Like" actions on client
+               data: {
+                 conversationId: data.conversationId,
+                 messageId: (message as any)._id,
+                 action: 'reply'
+               }
+             }).catch(err => console.error("Error sending message push:", err));
+          }
         } catch (error) {
           console.error("Error sending message:", error);
           socket.emit("message_error", { error: "Failed to send message" });
@@ -197,6 +215,94 @@ export class SocketService {
           });
         } catch (error) {
           console.error("Error adding reaction:", error);
+        }
+      });
+
+      // --- Call Signaling Events (WebRTC/Agora) ---
+
+      // 1. Initiate Call
+      socket.on("call:start", (data: { recipientId: string; isVideo: boolean; offer?: any }) => {
+        const recipientSocketIds = this.connectedUsers.get(data.recipientId);
+        
+        if (recipientSocketIds && recipientSocketIds.size > 0) {
+          // User is online, ring them
+          recipientSocketIds.forEach(socketId => {
+            this.io.to(socketId).emit("incoming_call", {
+              callerId: socket.userId,
+              callerName: socket.username,
+              isVideo: data.isVideo,
+              offer: data.offer,
+              callId: new ObjectId().toString() // Unique ID for this call session
+            });
+          });
+        } else {
+          // User is offline, send Push Notification (VoIP/System)
+          console.log(`User ${data.recipientId} is offline. Sending Call Push Notification.`);
+          
+          sendPushNotification(data.recipientId, {
+            title: `Incoming Call`,
+            body: `${socket.username} is calling you...`,
+            type: 'call',
+            channelId: 'calls',
+            data: {
+              type: 'call_start',
+              callerId: socket.userId,
+              callerName: socket.username,
+              isVideo: data.isVideo,
+              callId: new ObjectId().toString()
+            }
+          }).catch(err => console.error("Error sending call push:", err));
+        }
+      });
+
+      // 2. Accept Call
+      socket.on("call:accept", (data: { callerId: string; answer?: any }) => {
+        const callerSocketIds = this.connectedUsers.get(data.callerId);
+        if (callerSocketIds) {
+          callerSocketIds.forEach(socketId => {
+            this.io.to(socketId).emit("call_accepted", {
+              responderId: socket.userId,
+              answer: data.answer
+            });
+          });
+        }
+      });
+
+      // 3. Reject Call
+      socket.on("call:reject", (data: { callerId: string; reason?: string }) => {
+        const callerSocketIds = this.connectedUsers.get(data.callerId);
+        if (callerSocketIds) {
+          callerSocketIds.forEach(socketId => {
+            this.io.to(socketId).emit("call_rejected", {
+              responderId: socket.userId,
+              reason: data.reason || "busy"
+            });
+          });
+        }
+      });
+
+      // 4. End Call
+      socket.on("call:end", (data: { otherUserId: string }) => {
+        const otherSocketIds = this.connectedUsers.get(data.otherUserId);
+        if (otherSocketIds) {
+          otherSocketIds.forEach(socketId => {
+            this.io.to(socketId).emit("call_ended", {
+              enderId: socket.userId
+            });
+          });
+        }
+      });
+
+      // 5. ICE Candidate (for pure WebRTC fallback, optional if using Agora)
+      socket.on("call:ice-candidate", (data: { targetUserId: string; candidate: any }) => {
+        const targetSocketIds = this.connectedUsers.get(data.targetUserId);
+        if (targetSocketIds) {
+          targetSocketIds.forEach(socketId => {
+            this.io.to(socketId).emit("ice_candidate", {
+              senderId: socket.userId,
+              candidate: data.candidate
+            });
+          });
         }
       });
 

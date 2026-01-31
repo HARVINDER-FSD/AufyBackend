@@ -2,7 +2,8 @@ import { Router, Request, Response } from 'express';
 import { connectToDatabase } from '../lib/database';
 import User from '../models/user';
 import { authenticateToken } from '../middleware/auth';
-import { Expo, ExpoPushMessage } from 'expo-server-sdk';
+import { Expo } from 'expo-server-sdk';
+import { sendPushNotification, sendBulkPushNotifications } from '../lib/push-service';
 
 const router = Router();
 const expo = new Expo();
@@ -69,46 +70,14 @@ router.post('/send', authenticateToken, async (req: AuthRequest, res: Response) 
       });
     }
 
-    // Get user's push token
-    const user = await User.findById(userId);
-
-    if (!user || !user.pushToken) {
-      return res.status(404).json({
-        success: false,
-        error: 'User not found or no push token registered',
-      });
-    }
-
-    // Validate push token
-    if (!Expo.isExpoPushToken(user.pushToken)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid push token',
-      });
-    }
-
-    // Create push message
-    const message: ExpoPushMessage = {
-      to: user.pushToken,
-      sound: 'default',
-      title: notification.title,
-      body: notification.body,
-      data: notification.data || {},
-      badge: 1,
-      channelId: getChannelId(notification.type),
-    };
-
-    // Send push notification
-    const chunks = expo.chunkPushNotifications([message]);
-    const tickets = [];
-
-    for (const chunk of chunks) {
-      try {
-        const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
-        tickets.push(...ticketChunk);
-      } catch (error) {
-        console.error('Error sending push notification chunk:', error);
-      }
+    const tickets = await sendPushNotification(userId, notification);
+    
+    if (tickets === null) {
+       // This could mean user not found or no token, but we'll return generic success/failure
+       // based on service contract. For now, assuming if service returns null it logged why.
+       // Let's check user existence to be consistent with previous behavior if needed, 
+       // but service handles it.
+       return res.status(404).json({ success: false, message: "Failed to send (User not found or no token)" });
     }
 
     res.json({
@@ -139,48 +108,15 @@ router.post('/send-bulk', authenticateToken, async (req: AuthRequest, res: Respo
       });
     }
 
-    // Get users' push tokens
-    const users = await User.find({
-      _id: { $in: userIds },
-      pushToken: { $exists: true, $ne: null },
-    });
+    const tickets = await sendBulkPushNotifications(userIds, notification);
 
-    if (users.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: 'No users with push tokens found',
-      });
-    }
-
-    // Create push messages
-    const messages: ExpoPushMessage[] = users
-      .filter(user => Expo.isExpoPushToken(user.pushToken))
-      .map(user => ({
-        to: user.pushToken as string,
-        sound: 'default',
-        title: notification.title,
-        body: notification.body,
-        data: notification.data || {},
-        badge: 1,
-        channelId: getChannelId(notification.type),
-      }));
-
-    // Send push notifications in chunks
-    const chunks = expo.chunkPushNotifications(messages);
-    const tickets = [];
-
-    for (const chunk of chunks) {
-      try {
-        const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
-        tickets.push(...ticketChunk);
-      } catch (error) {
-        console.error('Error sending push notification chunk:', error);
-      }
+    if (tickets === null) {
+        return res.status(404).json({ success: false, message: "No valid users/tokens found" });
     }
 
     res.json({
       success: true,
-      message: `Push notifications sent to ${messages.length} users`,
+      message: `Push notifications processing`,
       tickets,
     });
   } catch (error: any) {
@@ -191,22 +127,5 @@ router.post('/send-bulk', authenticateToken, async (req: AuthRequest, res: Respo
     });
   }
 });
-
-// Helper function to get Android channel ID based on notification type
-function getChannelId(type: string): string {
-  switch (type) {
-    case 'message':
-      return 'messages';
-    case 'like':
-    case 'comment':
-      return 'likes';
-    case 'follow':
-    case 'follow_request':
-    case 'follow_accept':
-      return 'follows';
-    default:
-      return 'default';
-  }
-}
 
 export default router;

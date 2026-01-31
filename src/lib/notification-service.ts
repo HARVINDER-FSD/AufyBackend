@@ -1,6 +1,8 @@
 // Notification Service - Helper functions to create notifications
 import Notification from '../models/notification';
-import { Expo } from 'expo-server-sdk';
+import User from '../models/user';
+import { sendPushNotification } from './push-service';
+
 export interface CreateNotificationParams {
   recipientId: string;
   senderId: string;
@@ -40,6 +42,55 @@ export async function createNotification(params: CreateNotificationParams) {
       message: params.message,
       is_read: false
     });
+
+    // --- Send Push Notification ---
+    try {
+      const sender = await User.findById(params.senderId).select('username');
+      const senderName = sender ? sender.username : 'Someone';
+      let pushTitle = 'New Notification';
+      let pushBody = 'You have a new interaction';
+
+      switch (params.type) {
+        case 'like':
+        case 'reel_like':
+        case 'story_like':
+          pushTitle = 'New Like';
+          pushBody = `${senderName} liked your ${params.contentType || 'post'}`;
+          break;
+        case 'comment':
+        case 'reel_comment':
+          pushTitle = 'New Comment';
+          pushBody = `${senderName} commented: ${params.message || 'Nice!'}`;
+          break;
+        case 'follow':
+          pushTitle = 'New Follower';
+          pushBody = `${senderName} started following you`;
+          break;
+        case 'mention':
+          pushTitle = 'New Mention';
+          pushBody = `${senderName} mentioned you in a ${params.contentType}`;
+          break;
+        case 'reply':
+        case 'story_reply':
+          pushTitle = 'New Reply';
+          pushBody = `${senderName} replied: ${params.message || '...'}`;
+          break;
+      }
+
+      await sendPushNotification(params.recipientId, {
+        title: pushTitle,
+        body: pushBody,
+        type: params.type,
+        data: {
+          notificationId: notification._id,
+          type: params.type,
+          contentId: params.contentId
+        }
+      });
+    } catch (pushError) {
+      console.error('Error sending push for notification:', pushError);
+    }
+    // -----------------------------
 
     return notification;
   } catch (error) {

@@ -183,20 +183,31 @@ graph TD
     *   User profiles are cached for **5 minutes**.
 
 ### **Security Measures**
-1.  **Shadow Ban System:**
-    *   Users marked as `isShadowBanned: true` can post, but their content is **hidden** from the public feed.
-    *   They are excluded from "Verified" lists.
-2.  **Rate Limiting:**
-    *   Global limit: **100 requests / 15 mins** per IP.
-    *   Login limit: **20 attempts / 15 mins**.
-3.  **Headers:**
-    *   `Helmet` enabled for HTTP security headers.
-    *   `CORS` restricted in production.
-    *   `Joi` Validation for all inputs.
+1.  **Rate Limiting (Action-Based):**
+    *   **Global Limit:** 100 requests / 15 mins per IP.
+    *   **Auth Limit:** 20 attempts / 15 mins (Login/Register).
+    *   **Action Limits:**
+        *   **Likes:** 100 likes / minute (Prevent spam liking).
+        *   **Messages:** 30 messages / minute (Prevent chat spam).
+        *   **Follows:** 500 follows / day (Prevent growth hacking).
+2.  **Protection:**
+    *   **Shadow Ban System:** Users marked as `isShadowBanned` are silently hidden from feeds.
+    *   **Helmet:** HTTP security headers enabled.
+    *   **Joi Validation:** Strict input validation for all routes.
 
 ---
 
 ## 🛠️ 4. Maintenance & Monitoring
+
+### **Recent Updates (v1.1.0 - Jan 2026)**
+*   **TypeScript Stability:** Resolved 100% of compilation errors in `post.ts`, `reel.ts`, and `chat.ts`.
+*   **Redis Infrastructure:** Added `cacheLLen` and `cacheLRange` helpers to `src/lib/redis.ts` to fully support Redis List operations for Feed Fan-out.
+*   **Mutual Connections Feature:** Added `GET /api/users/:userId/mutual-connections` to show "Followed by X, Y" (Users I follow who also follow the target profile), completing the social graph verification.
+*   **Social Models Verification:** Confirmed `Like`, `Comment`, `Share`, and `Follow` models are fully implemented and integrated with counters on `Post` and `Reel` models.
+*   **Chat Reliability:** Implemented reliable async message queuing (`saveMessage`) in Socket Service.
+*   **Security:** Enforced granular Rate Limiting on Chat (`messageLimiter`) and Reel Like (`likeLimiter`) endpoints.
+*   **Code Quality:** Fixed property access patterns (`post.id`) and missing logger imports.
+
 *   **Logs:** stored in `logs/` directory (Winston).
 *   **Health Check:** `/health` endpoint checks MongoDB & Redis connectivity.
 *   **Metrics:** Prometheus middleware enabled at `/metrics`.

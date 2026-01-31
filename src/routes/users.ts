@@ -524,6 +524,148 @@ const response = {
     }
 })
 
+// GET /api/users/:userId/followers - Get users following a specific user
+router.get('/:userId/followers', authenticate, async (req: any, res: Response) => {
+    try {
+        const { userId } = req.params
+        const limit = Math.min(parseInt(req.query.limit as string) || 20, 100)
+        const skip = parseInt(req.query.skip as string) || 0
+        const currentUserId = req.userId
+
+        if (!ObjectId.isValid(userId)) {
+            return res.status(400).json({ success: false, message: 'Invalid user ID' })
+        }
+
+        const db = await getDatabase()
+        const targetUser = await db.collection('users').findOne({ _id: new ObjectId(userId) })
+        
+        if (!targetUser) {
+            return res.status(404).json({ success: false, message: 'User not found' })
+        }
+
+        // Privacy Check: If private and NOT following, hide list (unless it's me)
+        if (targetUser.is_private && userId !== currentUserId) {
+            const isFollowing = await db.collection('follows').findOne({
+                follower_id: new ObjectId(currentUserId),
+                following_id: new ObjectId(userId),
+                status: 'accepted'
+            })
+            if (!isFollowing) {
+                return res.status(403).json({ success: false, message: 'This account is private', code: 'PRIVATE_ACCOUNT' })
+            }
+        }
+
+        const followers = await db.collection('follows').aggregate([
+            { $match: { following_id: new ObjectId(userId), status: 'accepted' } },
+            { $sort: { created_at: -1 } },
+            { $skip: skip },
+            { $limit: limit },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'follower_id',
+                    foreignField: '_id',
+                    as: 'user'
+                }
+            },
+            { $unwind: '$user' },
+            {
+                $project: {
+                    _id: '$user._id',
+                    username: '$user.username',
+                    fullName: { $ifNull: ['$user.full_name', '$user.name'] },
+                    profileImage: { $ifNull: ['$user.avatar_url', { $ifNull: ['$user.avatar', '/placeholder-user.jpg'] }] },
+                    isVerified: { $ifNull: ['$user.is_verified', '$user.verified'] }
+                }
+            }
+        ]).toArray()
+
+        const formatted = followers.map(user => ({
+            _id: user._id.toString(),
+            username: user.username,
+            fullName: user.fullName || '',
+            profileImage: user.profileImage,
+            isVerified: !!user.isVerified
+        }))
+
+        return res.json({ success: true, data: formatted })
+    } catch (error: any) {
+        console.error('Get followers error:', error)
+        return res.status(500).json({ success: false, message: error.message })
+    }
+})
+
+// GET /api/users/:userId/following - Get users a specific user is following
+router.get('/:userId/following', authenticate, async (req: any, res: Response) => {
+    try {
+        const { userId } = req.params
+        const limit = Math.min(parseInt(req.query.limit as string) || 20, 100)
+        const skip = parseInt(req.query.skip as string) || 0
+        const currentUserId = req.userId
+
+        if (!ObjectId.isValid(userId)) {
+            return res.status(400).json({ success: false, message: 'Invalid user ID' })
+        }
+
+        const db = await getDatabase()
+        const targetUser = await db.collection('users').findOne({ _id: new ObjectId(userId) })
+
+        if (!targetUser) {
+            return res.status(404).json({ success: false, message: 'User not found' })
+        }
+
+        // Privacy Check
+        if (targetUser.is_private && userId !== currentUserId) {
+            const isFollowing = await db.collection('follows').findOne({
+                follower_id: new ObjectId(currentUserId),
+                following_id: new ObjectId(userId),
+                status: 'accepted'
+            })
+            if (!isFollowing) {
+                return res.status(403).json({ success: false, message: 'This account is private', code: 'PRIVATE_ACCOUNT' })
+            }
+        }
+
+        const following = await db.collection('follows').aggregate([
+            { $match: { follower_id: new ObjectId(userId), status: 'accepted' } },
+            { $sort: { created_at: -1 } },
+            { $skip: skip },
+            { $limit: limit },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'following_id',
+                    foreignField: '_id',
+                    as: 'user'
+                }
+            },
+            { $unwind: '$user' },
+            {
+                $project: {
+                    _id: '$user._id',
+                    username: '$user.username',
+                    fullName: { $ifNull: ['$user.full_name', '$user.name'] },
+                    profileImage: { $ifNull: ['$user.avatar_url', { $ifNull: ['$user.avatar', '/placeholder-user.jpg'] }] },
+                    isVerified: { $ifNull: ['$user.is_verified', '$user.verified'] }
+                }
+            }
+        ]).toArray()
+
+        const formatted = following.map(user => ({
+            _id: user._id.toString(),
+            username: user.username,
+            fullName: user.fullName || '',
+            profileImage: user.profileImage,
+            isVerified: !!user.isVerified
+        }))
+
+        return res.json({ success: true, data: formatted })
+    } catch (error: any) {
+        console.error('Get following error:', error)
+        return res.status(500).json({ success: false, message: error.message })
+    }
+})
+
 // GET /api/users/:userId/mutual-followers - Get mutual followers (users who follow each other)
 router.get('/:userId/mutual-followers', authenticate, async (req: any, res: Response) => {
     try {
@@ -615,6 +757,110 @@ router.get('/:userId/mutual-followers', authenticate, async (req: any, res: Resp
         })
     }
 })
+
+// GET /api/users/:userId/mutual-connections - Get users I follow who follow this user (Common Connections)
+router.get('/:userId/mutual-connections', authenticate, async (req: any, res: Response) => {
+    try {
+        const { userId: targetUserId } = req.params;
+        const currentUserId = req.userId;
+        const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
+        const skip = parseInt(req.query.skip as string) || 0;
+
+        if (!ObjectId.isValid(targetUserId)) {
+            return res.status(400).json({ success: false, message: 'Invalid user ID' });
+        }
+
+        // If checking own profile, return 0 mutuals (or redirect to friends?)
+        if (targetUserId === currentUserId) {
+            return res.json({ success: true, data: [] });
+        }
+
+        const db = await getDatabase();
+
+        // Logic: Find users U where:
+        // 1. I follow U (follows.follower_id = Me, follows.following_id = U)
+        // 2. U follows Target (follows.follower_id = U, follows.following_id = Target)
+        
+        const mutualConnections = await db.collection('follows').aggregate([
+            // Step 1: Find all users I follow
+            { 
+                $match: { 
+                    follower_id: new ObjectId(currentUserId),
+                    status: 'active'
+                } 
+            },
+            // Step 2: Lookup if these users follow the target
+            {
+                $lookup: {
+                    from: 'follows',
+                    let: { my_friend_id: '$following_id' },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $and: [
+                                        { $eq: ['$follower_id', '$$my_friend_id'] }, // My friend is the follower
+                                        { $eq: ['$following_id', new ObjectId(targetUserId)] }, // Target is being followed
+                                        { $eq: ['$status', 'active'] }
+                                    ]
+                                }
+                            }
+                        }
+                    ],
+                    as: 'is_mutual'
+                }
+            },
+            // Step 3: Keep only those who match (array not empty)
+            { $match: { 'is_mutual.0': { $exists: true } } },
+            
+            { $skip: skip },
+            { $limit: limit },
+
+            // Step 4: Get user details of the mutual friend
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'following_id', // This is the friend's ID
+                    foreignField: '_id',
+                    as: 'user_details'
+                }
+            },
+            { $unwind: '$user_details' },
+            {
+                $project: {
+                    _id: '$user_details._id',
+                    username: '$user_details.username',
+                    fullName: { $ifNull: ['$user_details.full_name', '$user_details.name'] },
+                    profileImage: {
+                        $ifNull: [
+                            '$user_details.avatar_url',
+                            { $ifNull: ['$user_details.avatar', '/placeholder-user.jpg'] }
+                        ]
+                    },
+                    isVerified: { $ifNull: ['$user_details.is_verified', '$user_details.verified'] }
+                }
+            }
+        ]).toArray();
+
+        const formatted = mutualConnections.map(user => ({
+            _id: user._id.toString(),
+            username: user.username,
+            fullName: user.fullName || '',
+            profileImage: user.profileImage,
+            isVerified: !!user.isVerified
+        }));
+
+        return res.json({
+            success: true,
+            data: formatted,
+            count: formatted.length // Useful for "Followed by X, Y + 5 others"
+        });
+
+    } catch (error: any) {
+        console.error('Error getting mutual connections:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
 
 // GET /api/users/:userId - Get user by ID (MUST be last /:userId route)
 // This route should only match /api/users/SOMEID, not /api/users/SOMEID/something

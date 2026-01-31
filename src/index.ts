@@ -24,6 +24,7 @@ import { initializeWebSocket } from './lib/websocket'
 import { initRedis, getRedis } from './lib/redis'
 import { recordMetric, getPerformanceSummary, checkPerformanceTargets } from './lib/performance-monitor'
 import authRoutes from './routes/auth'
+import agoraRoutes from './routes/agora'
 import usersRoutes from './routes/users'
 import postsRoutes from './routes/posts'
 import reelsRoutes from './routes/reels'
@@ -271,6 +272,7 @@ app.get('/reset-password', (_req, res) => {
 
 // Routes
 app.use('/api/auth', authRoutes)
+app.use('/api/agora', agoraRoutes)
 app.use('/api/users', usersRoutes)
 app.use('/api/posts', postsRoutes)
 app.use('/api/reels', reelsRoutes)
