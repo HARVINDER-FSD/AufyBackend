@@ -58,6 +58,8 @@ let testPostId: string;
 let testPrivateUserId: string;
 let testPrivateToken: string;
 
+let testEmail: string;
+
 // ============================================
 // 1. AUTHENTICATION TESTS
 // ============================================
@@ -67,11 +69,13 @@ async function testAuthentication() {
 
   // Register
   await measurePerformance('Register User', async () => {
+    testEmail = `test${Date.now()}@example.com`;
     const res = await axios.post(`${API_URL}/api/auth/register`, {
-      email: `test${Date.now()}@example.com`,
+      email: testEmail,
       password: 'Test@123456',
       username: `testuser${Date.now()}`,
-      full_name: 'Test User'
+      full_name: 'Test User',
+      dob: '2000-01-01'
     });
     testUserId = res.data.user.id;
     testToken = res.data.token;
@@ -82,7 +86,7 @@ async function testAuthentication() {
   // Login
   await measurePerformance('Login User', async () => {
     const res = await axios.post(`${API_URL}/api/auth/login`, {
-      email: `test${Date.now()}@example.com`,
+      email: testEmail,
       password: 'Test@123456'
     });
     return res.data;
