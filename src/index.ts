@@ -303,7 +303,7 @@ app.get('/', (_req, res) => {
 
 // Routes
 app.use('/api/auth', authRoutes)
-app.use('/api/agora', agoraRoutes)
+// app.use('/api/agora', agoraRoutes) // Disabled in favor of WebRTC
 app.use('/api/users', usersRoutes)
 app.use('/api/posts', postsRoutes)
 app.use('/api/reels', reelsRoutes)

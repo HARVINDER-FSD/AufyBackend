@@ -74,20 +74,26 @@ export class SocketService {
     // Authentication middleware
     this.io.use((socket: AuthenticatedSocket, next) => {
       try {
+        console.log('Socket Auth Attempt:', socket.id);
         const authToken = socket.handshake.auth.token ||
           socket.handshake.headers.authorization?.split(" ")[1];
 
         if (!authToken) {
+          console.log('Socket Auth Failed: No Token');
           return next(new Error("Authentication token required"));
         }
 
+        // Verify token
         const decoded = jwt.verify(authToken, JWT_SECRET) as any;
+        console.log('Socket Auth Success:', decoded.username);
+        
         socket.userId = decoded.userId;
         socket.username = decoded.username;
 
         next();
-      } catch (error) {
-        next(new Error("Invalid authentication token"));
+      } catch (error: any) {
+        console.log('Socket Auth Error:', error.message);
+        next(new Error("Invalid authentication token: " + error.message));
       }
     });
   }
@@ -222,11 +228,14 @@ export class SocketService {
 
       // 1. Initiate Call
       socket.on("call:start", (data: { recipientId: string; isVideo: boolean; offer?: any }) => {
+        console.log(`[Call Start] ${socket.username} calling ${data.recipientId}`);
         const recipientSocketIds = this.connectedUsers.get(data.recipientId);
+        console.log(`[Call Start] Recipient Sockets:`, recipientSocketIds ? recipientSocketIds.size : 0);
         
         if (recipientSocketIds && recipientSocketIds.size > 0) {
           // User is online, ring them
           recipientSocketIds.forEach(socketId => {
+            console.log(`[Call Start] Emitting incoming_call to ${socketId}`);
             this.io.to(socketId).emit("incoming_call", {
               callerId: socket.userId,
               callerName: socket.username,
