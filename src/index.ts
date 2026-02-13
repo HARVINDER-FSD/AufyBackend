@@ -279,6 +279,15 @@ app.get('/reset-password', (_req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'reset-redirect.html'))
 })
 
+// Root Endpoint - For health checks and verification
+app.get('/', (_req, res) => {
+  res.json({
+    message: "AnuFy Backend API is running",
+    status: "active",
+    timestamp: new Date().toISOString()
+  });
+})
+
 // Routes
 app.use('/api/auth', authRoutes)
 app.use('/api/agora', agoraRoutes)
