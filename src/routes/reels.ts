@@ -520,6 +520,7 @@ router.get("/:reelId/comments", optionalAuth, async (req: any, res: Response) =>
       Number.parseInt(page as string) || 1,
       Number.parseInt(limit as string) || 20,
       (sort as "newest" | "oldest") || "newest",
+      req.userId || null
     )
 
     res.json(result)

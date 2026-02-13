@@ -10,6 +10,10 @@ const sanitize = require('mongo-sanitize');
 // Advanced Security Configuration
 const APP_SECRET = process.env.APP_SECRET || 'your-super-secret-app-key-change-this-in-prod';
 
+if (process.env.NODE_ENV === 'production' && APP_SECRET === 'your-super-secret-app-key-change-this-in-prod') {
+  console.warn('⚠️  WARNING: Using default APP_SECRET in production! Please set APP_SECRET environment variable.');
+}
+
 // 1. Strict Helmet Configuration
 export const securityHeaders = helmet({
   contentSecurityPolicy: {
@@ -166,7 +170,7 @@ export const validatePasswordStrength = (password: string) => {
 // 8. Suspicious Activity Detector
 export const detectSuspiciousActivity = (req: Request, res: Response, next: NextFunction) => {
   const url = req.url.toLowerCase();
-  const body = JSON.stringify(req.body).toLowerCase();
+  const body = req.body ? JSON.stringify(req.body).toLowerCase() : "";
   
   const suspiciousPatterns = [
     'union select', 'drop table', 'exec(', '<script>', 'javascript:', 

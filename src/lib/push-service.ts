@@ -111,7 +111,7 @@ export async function sendBulkPushNotifications(userIds: string[], notification:
   }
 }
 
-function getChannelId(type: string): string {
+export function getChannelId(type: string): string {
   switch (type) {
     case 'call':
       return 'calls'; // High priority channel

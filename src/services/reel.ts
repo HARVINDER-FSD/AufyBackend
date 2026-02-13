@@ -184,6 +184,32 @@ export class ReelService {
           }
         },
 
+        // Count Shares (Viral Signal)
+        {
+          $lookup: {
+            from: 'reel_shares',
+            let: { reelId: '$_id' },
+            pipeline: [
+              { $match: { $expr: { $eq: ['$reel_id', '$$reelId'] } } },
+              { $count: 'count' }
+            ],
+            as: 'shares_info'
+          }
+        },
+
+        // Count Saves/Bookmarks (Value Signal)
+        {
+          $lookup: {
+            from: 'reel_bookmarks',
+            let: { reelId: '$_id' },
+            pipeline: [
+              { $match: { $expr: { $eq: ['$reel_id', '$$reelId'] } } },
+              { $count: 'count' }
+            ],
+            as: 'saves_info'
+          }
+        },
+
         // Check Relationship (Is current user following creator?)
         {
           $addFields: {
@@ -215,11 +241,148 @@ export class ReelService {
           }
         },
 
+        // Check if Liked by Friends (Mutuals) - SOCIAL SIGNAL (Count for Score)
+        {
+          $lookup: {
+            from: 'likes',
+            let: { reelId: '$_id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$post_id', '$$reelId'] },
+                      { $in: ['$user_id', followedUserIds] } // Liked by someone I follow
+                    ]
+                  }
+                }
+              },
+              { $count: 'count' }
+            ],
+            as: 'friends_likes_info'
+          }
+        },
+
+        // Check if Commented by Friends (Mutuals) - SOCIAL SIGNAL (Count for Score)
+        {
+          $lookup: {
+            from: 'comments',
+            let: { reelId: '$_id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$post_id', '$$reelId'] },
+                      { $in: ['$user_id', followedUserIds] }, // Commented by someone I follow
+                      { $eq: ['$is_deleted', false] }
+                    ]
+                  }
+                }
+              },
+              { $count: 'count' }
+            ],
+            as: 'friends_comments_info'
+          }
+        },
+
+        // Check if Shared by Friends (Mutuals) - SOCIAL SIGNAL (Count for Score)
+        {
+          $lookup: {
+            from: 'reel_shares',
+            let: { reelId: '$_id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$reel_id', '$$reelId'] },
+                      { $in: ['$user_id', followedUserIds] } // Shared by someone I follow
+                    ]
+                  }
+                }
+              },
+              { $count: 'count' }
+            ],
+            as: 'friends_shares_info'
+          }
+        },
+
+        // Get Details of Friends Activity (For UI Display: "Liked by X, Y")
+        {
+          $lookup: {
+            from: 'likes',
+            let: { reelId: '$_id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$post_id', '$$reelId'] },
+                      { $in: ['$user_id', followedUserIds] }
+                    ]
+                  }
+                }
+              },
+              { $limit: 2 }, // Show top 2 friends
+              {
+                $lookup: {
+                  from: 'users',
+                  localField: 'user_id',
+                  foreignField: '_id',
+                  as: 'user'
+                }
+              },
+              { $unwind: '$user' },
+              { $project: { _id: 1, 'user.username': 1, 'user.avatar_url': 1 } }
+            ],
+            as: 'friends_likes_details'
+          }
+        },
+
+        // Get Details of Friends Comments (For UI Display: "X commented: ...")
+        {
+          $lookup: {
+            from: 'comments',
+            let: { reelId: '$_id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$post_id', '$$reelId'] },
+                      { $in: ['$user_id', followedUserIds] },
+                      { $eq: ['$is_deleted', false] }
+                    ]
+                  }
+                }
+              },
+              { $limit: 1 }, // Show top 1 friend comment (most relevant)
+              {
+                $lookup: {
+                  from: 'users',
+                  localField: 'user_id',
+                  foreignField: '_id',
+                  as: 'author'
+                }
+              },
+              { $unwind: '$author' },
+              { $project: { text: 1, 'author.username': 1, 'author.avatar_url': 1 } }
+            ],
+            as: 'friends_comments_details'
+          }
+        },
+
         // --- Scoring Phase ---
         {
           $addFields: {
             likes_count: { $ifNull: [{ $arrayElemAt: ['$likes_info.count', 0] }, 0] },
             comments_count: { $ifNull: [{ $arrayElemAt: ['$comments_info.count', 0] }, 0] },
+            shares_count: { $ifNull: [{ $arrayElemAt: ['$shares_info.count', 0] }, 0] },
+            saves_count: { $ifNull: [{ $arrayElemAt: ['$saves_info.count', 0] }, 0] },
+            friends_likes_count: { $ifNull: [{ $arrayElemAt: ['$friends_likes_info.count', 0] }, 0] },
+            friends_comments_count: { $ifNull: [{ $arrayElemAt: ['$friends_comments_info.count', 0] }, 0] },
+            friends_shares_count: { $ifNull: [{ $arrayElemAt: ['$friends_shares_info.count', 0] }, 0] },
             is_liked: { $gt: [{ $size: '$user_like' }, 0] },
 
             // Interaction Score
@@ -227,13 +390,20 @@ export class ReelService {
               $add: [
                 { $multiply: [{ $ifNull: [{ $arrayElemAt: ['$likes_info.count', 0] }, 0] }, 3] }, // Like = 3pts
                 { $multiply: [{ $ifNull: [{ $arrayElemAt: ['$comments_info.count', 0] }, 0] }, 5] }, // Comment = 5pts
+                { $multiply: [{ $ifNull: [{ $arrayElemAt: ['$saves_info.count', 0] }, 0] }, 8] }, // Save = 8pts (High Value)
+                { $multiply: [{ $ifNull: [{ $arrayElemAt: ['$shares_info.count', 0] }, 0] }, 10] }, // Share = 10pts (Viral Gold)
                 { $multiply: ['$view_count', 0.05] } // View = 0.05pts (prevent viral dominance)
               ]
             },
 
-            // Social Score
+            // Social Score (The "Best of Best" Algorithm)
             social_score: {
-              $cond: { if: '$is_following_creator', then: 50, else: 0 } // Follow = +50pts (Huge boost for friends/followed)
+              $add: [
+                { $cond: { if: '$is_following_creator', then: 50, else: 0 } }, // Follow Creator = +50pts
+                { $multiply: [{ $ifNull: [{ $arrayElemAt: ['$friends_likes_info.count', 0] }, 0] }, 20] }, // Friend Like = +20pts
+                { $multiply: [{ $ifNull: [{ $arrayElemAt: ['$friends_comments_info.count', 0] }, 0] }, 50] }, // Friend Comment = +50pts
+                { $multiply: [{ $ifNull: [{ $arrayElemAt: ['$friends_shares_info.count', 0] }, 0] }, 50] } // Friend Share = +50pts (Must See)
+              ]
             },
 
             // Freshness Score (Decay Factor)
@@ -298,8 +468,14 @@ export class ReelService {
         },
         likes_count: reel.likes_count,
         comments_count: reel.comments_count,
+        shares_count: reel.shares_count,
+        saves_count: reel.saves_count,
         is_liked: reel.is_liked,
-        is_following: reel.is_following_creator // Now correctly populated
+        is_following: reel.is_following_creator, // Now correctly populated
+        mutual_interactions: {
+          liked_by: reel.friends_likes_details || [],
+          commented_by: reel.friends_comments_details || []
+        }
       }))
 
       return {

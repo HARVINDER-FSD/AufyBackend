@@ -1,11 +1,12 @@
 import { Router } from "express"
 import Joi from "joi"
-import { authenticateToken } from "../middleware/auth"
+import { authenticateToken, optionalAuth } from "../middleware/auth"
 import { validateBody } from "../middleware/validate"
 import { getDatabase } from "../lib/database"
 import { CommentService } from "../services/comment"
 import { ObjectId } from "mongodb"
-import { commentLimiter } from "../middleware/rateLimiter"
+import { commentLimiter, likeLimiter } from "../middleware/rateLimiter"
+import { addJob, QUEUE_NAMES } from "../lib/queue"
 
 const router = Router()
 
@@ -157,51 +158,129 @@ router.get("/my-comments", authenticateToken, async (req: any, res) => {
   }
 })
 
+// Get comment replies
+router.get("/:commentId/replies", optionalAuth, async (req: any, res) => {
+  try {
+    const { commentId } = req.params
+    const page = Number.parseInt(req.query.page as string) || 1
+    const limit = Number.parseInt(req.query.limit as string) || 20
+    const currentUserId = req.userId || null
+
+    const result = await CommentService.getCommentReplies(
+        commentId,
+        page,
+        limit,
+        currentUserId
+    )
+
+    res.json(result)
+  } catch (error: any) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      error: error.message,
+    })
+  }
+})
+
+// Get single comment
+router.get("/:commentId", optionalAuth, async (req: any, res) => {
+  try {
+    const { commentId } = req.params
+    const currentUserId = req.userId || null
+    const comment = await CommentService.getCommentById(commentId, currentUserId)
+    res.json(comment)
+  } catch (error: any) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      error: error.message,
+    })
+  }
+})
+
+// Update comment
+router.put("/:commentId", authenticateToken, async (req: any, res) => {
+  try {
+    const userId = req.userId!
+    const { commentId } = req.params
+    const { content } = req.body
+
+    const result = await CommentService.updateComment(commentId, userId, content)
+
+    res.json(result)
+  } catch (error: any) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      error: error.message,
+    })
+  }
+})
+
 // Delete comment
 router.delete("/:commentId", authenticateToken, async (req: any, res) => {
   try {
     const userId = req.userId!
     const { commentId } = req.params
 
-    const db = await getDatabase()
-
-    // Check if comment belongs to user
-    const comment = await db.collection('comments').findOne({
-      _id: new ObjectId(commentId),
-      user_id: new ObjectId(userId)
-    })
-
-    if (!comment) {
-      return res.status(404).json({
-        success: false,
-        error: 'Comment not found or you do not have permission to delete it'
-      })
-    }
-
-    // Delete the comment
-    await db.collection('comments').deleteOne({
-      _id: new ObjectId(commentId)
-    })
-
-    // Decrement comment count on post/reel
-    if (comment.post_id) {
-      await db.collection('posts').updateOne(
-        { _id: new ObjectId(comment.post_id) },
-        { $inc: { comments_count: -1 } }
-      )
-
-      await db.collection('reels').updateOne(
-        { _id: new ObjectId(comment.post_id) },
-        { $inc: { comments_count: -1 } }
-      )
-    }
+    await CommentService.deleteComment(commentId, userId)
 
     res.json({
       success: true,
       message: 'Comment deleted successfully'
     })
   } catch (error: any) {
-    console.error('Error deleting comment:', error)
+    res.status(error.statusCode || 500).json({
+      success: false,
+      error: error.message,
+    })
+  }
+})
+
+// Like comment
+router.post("/:commentId/like", authenticateToken, likeLimiter, async (req: any, res) => {
+  try {
+    const userId = req.userId!
+    const { commentId } = req.params
+
+    // 🚀 ASYNC PROCESSING: Offload DB write to BullMQ
+    await addJob(QUEUE_NAMES.LIKES, 'like-comment', {
+      userId,
+      postId: commentId,
+      action: 'like',
+      type: 'comment'
+    });
+
+    res.json({
+      success: true,
+      message: 'Like queued successfully',
+      liked: true
+    })
+  } catch (error: any) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      error: error.message,
+    })
+  }
+})
+
+// Unlike comment
+router.delete("/:commentId/like", authenticateToken, async (req: any, res) => {
+  try {
+    const userId = req.userId!
+    const { commentId } = req.params
+
+    // 🚀 ASYNC PROCESSING
+    await addJob(QUEUE_NAMES.LIKES, 'unlike-comment', {
+      userId,
+      postId: commentId,
+      action: 'unlike',
+      type: 'comment'
+    });
+
+    res.json({
+      success: true,
+      message: 'Unlike queued successfully'
+    })
+  } catch (error: any) {
     res.status(error.statusCode || 500).json({
       success: false,
       error: error.message,

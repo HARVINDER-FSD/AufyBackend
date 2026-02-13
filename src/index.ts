@@ -62,6 +62,15 @@ import { initializeFirebase } from './services/firebase-messaging'
 import { setupLikeWorker } from './workers/like-worker'
 import Redis from 'ioredis'
 
+// Extend Express Request type to include userId
+declare global {
+  namespace Express {
+    interface Request {
+      userId?: string;
+    }
+  }
+}
+
 const app = express()
 const httpServer = createServer(app)
 const PORT = parseInt(process.env.PORT || '8000')

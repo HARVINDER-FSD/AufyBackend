@@ -22,31 +22,52 @@ router.get('/', authenticate, async (req: any, res: Response) => {
 
     const db = await getDatabase();
 
-    const query: any = { userId: new ObjectId(userId) };
+    const query: any = { user_id: new ObjectId(userId) };
     if (unreadOnly === 'true') {
-      query.isRead = false;
+      query.is_read = false;
     }
 
     // Get notifications with actor details
     const notifications = await db.collection('notifications')
       .aggregate([
         { $match: query },
-        { $sort: { createdAt: -1 } },
+        { $sort: { created_at: -1 } },
         { $skip: safeSkip },
         { $limit: safeLimit },
         {
           $lookup: {
             from: 'users',
-            localField: 'actorId',
+            localField: 'actor_id',
             foreignField: '_id',
             as: 'actor'
           }
         },
-        { $unwind: '$actor' },
+        {
+          $unwind: {
+            path: '$actor',
+            preserveNullAndEmptyArrays: true
+          }
+        },
+        {
+          // Convert string postId from data to ObjectId for lookup
+          $addFields: {
+             lookupPostId: {
+                $cond: {
+                  if: { $and: [
+                    { $ne: ["$data.postId", null] },
+                    { $ne: ["$data.postId", undefined] },
+                    { $ne: ["$data.postId", ""] }
+                  ]},
+                  then: { $toObjectId: "$data.postId" },
+                  else: null
+                }
+             }
+          }
+        },
         {
           $lookup: {
             from: 'posts',
-            localField: 'postId',
+            localField: 'lookupPostId',
             foreignField: '_id',
             as: 'post'
           }
@@ -56,11 +77,10 @@ router.get('/', authenticate, async (req: any, res: Response) => {
             _id: 1,
             type: 1,
             content: 1,
-            postId: 1,
-            conversationId: 1,
-            isRead: 1,
+            data: 1,
+            is_read: 1,
             is_anonymous: 1, // Include anonymous flag
-            createdAt: 1,
+            created_at: 1,
             'actor._id': 1,
             'actor.username': 1,
             'actor.full_name': 1,
@@ -78,20 +98,21 @@ router.get('/', authenticate, async (req: any, res: Response) => {
 
     // Get unread count
     const unreadCount = await db.collection('notifications').countDocuments({
-      userId: new ObjectId(userId),
-      isRead: false
+      user_id: new ObjectId(userId),
+      is_read: false
     });
 
     // Format notifications
     const formattedNotifications = notifications.map(notif => {
+      const actor = notif.actor || {};
       const masked = maskAnonymousUser({
-        _id: notif.actor._id,
-        id: notif.actor._id.toString(),
-        username: notif.actor.username,
-        full_name: notif.actor.full_name,
-        avatar: notif.actor.avatar_url || notif.actor.avatar || '/placeholder-user.jpg',
-        avatar_url: notif.actor.avatar_url || notif.actor.avatar || '/placeholder-user.jpg',
-        is_verified: notif.actor.is_verified || notif.actor.verified || false,
+        _id: actor._id,
+        id: actor._id?.toString(),
+        username: actor.username || 'System',
+        full_name: actor.full_name || 'AnuFy',
+        avatar: actor.avatar_url || actor.avatar || '/placeholder-user.jpg',
+        avatar_url: actor.avatar_url || actor.avatar || '/placeholder-user.jpg',
+        is_verified: actor.is_verified || actor.verified || false,
         badge_type: null,
         is_anonymous: notif.is_anonymous
       });
@@ -111,9 +132,9 @@ router.get('/', authenticate, async (req: any, res: Response) => {
           id: notif.post._id.toString(),
           image: notif.post.image_url || notif.post.media?.[0]?.url
         } : undefined,
-        conversationId: notif.conversationId,
-        timestamp: getTimeAgo(notif.createdAt),
-        isRead: notif.isRead
+        conversationId: notif.data?.conversationId,
+        timestamp: getTimeAgo(notif.created_at),
+        isRead: notif.is_read
       };
     });
 
@@ -135,9 +156,10 @@ router.get('/unread-count', authenticate, async (req: any, res: Response) => {
 
     const db = await getDatabase();
 
+    // Get unread count
     const unreadCount = await db.collection('notifications').countDocuments({
-      userId: new ObjectId(userId),
-      isRead: false
+      user_id: new ObjectId(userId),
+      is_read: false
     });
 
     res.json({ unreadCount });
@@ -158,12 +180,12 @@ router.put('/:notificationId/read', authenticate, async (req: any, res: Response
     const result = await db.collection('notifications').updateOne(
       {
         _id: new ObjectId(notificationId),
-        userId: new ObjectId(userId)
+        user_id: new ObjectId(userId)
       },
       {
         $set: {
-          isRead: true,
-          updatedAt: new Date()
+          is_read: true,
+          updated_at: new Date()
         }
       }
     );
@@ -188,13 +210,13 @@ router.put('/read-all', authenticate, async (req: any, res: Response) => {
 
     await db.collection('notifications').updateMany(
       {
-        userId: new ObjectId(userId),
-        isRead: false
+        user_id: new ObjectId(userId),
+        is_read: false
       },
       {
         $set: {
-          isRead: true,
-          updatedAt: new Date()
+          is_read: true,
+          updated_at: new Date()
         }
       }
     );
@@ -216,7 +238,7 @@ router.delete('/:notificationId', authenticate, async (req: any, res: Response) 
 
     const result = await db.collection('notifications').deleteOne({
       _id: new ObjectId(notificationId),
-      userId: new ObjectId(userId)
+      user_id: new ObjectId(userId)
     });
 
     if (result.deletedCount === 0) {

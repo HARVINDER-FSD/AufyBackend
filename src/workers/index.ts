@@ -7,6 +7,8 @@ import { getDatabase } from '../lib/database';
 import { ObjectId } from 'mongodb';
 import { setupLikeWorker } from './like-worker';
 import { setupChatWorker } from './chat-worker';
+import NotificationModel from '../models/notification';
+import { getChannelId } from '../lib/push-service';
 
 const expo = new Expo();
 
@@ -54,6 +56,22 @@ setupChatWorker(connection);
 const notificationWorker = connection ? new Worker(QUEUE_NAMES.NOTIFICATIONS, async (job: Job) => {
     const { recipientId, title, body, data } = job.data;
 
+    // Save In-App Notification
+    try {
+        await NotificationModel.create({
+            user_id: recipientId,
+            actor_id: data?.actorId,
+            type: data?.type || 'system',
+            title: title,
+            content: body,
+            data: data,
+            is_read: false
+        });
+        logger.info(`Saved in-app notification for ${recipientId}`);
+    } catch (dbError) {
+        logger.error(`Failed to save in-app notification for ${recipientId}:`, dbError);
+    }
+
     const db = await getDatabase();
     const user = await db.collection('users').findOne({ _id: new ObjectId(recipientId) });
 
@@ -67,12 +85,18 @@ const notificationWorker = connection ? new Worker(QUEUE_NAMES.NOTIFICATIONS, as
         return;
     }
 
-    const messages = [{
+    const messages: any[] = [{
         to: user.pushToken,
         sound: 'default',
         title: title || 'New Notification',
         body: body || 'You have a new activity on Anufy',
-        data: data || {},
+        data: {
+          ...data,
+          _displayInForeground: true // Moved to data for correct typing
+        },
+        priority: 'high',
+        badge: 1,
+        channelId: getChannelId(data?.type || 'default'),
     }];
 
     try {

@@ -738,7 +738,7 @@ router.get("/:postId/bookmark", optionalAuth, async (req, res) => {
 })
 
 // Get post comments
-router.get("/:postId/comments", optionalAuth, async (req, res) => {
+router.get("/:postId/comments", optionalAuth, async (req: any, res) => {
   try {
     const { postId } = req.params
     const { page, limit, sort } = req.query
@@ -748,6 +748,7 @@ router.get("/:postId/comments", optionalAuth, async (req, res) => {
       Number.parseInt(page as string) || 1,
       Number.parseInt(limit as string) || 20,
       (sort as "newest" | "oldest") || "newest",
+      req.userId || null
     )
 
     res.json(result)

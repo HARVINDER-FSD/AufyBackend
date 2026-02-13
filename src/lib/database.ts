@@ -10,7 +10,7 @@ if (!process.env.MONGODB_URI) {
 }
 
 // MongoDB connection
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://harvindersinghharvinder9999_db_user:sardar123@cluster0.ssl5fvx.mongodb.net/socialmedia?retryWrites=true&w=majority&appName=Cluster0';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/socialmedia';
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 2000; // 2 seconds
 

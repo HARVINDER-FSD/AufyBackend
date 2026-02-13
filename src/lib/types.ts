@@ -50,6 +50,10 @@ export interface Comment {
   updated_at: Date
   user?: User
   replies?: Comment[]
+  likes_count?: number
+  replies_count?: number
+  isLiked?: boolean
+  mentions?: string[]
 }
 
 export interface Story {

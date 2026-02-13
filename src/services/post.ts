@@ -471,6 +471,101 @@ export class PostService {
     }
   }
 
+  // --- MOOD & PERSONALIZATION ENGINE ---
+
+  // 1. Detect User Mood (Interests based on recent activity)
+  static async getUserMood(userId: string): Promise<string[]> {
+    const db = await getDatabase()
+    const likesCollection = db.collection('likes')
+    const postsCollection = db.collection('posts')
+
+    // Get last 50 liked posts (Recent Mood)
+    const recentLikes = await likesCollection.find(
+      { user_id: new ObjectId(userId) },
+      { sort: { created_at: -1 }, limit: 50 }
+    ).toArray()
+
+    if (recentLikes.length === 0) return []
+
+    const postIds = recentLikes.map(l => l.post_id)
+
+    // Get the posts to extract hashtags/topics
+    const likedPosts = await postsCollection.find(
+      { _id: { $in: postIds } },
+      { projection: { hashtags: 1, media_type: 1 } }
+    ).toArray()
+
+    // Frequency Analysis
+    const tagFrequency: Record<string, number> = {}
+    
+    likedPosts.forEach(post => {
+      if (post.hashtags && Array.isArray(post.hashtags)) {
+        post.hashtags.forEach((tag: string) => {
+          const lowerTag = tag.toLowerCase()
+          tagFrequency[lowerTag] = (tagFrequency[lowerTag] || 0) + 1
+        })
+      }
+    })
+
+    // Sort by frequency
+    const sortedTags = Object.entries(tagFrequency)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 5) // Top 5 Mood Tags
+      .map(([tag]) => tag)
+
+    return sortedTags
+  }
+
+  // 2. Get Suggested Posts (Based on Mood)
+  static async getSuggestedPosts(userId: string, moodTags: string[], excludeIds: string[] = [], limit = 5): Promise<any[]> {
+    if (moodTags.length === 0) return []
+
+    const db = await getDatabase()
+    const postsCollection = db.collection('posts')
+
+    // Find popular posts with these tags (excluding own posts and already seen)
+    const suggestions = await postsCollection.aggregate([
+      {
+        $match: {
+          hashtags: { $in: moodTags },
+          user_id: { $ne: new ObjectId(userId) },
+          _id: { $nin: excludeIds.map(id => new ObjectId(id)) },
+          is_archived: { $ne: true },
+          is_deleted: { $ne: true }
+        }
+      },
+      // Boost by engagement (Quality Filter)
+      {
+        $addFields: {
+          score: {
+            $add: [
+              { $ifNull: ['$likes_count', 0] },
+              { $multiply: [{ $ifNull: ['$comments_count', 0] }, 2] }
+            ]
+          }
+        }
+      },
+      { $sort: { score: -1, created_at: -1 } },
+      { $limit: limit },
+      // Lookup Author
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'user_id',
+          foreignField: '_id',
+          as: 'author'
+        }
+      },
+      { $unwind: '$author' }
+    ]).toArray()
+
+    return suggestions.map(post => ({
+      ...post,
+      is_suggested: true, // Flag for UI
+      suggested_reason: `Because you like #${moodTags[0]}`
+    }))
+  }
+
   // Get feed posts
   static async getFeedPosts(userId: string, page = 1, limit = 20): Promise<PaginatedResponse<Post>> {
     const startTime = Date.now();
@@ -589,13 +684,52 @@ export class PostService {
     users.forEach(u => userMap.set(u._id.toString(), u));
 
     // Attach users to posts and filter out missing authors (shadow banned)
-    const posts = rawPosts.map(post => {
+    let posts = rawPosts.map(post => {
         const user = userMap.get(post.user_id.toString());
         return {
             ...post,
             author: user // Mimic the structure expected by enrichPosts or internal logic
         };
     }).filter(post => post.author); // 🛡️ Filter out posts from shadow-banned users
+
+    // --- ALGORITHM INJECTION: Mix in "Mood" Suggestions ---
+    // Only on first few pages to spark interest
+    if (page <= 2) {
+      try {
+        const moodTags = await PostService.getUserMood(userId)
+        if (moodTags.length > 0) {
+          const currentPostIds = posts.map(p => p._id.toString())
+          const suggestions = await PostService.getSuggestedPosts(userId, moodTags, currentPostIds, 4) // Fetch 4 suggestions
+
+          if (suggestions.length > 0) {
+             // Interleave suggestions: Insert 1 suggestion every 4 posts
+             // [F, F, F, F, S, F, F, F, F, S, ...]
+             const mixedPosts = []
+             let sIdx = 0
+             
+             for (let i = 0; i < posts.length; i++) {
+               mixedPosts.push(posts[i])
+               // Insert suggestion after every 4th post
+               if ((i + 1) % 4 === 0 && sIdx < suggestions.length) {
+                 mixedPosts.push(suggestions[sIdx])
+                 sIdx++
+               }
+             }
+             
+             // Add remaining suggestions if feed is short
+             while (sIdx < suggestions.length) {
+                mixedPosts.push(suggestions[sIdx])
+                sIdx++
+             }
+             
+             posts = mixedPosts
+          }
+        }
+      } catch (err) {
+        logger.error('Error injecting mood suggestions:', err)
+        // Fail silently, return normal feed
+      }
+    }
 
     // Note: enrichPosts handles the final transformation, including masking anonymous users.
     // However, enrichPosts previously expected 'user' field populated from aggregation.

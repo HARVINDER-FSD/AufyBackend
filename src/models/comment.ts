@@ -30,6 +30,10 @@ const commentSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  mentions: [{
+    type: String, // Storing usernames for quick display/linking
+    index: true
+  }],
   is_deleted: {
     type: Boolean,
     default: false

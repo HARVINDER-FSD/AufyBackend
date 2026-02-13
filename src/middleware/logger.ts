@@ -40,7 +40,7 @@ declare global {
 // Request‑ID middleware – attaches a UUID to each request and to logger
 export function requestId(req: Request, _res: Response, next: NextFunction) {
     const id = (req.headers['x-request-id'] as string) || uuidv4();
-    req.id = id; // augment Request type via declaration merging (handled elsewhere)
+    req.id = id;
     // expose header for downstream services
     _res.setHeader('X-Request-Id', id);
     next();

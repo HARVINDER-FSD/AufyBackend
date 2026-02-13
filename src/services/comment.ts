@@ -7,6 +7,7 @@ import CommentModel from "../models/comment"
 import PostModel from "../models/post"
 import UserModel from "../models/user"
 import ReelModel from "../models/reel"
+import LikeModel from "../models/like"
 import type { Model } from "mongoose"
 import { addJob, QUEUE_NAMES } from "../lib/queue"
 import { ModerationService } from "./moderation"
@@ -16,6 +17,7 @@ const Comment = CommentModel as any as Model<any>
 const Post = PostModel as any as Model<any>
 const User = UserModel as any as Model<any>
 const Reel = ReelModel as any as Model<any>
+const Like = LikeModel as any as Model<any>
 
 export class CommentService {
   // Create comment
@@ -57,12 +59,37 @@ export class CommentService {
       console.log(`[COMMENT CREATE] ${targetType} found`)
 
       // Check if parent comment exists (if provided)
+      let finalParentId = parent_comment_id || null;
       if (parent_comment_id) {
         console.log('[COMMENT CREATE] Checking parent comment...')
-        const parentExists = await Comment.findById(parent_comment_id).lean().exec()
+        const parentExists: any = await Comment.findById(parent_comment_id).lean().exec()
         if (!parentExists) {
           throw new Error("Parent comment not found")
         }
+        
+        // Check for nesting depth - Flatten if necessary (max 1 level depth: Comment -> Reply)
+        if (parentExists.parent_comment_id) {
+            console.log('[COMMENT CREATE] Flattening nested reply...');
+            finalParentId = parentExists.parent_comment_id.toString();
+        }
+      }
+
+      // --- MENTIONS EXTRACTION LOGIC ---
+      const mentionRegex = /@(\w+)/g;
+      const mentionedUsernames = [...new Set((content.match(mentionRegex) || []).map(m => m.substring(1)))];
+      
+      let validMentions: string[] = [];
+      let mentionedUserIds: string[] = [];
+
+      if (mentionedUsernames.length > 0) {
+          // Verify users exist
+          const foundUsers = await User.find({ username: { $in: mentionedUsernames } })
+              .select('_id username')
+              .lean()
+              .exec();
+          
+          validMentions = foundUsers.map((u: any) => u.username);
+          mentionedUserIds = foundUsers.map((u: any) => u._id.toString());
       }
 
       // Get user data
@@ -83,12 +110,13 @@ export class CommentService {
       const newComment = await Comment.create({
         user_id: userId,
         post_id: postId,
-        parent_comment_id: parent_comment_id || null,
+        parent_comment_id: finalParentId,
         content: content.trim(),
         is_deleted: false,
         is_anonymous: isAnonymous,
         likes_count: 0,
         replies_count: 0,
+        mentions: validMentions // Store validated mentions
       })
       console.log('[COMMENT CREATE] Comment created:', newComment._id)
 
@@ -100,8 +128,8 @@ export class CommentService {
       }
       
       // Increment replies count on parent comment if applicable
-      if (parent_comment_id) {
-        await Comment.updateOne({ _id: parent_comment_id }, { $inc: { replies_count: 1 } });
+      if (finalParentId) {
+        await Comment.updateOne({ _id: finalParentId }, { $inc: { replies_count: 1 } });
       }
 
       const comment: any = {
@@ -113,6 +141,7 @@ export class CommentService {
         parent_comment_id: newComment.parent_comment_id,
         likes_count: newComment.likes_count || 0,
         replies_count: newComment.replies_count || 0,
+        mentions: newComment.mentions || [],
         is_deleted: newComment.is_deleted,
         created_at: newComment.created_at,
         updated_at: newComment.updated_at,
@@ -131,9 +160,47 @@ export class CommentService {
             data: { 
               postId, 
               commentId: newComment._id.toString(),
-              type: 'comment' 
+              type: 'comment',
+              actorId: userId
             }
           })
+        }
+
+        // --- NOTIFY REPLY TO PARENT COMMENT ---
+        if (parent_comment_id) {
+            const parentComment: any = await Comment.findById(parent_comment_id).lean().exec();
+            if (parentComment && parentComment.user_id.toString() !== userId && parentComment.user_id.toString() !== postOwnerId) {
+                 // Only notify if parent author is different from current user AND different from post owner (who already got a notification)
+                 await addJob(QUEUE_NAMES.NOTIFICATIONS, 'reply-notification', {
+                    recipientId: parentComment.user_id.toString(),
+                    title: 'New Reply ↩️',
+                    body: isAnonymous ? `A Ghost User replied to your comment.` : `${user.username} replied to your comment: "${content.substring(0, 50)}${content.length > 50 ? '...' : ''}"`,
+                    data: {
+                        postId,
+                        commentId: newComment._id.toString(),
+                        type: 'reply',
+                        actorId: userId
+                    }
+                });
+            }
+        }
+
+        // --- NOTIFY MENTIONED USERS ---
+        for (const mentionedUserId of mentionedUserIds) {
+            // Don't notify if user mentions themselves (weird but possible)
+            if (mentionedUserId !== userId) {
+                await addJob(QUEUE_NAMES.NOTIFICATIONS, 'mention-notification', {
+                    recipientId: mentionedUserId,
+                    title: 'You were mentioned 📣',
+                    body: isAnonymous ? `A Ghost User mentioned you in a comment.` : `${user.username} mentioned you: "${content.substring(0, 50)}${content.length > 50 ? '...' : ''}"`,
+                    data: {
+                        postId,
+                        commentId: newComment._id.toString(),
+                        type: 'mention',
+                        actorId: userId
+                    }
+                });
+            }
         }
       } catch (err) {
         console.error('[COMMENT CREATE] Notification error:', err)
@@ -153,6 +220,7 @@ export class CommentService {
     page = 1,
     limit = 20,
     sortBy: "newest" | "oldest" = "newest",
+    currentUserId: string | null = null
   ): Promise<PaginatedResponse<Comment>> {
     // Validate and sanitize pagination params
     const validPage = Math.max(1, Math.floor(page))
@@ -204,6 +272,19 @@ export class CommentService {
       .lean()
       .exec()
 
+    // Fetch likes if user is logged in
+    let likedCommentIds = new Set<string>();
+    if (currentUserId) {
+        const allFetchedCommentIds = [...commentIds, ...allReplies.map((r: any) => r._id)];
+        const likes = await Like.find({
+            user_id: currentUserId,
+            post_id: { $in: allFetchedCommentIds },
+            content_type: 'Comment'
+        }).select('post_id').lean().exec();
+        
+        likes.forEach((l: any) => likedCommentIds.add(l.post_id.toString()));
+    }
+
     const commentsWithData = comments.map((comment: any) => {
       const user = users.find((u: any) => u._id.toString() === comment.user_id.toString())
       
@@ -216,14 +297,16 @@ export class CommentService {
         const replyUser = replyUsers.find((u: any) => u._id.toString() === reply.user_id.toString())
         return {
           ...reply,
-          user: maskAnonymousUser({ ...replyUser, is_anonymous: reply.is_anonymous })
+          user: maskAnonymousUser({ ...replyUser, is_anonymous: reply.is_anonymous }),
+          isLiked: likedCommentIds.has(reply._id.toString())
         }
       })
 
       return {
         ...comment,
         user: maskAnonymousUser({ ...user, is_anonymous: comment.is_anonymous }),
-        replies: repliesWithUsers
+        replies: repliesWithUsers,
+        isLiked: likedCommentIds.has(comment._id.toString())
       }
     })
 
@@ -244,7 +327,7 @@ export class CommentService {
   }
 
   // Get comment replies
-  static async getCommentReplies(commentId: string, page = 1, limit = 20): Promise<PaginatedResponse<Comment>> {
+  static async getCommentReplies(commentId: string, page = 1, limit = 20, currentUserId: string | null = null): Promise<PaginatedResponse<Comment>> {
     const { page: validPage, limit: validLimit } = pagination.validateParams(page.toString(), limit.toString())
     const offset = pagination.getOffset(validPage, validLimit)
 
@@ -265,15 +348,29 @@ export class CommentService {
 
     const userIds = replies.map((r: any) => r.user_id)
     const users = await User.find({ _id: { $in: userIds }, is_active: true })
-      .select('id username full_name avatar_url is_verified')
+      .select('id username full_name avatar_url is_verified badge_type')
       .lean()
       .exec()
+
+    // Fetch likes if user is logged in
+    let likedCommentIds = new Set<string>();
+    if (currentUserId) {
+        const replyIds = replies.map((r: any) => r._id);
+        const likes = await Like.find({
+            user_id: currentUserId,
+            post_id: { $in: replyIds },
+            content_type: 'Comment'
+        }).select('post_id').lean().exec();
+        
+        likes.forEach((l: any) => likedCommentIds.add(l.post_id.toString()));
+    }
 
     const repliesWithUsers = replies.map((reply: any) => {
       const user = users.find((u: any) => u._id.toString() === reply.user_id.toString())
       return {
         ...reply,
-        user: maskAnonymousUser({ ...user, is_anonymous: reply.is_anonymous })
+        user: maskAnonymousUser({ ...user, is_anonymous: reply.is_anonymous }),
+        isLiked: likedCommentIds.has(reply._id.toString())
       }
     })
 
@@ -377,7 +474,7 @@ export class CommentService {
   }
 
   // Get comment by ID
-  static async getCommentById(commentId: string): Promise<Comment> {
+  static async getCommentById(commentId: string, currentUserId: string | null = null): Promise<Comment> {
     const comment: any = await Comment.findOne({
       _id: commentId,
       is_deleted: false
@@ -391,7 +488,7 @@ export class CommentService {
       _id: comment.user_id,
       is_active: true
     })
-      .select('id username full_name avatar_url is_verified')
+      .select('id username full_name avatar_url is_verified badge_type')
       .lean()
       .exec()
 
@@ -399,9 +496,91 @@ export class CommentService {
       throw errors.notFound("Comment user not found")
     }
 
+    let isLiked = false;
+    if (currentUserId) {
+        const like = await Like.findOne({
+            user_id: currentUserId,
+            post_id: commentId,
+            content_type: 'Comment'
+        }).lean().exec();
+        isLiked = !!like;
+    }
+
     return {
       ...comment,
-      user: maskAnonymousUser({ ...user, is_anonymous: comment.is_anonymous })
+      user: maskAnonymousUser({ ...user, is_anonymous: comment.is_anonymous }),
+      isLiked
+    }
+  }
+
+  // Like comment
+  static async likeComment(userId: string, commentId: string): Promise<void> {
+    const comment: any = await Comment.findById(commentId).lean().exec()
+    if (!comment) {
+      throw errors.notFound("Comment not found")
+    }
+
+    // Check if already liked
+    const existingLike = await Like.findOne({
+      user_id: userId,
+      post_id: commentId,
+      content_type: 'Comment'
+    })
+
+    if (existingLike) {
+      return // Already liked
+    }
+
+    // Create like
+    await Like.create({
+      user_id: userId,
+      post_id: commentId,
+      content_type: 'Comment'
+    })
+
+    // Increment like count
+    await Comment.updateOne({ _id: commentId }, { $inc: { likes_count: 1 } })
+
+    // Send notification
+    try {
+      if (comment.user_id.toString() !== userId) {
+        const liker: any = await User.findById(userId).select('username full_name isAnonymousMode').lean().exec()
+        
+        // Don't notify if liker is anonymous? Or notify as Ghost?
+        // Usually likes are public or semi-public. If user is in anonymous mode, maybe we mask it?
+        // But for likes, maybe we just show "Someone liked your comment" or "Ghost liked"?
+        // Let's use the standard notification pattern.
+        
+        const isAnonymous = liker.isAnonymousMode === true;
+        const displayName = isAnonymous ? "A Ghost User" : (liker.full_name || liker.username);
+
+        await addJob(QUEUE_NAMES.NOTIFICATIONS, 'like-notification', {
+          recipientId: comment.user_id.toString(),
+          title: 'New Like ❤️',
+          body: `${displayName} liked your comment: "${comment.content.substring(0, 30)}..."`,
+          data: {
+            postId: comment.post_id.toString(), // Navigate to post
+            commentId: comment._id.toString(),
+            type: 'comment_like',
+            actorId: userId
+          }
+        })
+      }
+    } catch (err) {
+      console.error('[COMMENT LIKE] Notification error:', err)
+    }
+  }
+
+  // Unlike comment
+  static async unlikeComment(userId: string, commentId: string): Promise<void> {
+    const result = await Like.deleteOne({
+      user_id: userId,
+      post_id: commentId,
+      content_type: 'Comment'
+    })
+
+    if (result.deletedCount > 0) {
+      await Comment.updateOne({ _id: commentId }, { $inc: { likes_count: -1 } })
     }
   }
 }
