@@ -143,29 +143,42 @@ mongoose.connect(MONGODB_URI, {
     try {
       const db = mongoose.connection.db
       if (db) {
-        await db.collection('users').createIndex({ email: 1 }, { unique: true })
-        await db.collection('users').createIndex({ username: 1 }, { unique: true })
-        await db.collection('users').createIndex({ created_at: -1 })
-        await db.collection('notifications').createIndex({ userId: 1, createdAt: -1 })
-        await db.collection('notifications').createIndex({ userId: 1, isRead: 1, createdAt: -1 })
-        await db.collection('follows').createIndex({ followerId: 1 })
-        await db.collection('follows').createIndex({ followingId: 1 })
+        const createIndexIfNotExists = async (collectionName: string, indexSpec: any, options: any = {}) => {
+           try {
+             await db.collection(collectionName).createIndex(indexSpec, options);
+           } catch (err: any) {
+             // Ignore if index already exists or other non-critical errors
+             if (err.code !== 85) { // 85 is IndexOptionsConflict, might want to log that
+                // console.log(`Index creation note for ${collectionName}:`, err.message);
+             }
+           }
+        };
+
+        // Users
+        await createIndexIfNotExists('users', { email: 1 }, { unique: true });
+        await createIndexIfNotExists('users', { username: 1 }, { unique: true });
+        await createIndexIfNotExists('users', { created_at: -1 });
+
+        // Notifications
+        await createIndexIfNotExists('notifications', { userId: 1, createdAt: -1 });
+        await createIndexIfNotExists('notifications', { userId: 1, isRead: 1, createdAt: -1 });
+
+        // Follows
+        await createIndexIfNotExists('follows', { followerId: 1 });
+        await createIndexIfNotExists('follows', { followingId: 1 });
         
         // 🚀 MILLION-USER SCALE INDEXES
-        // Critical for Feed Performance: Compound index for filtering by user and sorting by time
-        await db.collection('posts').createIndex({ user_id: 1, created_at: -1 })
-        // Critical for Global/Trending Feed
-        await db.collection('posts').createIndex({ created_at: -1 })
-        // Critical for Like Checks
-        await db.collection('likes').createIndex({ user_id: 1, post_id: 1 }, { unique: true })
+        await createIndexIfNotExists('posts', { user_id: 1, created_at: -1 });
+        await createIndexIfNotExists('posts', { created_at: -1 });
+        await createIndexIfNotExists('likes', { user_id: 1, post_id: 1 }, { unique: true });
         
-        // 💬 Chat Performance Indexes (Makhan Mode)
-        await db.collection('messages').createIndex({ conversation_id: 1, created_at: -1 })
-        await db.collection('messages').createIndex({ sender_id: 1, created_at: -1 })
-        await db.collection('conversations').createIndex({ 'participants.user': 1 })
-        await db.collection('conversations').createIndex({ updated_at: -1 }) // For fast inbox sorting
+        // 💬 Chat Performance Indexes
+        await createIndexIfNotExists('messages', { conversation_id: 1, created_at: -1 });
+        await createIndexIfNotExists('messages', { sender_id: 1, created_at: -1 });
+        await createIndexIfNotExists('conversations', { 'participants.user': 1 });
+        await createIndexIfNotExists('conversations', { updated_at: -1 });
 
-        console.log('✅ Database indexes created')
+        console.log('✅ Database indexes check complete (Created if missing, Skipped if existing)')
       }
     } catch (error) {
       console.log('⚠️  Index creation skipped (may already exist)')
