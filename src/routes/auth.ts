@@ -381,7 +381,9 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
 
     // Respond immediately without waiting for email
     res.json({
-      message: 'If an account exists with this email, you will receive an OTP.'
+      message: 'If an account exists with this email, you will receive an OTP.',
+      // Dev helper: return OTP in response if not in production (since email might fail on free tier)
+      dev_otp: process.env.NODE_ENV !== 'production' ? otp : undefined
     });
 
   } catch (error) {

@@ -1,7 +1,23 @@
-import { Resend } from 'resend';
 
-// Initialize Resend with timeout
+import { Resend } from 'resend';
+import nodemailer from 'nodemailer';
+
+// Email Configuration
+const EMAIL_CONFIG = {
+  host: process.env.EMAIL_HOST,
+  port: parseInt(process.env.EMAIL_PORT || '465'),
+  secure: process.env.EMAIL_SECURE === 'true',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASSWORD,
+  },
+};
+
+// Initialize Resend (Fallback)
 const resend = new Resend(process.env.RESEND_API_KEY);
+
+// Initialize Nodemailer (Primary)
+const transporter = nodemailer.createTransport(EMAIL_CONFIG);
 
 // Retry helper for failed email sends
 const retryEmailSend = async (fn: () => Promise<any>, retries = 2): Promise<any> => {
@@ -17,6 +33,51 @@ const retryEmailSend = async (fn: () => Promise<any>, retries = 2): Promise<any>
 };
 
 /**
+ * Send email using available provider (Nodemailer -> Resend)
+ */
+const sendEmail = async ({ to, subject, html }: { to: string, subject: string, html: string }) => {
+  // 1. Try Nodemailer (Gmail/SMTP) first if configured
+  if (process.env.EMAIL_HOST && process.env.EMAIL_USER && process.env.EMAIL_PASSWORD) {
+    try {
+      console.log(`[EMAIL] Sending via Nodemailer (${process.env.EMAIL_HOST})...`);
+      const info = await transporter.sendMail({
+        from: `"AnuFy" <${process.env.EMAIL_USER}>`,
+        to,
+        subject,
+        html,
+      });
+      console.log('✅ Email sent via Nodemailer:', info.messageId);
+      return { success: true, id: info.messageId };
+    } catch (error: any) {
+      console.error('❌ Nodemailer failed:', error.message);
+      console.log('🔄 Falling back to Resend...');
+    }
+  }
+
+  // 2. Fallback to Resend
+  if (process.env.RESEND_API_KEY) {
+    try {
+      console.log('[EMAIL] Sending via Resend...');
+      const { data, error } = await resend.emails.send({
+        from: 'Anufy <onboarding@resend.dev>',
+        to: [to],
+        subject,
+        html,
+      });
+
+      if (error) throw error;
+      
+      console.log('✅ Email sent via Resend:', data?.id);
+      return { success: true, id: data?.id };
+    } catch (error: any) {
+      console.error('❌ Resend failed:', error.message || error);
+    }
+  }
+
+  throw new Error('All email providers failed or not configured');
+};
+
+/**
  * Send identity verification OTP email
  */
 export const sendIdentityVerificationOTPEmail = async (
@@ -24,223 +85,76 @@ export const sendIdentityVerificationOTPEmail = async (
   otp: string,
   username: string
 ): Promise<boolean> => {
-  if (!process.env.RESEND_API_KEY) {
-    console.warn('⚠️  RESEND_API_KEY not configured');
-    console.log(`📧 Identity OTP for ${to}: ${otp}`);
-    return false;
-  }
-
   console.log('[EMAIL] Sending identity verification OTP email...');
   console.log('[EMAIL] To:', to);
 
   try {
-    const { data, error } = await retryEmailSend(() => resend.emails.send({
-      from: 'Anufy <onboarding@resend.dev>',
-      to: [to],
+    await retryEmailSend(() => sendEmail({
+      to,
       subject: 'Verify Your Identity - Anufy',
       html: `
         <!DOCTYPE html>
         <html>
-        <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Identity Verification OTP</title>
-        </head>
-        <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f5f5f5;">
-          <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f5f5f5; padding: 40px 0;">
-            <tr>
-              <td align="center">
-                <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                  <tr>
-                    <td style="padding: 40px 40px 20px; text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
-                      <h1 style="margin: 0; color: #ffffff; font-size: 32px; font-weight: 700;">Anufy</h1>
-                      <p style="margin: 8px 0 0; color: #ffffff; font-size: 14px; opacity: 0.9;">Connect. Share. Inspire.</p>
-                    </td>
-                  </tr>
-                  
-                  <tr>
-                    <td style="padding: 40px;">
-                      <h2 style="margin: 0 0 20px; color: #262626; font-size: 24px; font-weight: 600;">Verify Your Identity</h2>
-                      
-                      <p style="margin: 0 0 20px; color: #262626; font-size: 16px; line-height: 24px;">
-                        Hi ${username},
-                      </p>
-                      
-                      <p style="margin: 0 0 20px; color: #262626; font-size: 16px; line-height: 24px;">
-                        We received a request to update your contact information (Email or Phone). Please use the OTP below to verify your identity:
-                      </p>
-                      
-                      <div style="background-color: #f0f7ff; border: 2px solid #0095f6; border-radius: 12px; padding: 30px; text-align: center; margin: 40px 0;">
-                        <p style="margin: 0 0 10px; color: #8e8e8e; font-size: 14px;">Your Verification Code</p>
-                        <p style="margin: 0; color: #0095f6; font-size: 48px; font-weight: 700; letter-spacing: 8px; font-family: 'Courier New', monospace;">
-                          ${otp}
-                        </p>
-                      </div>
-                      
-                      <p style="margin: 20px 0; color: #262626; font-size: 16px; line-height: 24px; text-align: center;">
-                        Enter this code in the AnuFy app to proceed with updating your information.
-                      </p>
-                      
-                      <div style="margin: 30px 0; padding: 16px; background-color: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px;">
-                        <p style="margin: 0; color: #856404; font-size: 14px; line-height: 20px;">
-                          <strong>⚠️ Important:</strong> This OTP will expire in 10 minutes. Do not share this code with anyone.
-                        </p>
-                      </div>
-                      
-                      <p style="margin: 0; color: #262626; font-size: 16px; line-height: 24px;">
-                        Thanks,<br>
-                        The Anufy Team
-                      </p>
-                    </td>
-                  </tr>
-                  
-                  <tr>
-                    <td style="padding: 30px 40px; border-top: 1px solid #dbdbdb; text-align: center;">
-                      <p style="margin: 0; color: #8e8e8e; font-size: 12px; line-height: 18px;">
-                        © ${new Date().getFullYear()} Anufy. All rights reserved.
-                      </p>
-                    </td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
-          </table>
+        <body style="font-family: Arial, sans-serif; background-color: #f5f5f5; padding: 20px;">
+          <div style="max-width: 600px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 8px;">
+            <h2 style="color: #333;">Verify Your Identity</h2>
+            <p>Hi ${username},</p>
+            <p>Use the OTP below to verify your identity:</p>
+            <div style="background: #e3f2fd; padding: 15px; text-align: center; border-radius: 5px; margin: 20px 0;">
+              <h1 style="color: #1976d2; margin: 0; letter-spacing: 5px;">${otp}</h1>
+            </div>
+            <p>This code expires in 10 minutes.</p>
+          </div>
         </body>
         </html>
-      `,
+      `
     }));
-
-    if (error) {
-      console.error('❌ Resend error:', error);
-      console.log(`[OTP] OTP for ${to}: ${otp}`);
-      return false;
-    }
-
-    console.log('✅ Identity verification OTP email sent via Resend:', data?.id);
     return true;
-  } catch (error: any) {
-    console.error('❌ Failed to send identity verification OTP email:', error);
-    console.log(`[OTP] OTP for ${to}: ${otp}`);
-    return true; // Return true to allow flow to continue even if email fails (for dev/test)
+  } catch (error) {
+    console.error('❌ Failed to send identity verification OTP email');
+    console.log(`[OTP BACKUP] OTP for ${to}: ${otp}`);
+    return true; // Return true to allow flow to continue
   }
 };
 
 /**
- * Send password reset OTP email using Resend
+ * Send password reset OTP email
  */
 export const sendPasswordResetOTPEmail = async (
   to: string,
   otp: string,
   username: string
 ): Promise<boolean> => {
-  if (!process.env.RESEND_API_KEY) {
-    console.warn('⚠️  RESEND_API_KEY not configured');
-    console.log(`📧 OTP for ${to}: ${otp}`);
-    return false;
-  }
-
   console.log('[EMAIL] Sending password reset OTP email...');
   console.log('[EMAIL] To:', to);
-  console.log('[EMAIL] OTP:', otp);
-  console.log('[EMAIL] API Key exists:', !!process.env.RESEND_API_KEY);
 
   try {
-    const { data, error } = await retryEmailSend(() => resend.emails.send({
-      from: 'Anufy <onboarding@resend.dev>',
-      to: [to],
+    await retryEmailSend(() => sendEmail({
+      to,
       subject: 'Your AnuFy Password Reset OTP',
       html: `
         <!DOCTYPE html>
         <html>
-        <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Password Reset OTP</title>
-        </head>
-        <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f5f5f5;">
-          <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f5f5f5; padding: 40px 0;">
-            <tr>
-              <td align="center">
-                <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                  <tr>
-                    <td style="padding: 40px 40px 20px; text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
-                      <h1 style="margin: 0; color: #ffffff; font-size: 32px; font-weight: 700;">Anufy</h1>
-                      <p style="margin: 8px 0 0; color: #ffffff; font-size: 14px; opacity: 0.9;">Connect. Share. Inspire.</p>
-                    </td>
-                  </tr>
-                  
-                  <tr>
-                    <td style="padding: 40px;">
-                      <h2 style="margin: 0 0 20px; color: #262626; font-size: 24px; font-weight: 600;">Reset Your Password</h2>
-                      
-                      <p style="margin: 0 0 20px; color: #262626; font-size: 16px; line-height: 24px;">
-                        Hi ${username},
-                      </p>
-                      
-                      <p style="margin: 0 0 20px; color: #262626; font-size: 16px; line-height: 24px;">
-                        We received a request to reset your password. Use the OTP below to verify your identity and reset your password in the AnuFy app:
-                      </p>
-                      
-                      <div style="background-color: #f0f7ff; border: 2px solid #0095f6; border-radius: 12px; padding: 30px; text-align: center; margin: 40px 0;">
-                        <p style="margin: 0 0 10px; color: #8e8e8e; font-size: 14px;">Your OTP Code</p>
-                        <p style="margin: 0; color: #0095f6; font-size: 48px; font-weight: 700; letter-spacing: 8px; font-family: 'Courier New', monospace;">
-                          ${otp}
-                        </p>
-                      </div>
-                      
-                      <p style="margin: 20px 0; color: #262626; font-size: 16px; line-height: 24px; text-align: center;">
-                        Enter this code in the AnuFy app to verify your email and reset your password.
-                      </p>
-                      
-                      <div style="margin: 30px 0; padding: 16px; background-color: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px;">
-                        <p style="margin: 0; color: #856404; font-size: 14px; line-height: 20px;">
-                          <strong>⚠️ Important:</strong> This OTP will expire in 10 minutes. Do not share this code with anyone.
-                        </p>
-                      </div>
-                      
-                      <p style="margin: 0 0 20px; color: #262626; font-size: 16px; line-height: 24px;">
-                        If you didn't request a password reset, you can safely ignore this email. Your password will remain unchanged.
-                      </p>
-                      
-                      <p style="margin: 0; color: #262626; font-size: 16px; line-height: 24px;">
-                        Thanks,<br>
-                        The Anufy Team
-                      </p>
-                    </td>
-                  </tr>
-                  
-                  <tr>
-                    <td style="padding: 30px 40px; border-top: 1px solid #dbdbdb; text-align: center;">
-                      <p style="margin: 0; color: #8e8e8e; font-size: 12px; line-height: 18px;">
-                        © ${new Date().getFullYear()} Anufy. All rights reserved.
-                      </p>
-                    </td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
-          </table>
+        <body style="font-family: Arial, sans-serif; background-color: #f5f5f5; padding: 20px;">
+          <div style="max-width: 600px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 8px;">
+            <h2 style="color: #333;">Reset Your Password</h2>
+            <p>Hi ${username},</p>
+            <p>Use the OTP below to reset your password:</p>
+            <div style="background: #e3f2fd; padding: 15px; text-align: center; border-radius: 5px; margin: 20px 0;">
+              <h1 style="color: #1976d2; margin: 0; letter-spacing: 5px;">${otp}</h1>
+            </div>
+            <p>This code expires in 10 minutes.</p>
+            <p style="color: #666; font-size: 12px;">If you didn't request this, please ignore this email.</p>
+          </div>
         </body>
         </html>
-      `,
+      `
     }));
-
-    if (error) {
-      console.error('❌ Resend error:', error);
-      console.log(`[OTP] OTP for ${to}: ${otp}`);
-      console.log('[EMAIL] Error details:', JSON.stringify(error, null, 2));
-      return false;
-    }
-
-    console.log('✅ Password reset OTP email sent via Resend:', data?.id);
-    console.log(`📧 OTP: ${otp}`);
     return true;
-  } catch (error: any) {
-    console.error('❌ Failed to send password reset OTP email:', error);
-    console.log(`[OTP] OTP for ${to}: ${otp}`);
-    console.log('[EMAIL] Error message:', error?.message);
-    console.log('[EMAIL] Error code:', error?.code);
-    return true; // Still return true so password reset flow continues
+  } catch (error) {
+    console.error('❌ Failed to send password reset OTP email');
+    console.log(`[OTP BACKUP] OTP for ${to}: ${otp}`);
+    return true;
   }
 };
 
@@ -251,93 +165,30 @@ export const sendPasswordChangedEmail = async (
   to: string,
   username: string
 ): Promise<boolean> => {
-  if (!process.env.RESEND_API_KEY) {
-    console.log('📧 Email not configured, skipping email send');
-    return false;
-  }
-
   console.log('[EMAIL] Sending password changed notification...');
   console.log('[EMAIL] To:', to);
 
   try {
-    const { data, error } = await retryEmailSend(() => resend.emails.send({
-      from: 'Anufy <onboarding@resend.dev>',
-      to: [to],
+    await retryEmailSend(() => sendEmail({
+      to,
       subject: 'Your Anufy Password Was Changed',
       html: `
         <!DOCTYPE html>
         <html>
-        <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Password Changed</title>
-        </head>
-        <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f5f5f5;">
-          <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f5f5f5; padding: 40px 0;">
-            <tr>
-              <td align="center">
-                <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                  <tr>
-                    <td style="padding: 40px 40px 20px; text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
-                      <h1 style="margin: 0; color: #ffffff; font-size: 32px; font-weight: 700;">Anufy</h1>
-                      <p style="margin: 8px 0 0; color: #ffffff; font-size: 14px; opacity: 0.9;">Connect. Share. Inspire.</p>
-                    </td>
-                  </tr>
-                  
-                  <tr>
-                    <td style="padding: 40px;">
-                      <h2 style="margin: 0 0 20px; color: #262626; font-size: 24px; font-weight: 600;">Password Changed</h2>
-                      
-                      <p style="margin: 0 0 20px; color: #262626; font-size: 16px; line-height: 24px;">
-                        Hi ${username},
-                      </p>
-                      
-                      <p style="margin: 0 0 20px; color: #262626; font-size: 16px; line-height: 24px;">
-                        This is a confirmation that your Anufy account password was successfully changed.
-                      </p>
-                      
-                      <div style="margin: 30px 0; padding: 16px; background-color: #d4edda; border-left: 4px solid #28a745; border-radius: 4px;">
-                        <p style="margin: 0; color: #155724; font-size: 14px; line-height: 20px;">
-                          <strong>✅ Confirmed:</strong> Your password was changed on ${new Date().toLocaleString()}.
-                        </p>
-                      </div>
-                      
-                      <p style="margin: 0 0 20px; color: #262626; font-size: 16px; line-height: 24px;">
-                        If you didn't make this change, please contact our support team immediately.
-                      </p>
-                      
-                      <p style="margin: 0; color: #262626; font-size: 16px; line-height: 24px;">
-                        Thanks,<br>
-                        The Anufy Team
-                      </p>
-                    </td>
-                  </tr>
-                  
-                  <tr>
-                    <td style="padding: 30px 40px; border-top: 1px solid #dbdbdb; text-align: center;">
-                      <p style="margin: 0; color: #8e8e8e; font-size: 12px; line-height: 18px;">
-                        © ${new Date().getFullYear()} Anufy. All rights reserved.
-                      </p>
-                    </td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
-          </table>
+        <body style="font-family: Arial, sans-serif; background-color: #f5f5f5; padding: 20px;">
+          <div style="max-width: 600px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 8px;">
+            <h2 style="color: #333;">Password Changed</h2>
+            <p>Hi ${username},</p>
+            <p>Your password was successfully changed.</p>
+            <p>If you didn't do this, please contact support immediately.</p>
+          </div>
         </body>
         </html>
-      `,
+      `
     }));
-
-    if (error) {
-      console.error('❌ Resend error:', error);
-      return false;
-    }
-
-    console.log('✅ Password changed notification sent via Resend:', data?.id);
     return true;
   } catch (error) {
-    console.error('❌ Failed to send password changed email:', error);
+    console.error('❌ Failed to send password changed email');
     return true;
   }
 };

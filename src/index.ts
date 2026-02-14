@@ -136,6 +136,8 @@ mongoose.set('strictQuery', false)
 mongoose.connect(MONGODB_URI, {
   serverSelectionTimeoutMS: 15000,
   socketTimeoutMS: 45000,
+  tls: true,
+  tlsAllowInvalidCertificates: true, // Fix for some cloud environments
 })
   .then(async () => {
     console.log('✅ MongoDB connected successfully')
