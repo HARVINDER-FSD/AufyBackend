@@ -27,7 +27,10 @@ export const loginSchema = Joi.object({
 export const registerSchema = Joi.object({
   email: emailSchema,
   password: passwordSchema,
-  username: Joi.string().alphanum().min(3).max(30).required(),
+  // Allow underscores and dots in username, not just alphanum
+  username: Joi.string().pattern(/^[a-zA-Z0-9_.]+$/).min(3).max(30).required().messages({
+    'string.pattern.base': 'Username can only contain letters, numbers, underscores, and periods',
+  }),
   full_name: Joi.string().min(2).max(50).required(),
   dob: Joi.date().iso().optional(),
 });
