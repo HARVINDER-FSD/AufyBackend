@@ -33,35 +33,16 @@ const retryEmailSend = async (fn: () => Promise<any>, retries = 1): Promise<any>
 };
 
 /**
- * Send email using Nodemailer (Gmail/SMTP) - Primary
- * Falls back to Resend if Nodemailer fails
+ * Send email using Resend (Primary - No IPv6 issues)
+ * Falls back to Nodemailer if needed
  */
 const sendEmail = async ({ to, subject, html }: { to: string, subject: string, html: string }) => {
-  // 1. Try Nodemailer (Gmail/SMTP) first
-  if (process.env.EMAIL_HOST && process.env.EMAIL_USER && process.env.EMAIL_PASSWORD) {
-    try {
-      console.log(`[EMAIL] Sending via Nodemailer (${process.env.EMAIL_HOST})...`);
-      console.log(`[EMAIL] To: ${to}, Subject: ${subject}`);
-      
-      const info = await transporter.sendMail({
-        from: `"AnuFy" <${process.env.EMAIL_USER}>`,
-        to,
-        subject,
-        html,
-      });
-      
-      console.log('✅ Email sent via Nodemailer:', info.messageId);
-      return { success: true, id: info.messageId };
-    } catch (error: any) {
-      console.error('❌ Nodemailer failed:', error.message);
-      console.log('🔄 Falling back to Resend...');
-    }
-  }
-
-  // 2. Fallback to Resend
+  // 1. Try Resend first (no IPv6 issues, works reliably)
   if (process.env.RESEND_API_KEY) {
     try {
       console.log('[EMAIL] Sending via Resend...');
+      console.log(`[EMAIL] To: ${to}, Subject: ${subject}`);
+      
       const { data, error } = await resend.emails.send({
         from: 'AnuFy <onboarding@resend.dev>',
         to: [to],
@@ -75,6 +56,24 @@ const sendEmail = async ({ to, subject, html }: { to: string, subject: string, h
       return { success: true, id: data?.id };
     } catch (error: any) {
       console.error('❌ Resend failed:', error.message || error);
+      console.log('🔄 Falling back to Nodemailer...');
+    }
+  }
+
+  // 2. Fallback to Nodemailer (Gmail/SMTP)
+  if (process.env.EMAIL_HOST && process.env.EMAIL_USER && process.env.EMAIL_PASSWORD) {
+    try {
+      console.log(`[EMAIL] Sending via Nodemailer (${process.env.EMAIL_HOST})...`);
+      const info = await transporter.sendMail({
+        from: `"AnuFy" <${process.env.EMAIL_USER}>`,
+        to,
+        subject,
+        html,
+      });
+      console.log('✅ Email sent via Nodemailer:', info.messageId);
+      return { success: true, id: info.messageId };
+    } catch (error: any) {
+      console.error('❌ Nodemailer failed:', error.message);
     }
   }
 
