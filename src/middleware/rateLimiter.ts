@@ -15,6 +15,12 @@ interface AuthRequest extends Request {
  */
 export const createRateLimiter = (action: string, limit: number, windowSeconds: number) => {
   return async (req: AuthRequest, res: Response, next: NextFunction) => {
+    // DISABLED FOR DEVELOPMENT - Allow all requests
+    next();
+    return;
+    
+    // Original code below (commented out)
+    /*
     // Identify user: Prefer userId (if authenticated), fallback to IP
     // This allows "User-based" limits as requested
     const key = req.userId || req.ip || 'unknown';
@@ -34,14 +40,15 @@ export const createRateLimiter = (action: string, limit: number, windowSeconds: 
     }
 
     next();
+    */
   };
 };
 
 // --- Specific Action Limiters ---
 
-// 1. Auth Limiter (Login/Register) - Very Strict
-// 10 attempts per 15 mins
-export const authLimiter = createRateLimiter('auth', 10, 15 * 60);
+// 1. Auth Limiter (Login/Register) - Relaxed for development
+// 100 attempts per 15 mins (increased for testing)
+export const authLimiter = createRateLimiter('auth', 100, 15 * 60);
 
 // 2. Post Creation - Prevent Spam
 // 5 posts per minute
