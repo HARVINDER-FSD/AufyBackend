@@ -20,32 +20,36 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 const transporter = nodemailer.createTransport(EMAIL_CONFIG);
 
 // Retry helper for failed email sends
-const retryEmailSend = async (fn: () => Promise<any>, retries = 2): Promise<any> => {
+const retryEmailSend = async (fn: () => Promise<any>, retries = 1): Promise<any> => {
   for (let i = 0; i <= retries; i++) {
     try {
       return await fn();
     } catch (error) {
       if (i === retries) throw error;
       console.log(`⚠️  Email send attempt ${i + 1} failed, retrying...`);
-      await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1))); // Exponential backoff
+      await new Promise(resolve => setTimeout(resolve, 500)); // Reduced delay
     }
   }
 };
 
 /**
- * Send email using available provider (Nodemailer -> Resend)
+ * Send email using Nodemailer (Gmail/SMTP) - Primary
+ * Falls back to Resend if Nodemailer fails
  */
 const sendEmail = async ({ to, subject, html }: { to: string, subject: string, html: string }) => {
-  // 1. Try Nodemailer (Gmail/SMTP) first if configured
+  // 1. Try Nodemailer (Gmail/SMTP) first
   if (process.env.EMAIL_HOST && process.env.EMAIL_USER && process.env.EMAIL_PASSWORD) {
     try {
       console.log(`[EMAIL] Sending via Nodemailer (${process.env.EMAIL_HOST})...`);
+      console.log(`[EMAIL] To: ${to}, Subject: ${subject}`);
+      
       const info = await transporter.sendMail({
         from: `"AnuFy" <${process.env.EMAIL_USER}>`,
         to,
         subject,
         html,
       });
+      
       console.log('✅ Email sent via Nodemailer:', info.messageId);
       return { success: true, id: info.messageId };
     } catch (error: any) {
@@ -59,7 +63,7 @@ const sendEmail = async ({ to, subject, html }: { to: string, subject: string, h
     try {
       console.log('[EMAIL] Sending via Resend...');
       const { data, error } = await resend.emails.send({
-        from: 'Anufy <onboarding@resend.dev>',
+        from: 'AnuFy <onboarding@resend.dev>',
         to: [to],
         subject,
         html,

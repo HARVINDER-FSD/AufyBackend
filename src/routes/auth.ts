@@ -366,20 +366,18 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
     console.log(`[FORGOT PASSWORD] OTP generated for ${email}: ${otp}`);
     console.log(`[FORGOT PASSWORD] User: ${user.username}, Full Name: ${user.full_name}`);
 
-    // Send OTP email asynchronously (don't wait for it)
+    // Send OTP email (wait for it to complete)
     try {
       const { sendPasswordResetOTPEmail } = await import('../services/email-resend');
       console.log('[FORGOT PASSWORD] Calling sendPasswordResetOTPEmail...');
-      sendPasswordResetOTPEmail(email, otp, user.username || user.full_name).then(() => {
-        console.log('[FORGOT PASSWORD] Email sent successfully');
-      }).catch(err => {
-        console.error('[FORGOT PASSWORD] Email send error:', err);
-      });
+      await sendPasswordResetOTPEmail(email, otp, user.username || user.full_name);
+      console.log('[FORGOT PASSWORD] Email sent successfully');
     } catch (importErr) {
-      console.error('[FORGOT PASSWORD] Import error:', importErr);
+      console.error('[FORGOT PASSWORD] Email send error:', importErr);
+      // Continue anyway - OTP is stored in DB
     }
 
-    // Respond immediately without waiting for email
+    // Respond after email is sent
     res.json({
       message: 'If an account exists with this email, you will receive an OTP.',
       // Dev helper: return OTP in response if not in production (since email might fail on free tier)
@@ -603,6 +601,8 @@ router.post('/verify-otp', async (req: Request, res: Response) => {
   try {
     const { email, otp } = req.body;
 
+    console.log('[OTP VERIFY] Attempting to verify:', { email, otp, otpType: typeof otp });
+
     if (!email || !otp) {
       return res.status(400).json({ message: 'Email and OTP are required' });
     }
@@ -616,9 +616,28 @@ router.post('/verify-otp', async (req: Request, res: Response) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
+    console.log('[OTP VERIFY] User found:', { 
+      email: user.email, 
+      storedOTP: user.resetPasswordOTP,
+      storedOTPType: typeof user.resetPasswordOTP,
+      otpExpires: user.resetPasswordOTPExpires,
+      now: new Date(),
+      isExpired: user.resetPasswordOTPExpires ? new Date() > user.resetPasswordOTPExpires : 'no expiry'
+    });
+
+    // Convert both to strings for comparison
+    const storedOTP = String(user.resetPasswordOTP).trim();
+    const providedOTP = String(otp).trim();
+
+    console.log('[OTP VERIFY] Comparison:', { storedOTP, providedOTP, match: storedOTP === providedOTP });
+
     // Check if OTP matches and is not expired
-    if (user.resetPasswordOTP !== otp || !user.resetPasswordOTPExpires || new Date() > user.resetPasswordOTPExpires) {
-      return res.status(400).json({ message: 'Invalid or expired OTP' });
+    if (storedOTP !== providedOTP) {
+      return res.status(400).json({ message: 'Invalid OTP' });
+    }
+
+    if (!user.resetPasswordOTPExpires || new Date() > user.resetPasswordOTPExpires) {
+      return res.status(400).json({ message: 'OTP has expired' });
     }
 
     console.log(`[OTP VERIFY] OTP verified for user: ${email}`);
@@ -662,8 +681,13 @@ router.post('/reset-password-otp', async (req: Request, res: Response) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Verify OTP
-    if (user.resetPasswordOTP !== otp || !user.resetPasswordOTPExpires || new Date() > user.resetPasswordOTPExpires) {
+    // Verify OTP - Convert both to strings for comparison
+    const storedOTP = String(user.resetPasswordOTP).trim();
+    const providedOTP = String(otp).trim();
+
+    console.log('[RESET PASSWORD OTP] OTP Comparison:', { storedOTP, providedOTP, match: storedOTP === providedOTP });
+
+    if (storedOTP !== providedOTP || !user.resetPasswordOTPExpires || new Date() > user.resetPasswordOTPExpires) {
       return res.status(400).json({ message: 'Invalid or expired OTP' });
     }
 
@@ -782,14 +806,14 @@ router.post('/send-verification-otp', authenticateToken, async (req: any, res: R
 
     console.log(`[IDENTITY VERIFY] OTP generated for ${user.email}: ${otp}`);
 
-    // Send OTP email
+    // Send OTP email (wait for it to complete)
     try {
       const { sendIdentityVerificationOTPEmail } = await import('../services/email-resend');
-      sendIdentityVerificationOTPEmail(user.email, otp, user.username || user.full_name).catch(err => {
-        console.error('[IDENTITY VERIFY] Email send error:', err);
-      });
+      await sendIdentityVerificationOTPEmail(user.email, otp, user.username || user.full_name);
+      console.log('[IDENTITY VERIFY] Email sent successfully');
     } catch (importErr) {
-      console.error('[IDENTITY VERIFY] Import error:', importErr);
+      console.error('[IDENTITY VERIFY] Email send error:', importErr);
+      // Continue anyway - OTP is stored in DB
     }
 
     // If user has phone, we would send SMS here
