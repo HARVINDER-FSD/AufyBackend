@@ -188,6 +188,10 @@ mongoose.connect(MONGODB_URI, {
   })
   .catch((error) => {
     console.error('❌ MongoDB connection error:', error.message)
+    if (error.message.includes('timed out') || error.message.includes('selection')) {
+      console.error('💡 TIP: Check your MongoDB Atlas Network Access whitelist. Your current IP (or Render/Vercel IP) might be blocked.')
+      console.error('👉 Action: Go to Atlas > Network Access > Add IP Address > Allow Access From Anywhere (0.0.0.0/0)')
+    }
     console.log('⚠️  Server will continue but database operations may fail')
   })
 

@@ -177,11 +177,17 @@ export const cacheGet = async (key: string) => {
          return memoryCache.get(key);
     }
 
-    const data = await redis.get(key);
-    // Upstash might return object if it was stored as JSON? No, we stringify.
-    // ioredis returns string or null. Upstash returns string or null or number etc.
-    // We assume string for JSON.parse
-    return data ? (typeof data === 'string' ? JSON.parse(data) : data) : null;
+    try {
+      const data = await redis.get(key);
+      return data ? (typeof data === 'string' ? JSON.parse(data) : data) : null;
+    } catch (err: any) {
+      if (err.message && err.message.includes('max requests limit exceeded')) {
+        console.warn('⚠️  Redis quota exceeded, switching to In-Memory Cache');
+        useMemoryFallback = true;
+        return memoryCache.get(key);
+      }
+      throw err;
+    }
   } catch (error) {
     // console.warn('Cache get error:', error);
     return null;

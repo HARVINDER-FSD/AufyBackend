@@ -6,10 +6,11 @@ const BACKEND_URL = 'https://aufybackend.onrender.com';
 async function testRegister() {
   console.log('🧪 Testing Registration API...\n');
   
+  const suffix = Date.now().toString().slice(-6);
   const testData = {
-    username: 'testuser123',
+    username: `testuser_${suffix}`,
     full_name: 'Test User',
-    email: 'testuser@example.com',
+    email: `testuser_${suffix}@example.com`,
     password: 'TestPassword123!',
     dob: '1995-05-15'
   };
