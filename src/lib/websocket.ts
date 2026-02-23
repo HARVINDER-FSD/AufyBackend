@@ -60,11 +60,11 @@ export class WebSocketService {
 
         const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
         socket.data.userId = decoded.userId;
-        
+
         // Cache user info in socket for fast message composition
         const user = await UserModel.findById(decoded.userId).select('username full_name avatar_url').lean();
         if (user) {
-            socket.data.user = user;
+          socket.data.user = user;
         }
 
         console.log(`✅ User ${decoded.userId} authenticated`);
@@ -84,11 +84,19 @@ export class WebSocketService {
       activeUsers.set(userId, socket.id);
       userSockets.set(userId, socket);
 
-      // Broadcast user online status
-      socket.broadcast.emit('user:online', { userId });
-
       // Join user's personal room
       socket.join(`user:${userId}`);
+
+      // 👑 ADMIN: Join administrative room for real-time system monitoring
+      if (socket.data.user?.role === 'admin') {
+        socket.join('admin');
+        console.log(`👑 Admin ${userId} joined the Command Center`);
+        socket.emit('admin:ready', { message: 'Command Center established' });
+      }
+
+      // Broadcast user online status to everyone and specialized room for admins
+      socket.broadcast.emit('user:online', { userId });
+      this.io?.to('admin').emit('system:user_status', { userId, status: 'online', timestamp: new Date() });
 
       // Handle joining chat rooms
       socket.on('chat:join', async (data: { chatId: string }) => {
@@ -256,6 +264,15 @@ export class WebSocketService {
   public sendNotificationToUser(userId: string, notification: any) {
     if (this.io) {
       this.io.to(`user:${userId}`).emit('notification:new', notification);
+    }
+  }
+
+  public notifyAdmin(event: string, data: any) {
+    if (this.io) {
+      this.io.to('admin').emit(`admin:${event}`, {
+        ...data,
+        timestamp: new Date()
+      });
     }
   }
 }

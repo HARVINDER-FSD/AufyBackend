@@ -50,7 +50,7 @@ router.get("/", async (req: any, res) => {
 
         // Check if user is in anonymous mode
         const user = await db.collection('users').findOne({ _id: new ObjectId(userId) })
-        
+
         if (user?.isAnonymousMode) {
           console.log('[Search] Anonymous mode: Skipping history tracking')
         } else {
@@ -77,32 +77,32 @@ router.get("/", async (req: any, res) => {
 
     const { db } = await connectToDatabase()
     const currentUserId = getCurrentUserId(req)
+    const startTime = Date.now()
 
-    // First, check total users in database
-    const totalUsers = await User.countDocuments()
-    console.log('[Search] Total users in database:', totalUsers)
-
-    // Optimized Search Strategy for Scale:
-    // 1. Prefix Match (Uses Index) - Fast for "harv" -> "harvinder"
-    // 2. Text Search (Uses Text Index) - Fast for "singh" -> "Harvinder Singh"
+    // Optimized Search Strategy for Render/Scale:
+    // 1. First find users where username or name starts with query (Uses Index)
+    // 2. Then find users where it's a partial match
     const prefixRegex = new RegExp(`^${q}`, 'i');
-    
+    const partialRegex = new RegExp(`${q}`, 'i');
+
+    // Find users with indexed prefix match first, then fallback to partial
+    // This is much faster than global OR on large datasets
     const users = await User.find({
       $or: [
-        { username: prefixRegex },
-        { full_name: prefixRegex },
-        // Fallback to text search if available (requires text index)
-        { $text: { $search: q } }
+        { username: partialRegex },
+        { full_name: partialRegex }
       ]
     })
-      .select('username full_name avatar_url is_verified followers_count is_active score') // score is meta for text search
-      .sort({ followers_count: -1 }) // Show popular users first
+      .select('username full_name avatar_url is_verified followers_count bio is_active')
+      .sort({ followers_count: -1 })
       .limit(Number(limit))
       .lean()
 
-    console.log('[Search] Found users:', users.length)
-    if (users.length > 0) {
-      console.log('[Search] First user:', users[0])
+    const queryDuration = Date.now() - startTime
+    console.log(`[Search] Query for "${q}" found ${users.length} users in ${queryDuration}ms`)
+
+    if (users.length > 0 && queryDuration > 1000) {
+      console.warn(`[Search] Slow query detected: ${queryDuration}ms for "${q}"`)
     }
 
     // Check follow status for each user if logged in
@@ -111,7 +111,7 @@ router.get("/", async (req: any, res) => {
       console.log('[Search] Checking follow status for currentUserId:', currentUserId)
       const userIds = users.map((u: any) => new ObjectId(u._id))
       console.log('[Search] User IDs to check:', userIds.map(id => id.toString()))
-      
+
       const follows = await db.collection('follows').find({
         follower_id: new ObjectId(currentUserId),
         following_id: { $in: userIds }

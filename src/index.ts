@@ -53,6 +53,7 @@ import secretCrushRoutes from './routes/secret-crush'
 import premiumRoutes from './routes/premium'
 import demoRoutes from './routes/demo'
 import aiRoutes from './routes/ai'
+import adminRoutes from './routes/admin'
 import promBundle from 'express-prom-bundle'
 import swaggerUi from 'swagger-ui-express'
 import YAML from 'yamljs'
@@ -146,14 +147,14 @@ mongoose.connect(MONGODB_URI, {
       const db = mongoose.connection.db
       if (db) {
         const createIndexIfNotExists = async (collectionName: string, indexSpec: any, options: any = {}) => {
-           try {
-             await db.collection(collectionName).createIndex(indexSpec, options);
-           } catch (err: any) {
-             // Ignore if index already exists or other non-critical errors
-             if (err.code !== 85) { // 85 is IndexOptionsConflict, might want to log that
-                // console.log(`Index creation note for ${collectionName}:`, err.message);
-             }
-           }
+          try {
+            await db.collection(collectionName).createIndex(indexSpec, options);
+          } catch (err: any) {
+            // Ignore if index already exists or other non-critical errors
+            if (err.code !== 85) { // 85 is IndexOptionsConflict, might want to log that
+              // console.log(`Index creation note for ${collectionName}:`, err.message);
+            }
+          }
         };
 
         // Users
@@ -168,12 +169,12 @@ mongoose.connect(MONGODB_URI, {
         // Follows
         await createIndexIfNotExists('follows', { followerId: 1 });
         await createIndexIfNotExists('follows', { followingId: 1 });
-        
+
         // 🚀 MILLION-USER SCALE INDEXES
         await createIndexIfNotExists('posts', { user_id: 1, created_at: -1 });
         await createIndexIfNotExists('posts', { created_at: -1 });
         await createIndexIfNotExists('likes', { user_id: 1, post_id: 1 }, { unique: true });
-        
+
         // 💬 Chat Performance Indexes
         await createIndexIfNotExists('messages', { conversation_id: 1, created_at: -1 });
         await createIndexIfNotExists('messages', { sender_id: 1, created_at: -1 });
@@ -338,6 +339,7 @@ app.use('/api/demo', demoRoutes)
 app.use('/api/ai', aiRoutes)
 app.use('/api/professional', professionalRoutes)
 app.use('/api/verification', verificationRoutes)
+app.use('/api/admin', adminRoutes)
 
 // Performance Metrics Endpoint (Admin only)
 app.get('/api/metrics', (_req, res) => {

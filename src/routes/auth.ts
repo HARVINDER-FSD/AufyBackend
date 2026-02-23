@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { ObjectId } from 'mongodb'
 import { getDatabase } from '../lib/database'
+import { getWebSocketService } from '../lib/websocket'
 import { authenticateToken } from '../middleware/auth'
 import {
   bruteForceProtection,
@@ -264,6 +265,19 @@ router.post('/register', validate(registerSchema), async (req: Request, res: Res
       createdAt: new Date(),
       updatedAt: new Date()
     })
+
+    // 🚀 Notify Admins in Real-time
+    try {
+      const wsService = getWebSocketService();
+      wsService.notifyAdmin('new_user', {
+        username,
+        full_name: full_name || username,
+        email,
+        userId: result.insertedId.toString()
+      });
+    } catch (wsError) {
+      console.warn('[WS] Failed to notify admins of new user');
+    }
 
     // Generate JWT token (90 days - Instagram-style long session)
     const token = jwt.sign(
@@ -616,8 +630,8 @@ router.post('/verify-otp', async (req: Request, res: Response) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    console.log('[OTP VERIFY] User found:', { 
-      email: user.email, 
+    console.log('[OTP VERIFY] User found:', {
+      email: user.email,
       storedOTP: user.resetPasswordOTP,
       storedOTPType: typeof user.resetPasswordOTP,
       otpExpires: user.resetPasswordOTPExpires,
@@ -643,9 +657,9 @@ router.post('/verify-otp', async (req: Request, res: Response) => {
     console.log(`[OTP VERIFY] OTP verified for user: ${email}`);
 
     // OTP is valid, return success
-    res.json({ 
+    res.json({
       message: 'OTP verified successfully',
-      verified: true 
+      verified: true
     });
 
   } catch (error) {
@@ -730,7 +744,7 @@ router.post('/reset-password-otp', async (req: Request, res: Response) => {
     });
 
     // Return token for auto-login
-    res.json({ 
+    res.json({
       message: 'Password reset successful',
       token: token,
       user: {
@@ -763,23 +777,23 @@ router.post('/send-verification-otp', authenticateToken, async (req: any, res: R
 
     // Check if target email/phone already exists
     if (targetEmail) {
-        const existingUser = await db.collection('users').findOne({ 
-            email: targetEmail, 
-            _id: { $ne: new ObjectId(userId) } 
-        });
-        if (existingUser) {
-            return res.status(400).json({ message: 'Email already exists' });
-        }
+      const existingUser = await db.collection('users').findOne({
+        email: targetEmail,
+        _id: { $ne: new ObjectId(userId) }
+      });
+      if (existingUser) {
+        return res.status(400).json({ message: 'Email already exists' });
+      }
     }
-    
+
     if (targetPhone) {
-        const existingUser = await db.collection('users').findOne({ 
-            phone: targetPhone, 
-            _id: { $ne: new ObjectId(userId) } 
-        });
-        if (existingUser) {
-            return res.status(400).json({ message: 'Phone number already exists' });
-        }
+      const existingUser = await db.collection('users').findOne({
+        phone: targetPhone,
+        _id: { $ne: new ObjectId(userId) }
+      });
+      if (existingUser) {
+        return res.status(400).json({ message: 'Phone number already exists' });
+      }
     }
 
     const user = await db.collection('users').findOne({ _id: new ObjectId(userId) });

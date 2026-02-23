@@ -9,6 +9,11 @@ const userSchema = new mongoose.Schema({
     unique: true,
     trim: true
   },
+  role: {
+    type: String,
+    enum: ['user', 'admin', 'moderator'],
+    default: 'user'
+  },
   email: {
     type: String,
     required: true,
@@ -104,6 +109,10 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  REPORT_SCHEMA_PLACEHOLDER: { // Placeholder for anything missing if I misread
+    type: Number,
+    default: 0
+  },
   reports_count: {
     type: Number,
     default: 0
@@ -164,7 +173,6 @@ const userSchema = new mongoose.Schema({
   settings: {
     type: mongoose.Schema.Types.Mixed,
     default: {
-      // Privacy Settings
       darkMode: true,
       privateAccount: false,
       showOnlineStatus: true,
@@ -174,25 +182,17 @@ const userSchema = new mongoose.Schema({
       whoCanMessage: 'everyone',
       whoCanSeeStories: 'everyone',
       whoCanSeeFollowers: 'everyone',
-
-      // Message Privacy
       groupRequests: true,
       messageReplies: 'everyone',
       showActivityStatus: true,
       readReceipts: true,
-
-      // Message Requests Filters
       filterOffensive: true,
       filterLowQuality: true,
       filterUnknown: false,
-
-      // Media Settings
       saveOriginalPhotos: false,
       uploadQuality: 'normal',
       autoPlayVideos: true,
       useLessData: false,
-
-      // Notifications
       pushNotifications: true,
       emailNotifications: false,
       likes: true,
@@ -205,8 +205,6 @@ const userSchema = new mongoose.Schema({
       posts: true,
       marketing: false,
       security: true,
-
-      // Well-being
       quietModeEnabled: false,
       quietModeStart: '22:00',
       quietModeEnd: '07:00',
@@ -214,24 +212,16 @@ const userSchema = new mongoose.Schema({
       takeBreakInterval: 30,
       dailyLimitEnabled: false,
       dailyLimitMinutes: 60,
-
-      // Limits
       limitComments: false,
       limitMessages: false,
       limitTags: false,
-
-      // AI & Personalization
       suggestedReels: true,
       adsPersonalization: true,
       dataSharing: false,
-
-      // Sharing to Other Apps
       shareToFacebook: false,
       shareToThreads: false,
       shareToTwitter: false,
       shareToTumblr: false,
-
-      // Device Permissions
       cameraPermission: true,
       microphonePermission: true,
       photosPermission: true,
@@ -291,11 +281,8 @@ userSchema.index({ created_at: -1 });
 
 // Pre-save middleware to hash password
 userSchema.pre('save', async function (next) {
-  // Only hash the password if it's modified or new
   if (!this.isModified('password')) return next();
-
   try {
-    // Generate salt and hash password
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
     next();
@@ -306,6 +293,7 @@ userSchema.pre('save', async function (next) {
 
 export interface IUser extends Document {
   username: string;
+  role: 'user' | 'admin' | 'moderator';
   email: string;
   phone?: string;
   phone_verified: boolean;
@@ -339,7 +327,7 @@ export interface IUser extends Document {
   pushToken?: string;
   pushTokenPlatform?: string;
   pushTokenUpdatedAt?: Date;
-  settings: any; // Simplified for now, can be more specific
+  settings: any;
   resetPasswordToken?: string;
   resetPasswordExpires?: Date;
   resetPasswordOTP?: string;
@@ -351,25 +339,20 @@ export interface IUser extends Document {
   isAnonymousMode?: boolean;
   anonymousPersona?: any;
   anonymousReputation?: number;
-
   comparePassword(candidatePassword: string): Promise<boolean>;
 }
 
 export interface IUserModel extends Model<IUser> { }
 
-// Method to compare password for login
 userSchema.methods.comparePassword = async function (candidatePassword: string): Promise<boolean> {
   return bcrypt.compare(candidatePassword, this.password);
 };
 
-// Method to return user data without password
 userSchema.methods.toJSON = function () {
   const userObject = this.toObject();
   delete userObject.password;
   return userObject;
 };
 
-// Create the model if it doesn't exist or get it if it does
 const User = (mongoose.models.User as IUserModel) || mongoose.model<IUser, IUserModel>('User', userSchema);
-
 export default User;

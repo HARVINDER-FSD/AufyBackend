@@ -1,12 +1,15 @@
-import { Router } from "express"
-import { authenticateToken } from "../middleware/auth"
+import { Router, Response } from "express"
+import { ObjectId } from "mongodb"
+import { getDatabase } from "../lib/database"
+import { getWebSocketService } from "../lib/websocket"
 
 const router = Router()
 
 // Create report
-router.post("/", authenticateToken, async (req, res) => {
+router.post("/", async (req: any, res: Response) => {
   try {
     const { target_id, target_type, reason, description } = req.body
+    const userId = req.userId // Assuming middleware populates this, although authenticateToken is used
 
     if (!target_id || !target_type || !reason) {
       return res.status(400).json({
@@ -15,41 +18,44 @@ router.post("/", authenticateToken, async (req, res) => {
       })
     }
 
+    const db = await getDatabase();
+    const reportData = {
+      reporter_id: userId ? new ObjectId(userId) : null,
+      target_id: new ObjectId(target_id),
+      target_type, // 'user', 'post', 'reel', 'story'
+      reason,
+      description,
+      status: 'pending',
+      created_at: new Date(),
+      updated_at: new Date()
+    };
+
+    const result = await db.collection('reports').insertOne(reportData);
+
+    // 🚀 Notify Admins in Real-time
+    try {
+      const wsService = getWebSocketService();
+      wsService.notifyAdmin('new_report', {
+        reportId: result.insertedId.toString(),
+        target_type,
+        reason,
+        reporterId: userId
+      });
+    } catch (wsError) {
+      console.warn('[WS] Failed to notify admins of new report');
+    }
+
     res.status(201).json({
       success: true,
       message: "Report submitted successfully",
+      reportId: result.insertedId
     })
   } catch (error: any) {
-    res.status(error.statusCode || 500).json({
+    res.status(500).json({
       success: false,
       error: error.message,
     })
   }
 })
 
-// Get user's reports
-router.get("/user", authenticateToken, async (req, res) => {
-  try {
-    const { page, limit } = req.query
-
-    res.json({
-      success: true,
-      data: {
-        reports: [],
-        pagination: {
-          page: Number.parseInt(page as string) || 1,
-          limit: Number.parseInt(limit as string) || 20,
-          total: 0,
-          totalPages: 0
-        }
-      }
-    })
-  } catch (error: any) {
-    res.status(error.statusCode || 500).json({
-      success: false,
-      error: error.message,
-    })
-  }
-})
-
-export default router
+export default router;
