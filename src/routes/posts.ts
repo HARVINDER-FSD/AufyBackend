@@ -103,7 +103,6 @@ router.post("/", authenticateToken, validateAgeAndContent, validateBody(createPo
       postId: post.id // Ensure we pass the ID
     });
 
-
     res.status(201).json({
       success: true,
       data: { post },
@@ -174,75 +173,75 @@ router.delete("/:postId", authenticateToken, async (req, res) => {
   }
 })
 
-    // Like post (toggle behavior with reactions)
-    router.post("/:postId/like", authenticateToken, likeLimiter, validateBody(postReactionSchema), async (req, res) => {
-      try {
-        const { postId } = req.params
-        const { reaction, is_anonymous } = req.body // Get reaction from request body
-        const userId = req.userId!
-    
-        let userObjectId: ObjectId
-        let postObjectId: ObjectId
-        try {
-          userObjectId = new ObjectId(userId)
-          postObjectId = new ObjectId(postId)
-        } catch (err: any) {
-          console.error('[LIKE] ObjectId conversion error:', err)
-          return res.status(400).json({
-            success: false,
-            error: 'Invalid ID format'
-          })
-        }
-    
-        // 🚀 ASYNC PROCESSING: Offload DB write to BullMQ
-        // This prevents DB choking during viral spikes
-        await addJob(QUEUE_NAMES.LIKES, 'like-post', {
-          userId,
-          postId,
-          action: 'like',
-          reaction: reaction || '❤️',
-          is_anonymous: is_anonymous
-        });
-    
-        // Return Optimistic Response immediately
-        res.json({
-          success: true,
-          liked: true,
-          message: "Like queued successfully",
-          // Note: Counts will update eventually
-        })
-      } catch (error: any) {
-        console.error('Like error:', error)
-        res.status(error.statusCode || 500).json({
-          success: false,
-          error: error.message,
-        })
-      }
+// Like post (toggle behavior with reactions)
+router.post("/:postId/like", authenticateToken, likeLimiter, validateBody(postReactionSchema), async (req, res) => {
+  try {
+    const { postId } = req.params
+    const { reaction, is_anonymous } = req.body // Get reaction from request body
+    const userId = req.userId!
+
+    let userObjectId: ObjectId
+    let postObjectId: ObjectId
+    try {
+      userObjectId = new ObjectId(userId)
+      postObjectId = new ObjectId(postId)
+    } catch (err: any) {
+      console.error('[LIKE] ObjectId conversion error:', err)
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid ID format'
+      })
+    }
+
+    // 🚀 ASYNC PROCESSING: Offload DB write to BullMQ
+    // This prevents DB choking during viral spikes
+    await addJob(QUEUE_NAMES.LIKES, 'like-post', {
+      userId,
+      postId,
+      action: 'like',
+      reaction: reaction || '❤️',
+      is_anonymous: is_anonymous
+    });
+
+    // Return Optimistic Response immediately
+    res.json({
+      success: true,
+      liked: true,
+      message: "Like queued successfully",
+      // Note: Counts will update eventually
     })
-    
-    // Unlike post
-    router.delete("/:postId/like", authenticateToken, async (req, res) => {
-      try {
-        const { postId } = req.params
-        
-        // 🚀 ASYNC PROCESSING
-        await addJob(QUEUE_NAMES.LIKES, 'unlike-post', {
-          userId: req.userId!,
-          postId,
-          action: 'unlike'
-        });
-    
-        res.json({
-          success: true,
-          message: "Unlike queued successfully",
-        })
-      } catch (error: any) {
-        res.status(error.statusCode || 500).json({
-          success: false,
-          error: error.message,
-        })
-      }
+  } catch (error: any) {
+    console.error('Like error:', error)
+    res.status(error.statusCode || 500).json({
+      success: false,
+      error: error.message,
     })
+  }
+})
+
+// Unlike post
+router.delete("/:postId/like", authenticateToken, async (req, res) => {
+  try {
+    const { postId } = req.params
+
+    // 🚀 ASYNC PROCESSING
+    await addJob(QUEUE_NAMES.LIKES, 'unlike-post', {
+      userId: req.userId!,
+      postId,
+      action: 'unlike'
+    });
+
+    res.json({
+      success: true,
+      message: "Unlike queued successfully",
+    })
+  } catch (error: any) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      error: error.message,
+    })
+  }
+})
 
 // Get user's liked posts
 router.get("/liked", authenticateToken, async (req, res) => {

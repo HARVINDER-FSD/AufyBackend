@@ -87,16 +87,8 @@ export class WebSocketService {
       // Join user's personal room
       socket.join(`user:${userId}`);
 
-      // 👑 ADMIN: Join administrative room for real-time system monitoring
-      if (socket.data.user?.role === 'admin') {
-        socket.join('admin');
-        console.log(`👑 Admin ${userId} joined the Command Center`);
-        socket.emit('admin:ready', { message: 'Command Center established' });
-      }
-
-      // Broadcast user online status to everyone and specialized room for admins
+      // Broadcast user online status to everyone
       socket.broadcast.emit('user:online', { userId });
-      this.io?.to('admin').emit('system:user_status', { userId, status: 'online', timestamp: new Date() });
 
       // Handle joining chat rooms
       socket.on('chat:join', async (data: { chatId: string }) => {
@@ -267,14 +259,6 @@ export class WebSocketService {
     }
   }
 
-  public notifyAdmin(event: string, data: any) {
-    if (this.io) {
-      this.io.to('admin').emit(`admin:${event}`, {
-        ...data,
-        timestamp: new Date()
-      });
-    }
-  }
 }
 
 export const initializeWebSocket = (httpServer: HTTPServer) => {

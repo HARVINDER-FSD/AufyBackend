@@ -11,7 +11,7 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['user', 'admin', 'moderator'],
+    enum: ['user'],
     default: 'user'
   },
   email: {
@@ -104,16 +104,7 @@ const userSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
-  // Security & Moderation
-  isShadowBanned: {
-    type: Boolean,
-    default: false
-  },
   REPORT_SCHEMA_PLACEHOLDER: { // Placeholder for anything missing if I misread
-    type: Number,
-    default: 0
-  },
-  reports_count: {
     type: Number,
     default: 0
   },
@@ -293,7 +284,7 @@ userSchema.pre('save', async function (next) {
 
 export interface IUser extends Document {
   username: string;
-  role: 'user' | 'admin' | 'moderator';
+  role: 'user';
   email: string;
   phone?: string;
   phone_verified: boolean;

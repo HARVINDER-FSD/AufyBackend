@@ -29,7 +29,7 @@ async function connectToMongoDB() {
           password: hashedPassword,
           full_name: "Test User",
           date_of_birth: new Date("1990-01-01"),
-          avatar_url: "/placeholder-user.jpg",
+          avatar_url: `https://ui-avatars.com/api/?name=testuser&background=random`,
           is_verified: true,
           is_private: false,
           is_active: true,
@@ -162,7 +162,7 @@ export class AuthService {
         email: sanitizedEmail,
         password: hashedPassword,
         full_name: full_name,
-        avatar_url: "/placeholder-user.jpg",
+        avatar_url: `https://ui-avatars.com/api/?name=${encodeURIComponent(sanitizedUsername)}&background=random`,
         is_verified: false,
         is_private: false,
         is_active: true,
@@ -202,78 +202,48 @@ export class AuthService {
 
     // Sanitize input
     const sanitizedUsername = sanitize.username(username)
-    let user;
 
     try {
-      // Use in-memory user storage for demonstration
-      const users = (global as any).users || [];
+      // Find user by username or email in Database
+      const user = await UserModel.findOne({
+        $or: [
+          { username: sanitizedUsername },
+          { email: sanitizedUsername.toLowerCase() }
+        ]
+      });
 
-      // Find user by username or email
-      const foundUser = users.find((u: any) =>
-        u.username.toLowerCase() === sanitizedUsername.toLowerCase() ||
-        u.email.toLowerCase() === sanitizedUsername.toLowerCase()
-      );
-
-      if (!foundUser) {
+      if (!user) {
         throw errors.unauthorized("Invalid credentials");
       }
 
-      user = foundUser;
-    } catch (error) {
-      console.error("Login error:", error);
-      throw errors.unauthorized("Authentication failed");
-    }
+      // Check password
+      const isValidPassword = await bcrypt.compare(plainPassword, user.password);
 
-    // Check password using bcrypt
-    const isValidPassword = bcrypt.compareSync(plainPassword, user.password_hash);
-
-    if (!isValidPassword) {
-      throw errors.unauthorized("Authentication failed");
-    }
-
-    // Update last seen - skip for in-memory implementation
-    // await query("UPDATE users SET last_seen = NOW() WHERE id = $1", [user.id])
-
-    // Generate JWT token
-    const accessToken = token.sign({
-      userId: user.id,
-      username: user.username,
-      email: user.email,
-    })
-
-    // Store session in Redis if available
-    try {
-      await this.createSession(user.id, accessToken, deviceInfo)
-    } catch (error) {
-      console.warn("Session storage failed, continuing without session persistence:", error);
-      // Continue without session persistence
-    }
-
-    // Cache user data if Redis is available
-    const userData = {
-      id: user.id,
-      username: user.username,
-      email: user.email,
-      full_name: user.full_name,
-      avatar_url: user.avatar_url,
-      is_verified: user.is_verified,
-      is_private: user.is_private,
-      last_seen: user.last_seen,
-    }
-
-    try {
-      if (redis) {
-        await cache.set(`user:${user.id}`, userData, config.redis.ttl.user)
+      if (!isValidPassword) {
+        throw errors.unauthorized("Authentication failed");
       }
-    } catch (error) {
-      console.warn("User caching failed, continuing without cache:", error);
-      // Continue without caching
-    }
 
-    return {
-      user: userData,
-      accessToken,
+      // Update last seen
+      user.updated_at = new Date();
+      await user.save();
+
+      // Return real user data
+      return {
+        user: user.toJSON(),
+        accessToken: AuthService.generateToken(user)
+      };
+    } catch (error: any) {
+      console.error("Login error:", error);
+      throw error.statusCode ? error : errors.unauthorized("Authentication failed");
     }
+  }
+
+  static generateToken(user: any) {
+    return token.sign({
+      userId: user._id.toString(),
+      username: user.username,
+      email: user.email,
+    });
   }
 
   // Create session

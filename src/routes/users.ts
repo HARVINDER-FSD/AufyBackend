@@ -161,8 +161,8 @@ router.get('/me', authenticate, async (req: any, res: Response) => {
             full_name: user.full_name || user.name || '',
             bio: user.bio || '',
             links: user.links || [],
-            avatar: user.avatar_url || user.avatar || '/placeholder-user.jpg',
-            avatar_url: user.avatar_url || user.avatar || '/placeholder-user.jpg',
+            avatar: user.avatar_url || user.avatar || 'https://ui-avatars.com/api/?name=User&background=random',
+            avatar_url: user.avatar_url || user.avatar || 'https://ui-avatars.com/api/?name=User&background=random',
             followers: followersCount,
             following: followingCount,
             followers_count: followersCount,
@@ -491,7 +491,7 @@ const response = {
             full_name: user.full_name || user.name || '',
             name: user.full_name || user.name || '',
             bio: user.bio || '',
-            avatar: user.avatar_url || user.avatar || '/placeholder-user.jpg',
+            avatar: user.avatar_url || user.avatar || 'https://ui-avatars.com/api/?name=User&background=random',
             followers: [],
             following: [],
             followersCount,
@@ -574,7 +574,7 @@ router.get('/:userId/followers', authenticate, async (req: any, res: Response) =
                     _id: '$user._id',
                     username: '$user.username',
                     fullName: { $ifNull: ['$user.full_name', '$user.name'] },
-                    profileImage: { $ifNull: ['$user.avatar_url', { $ifNull: ['$user.avatar', '/placeholder-user.jpg'] }] },
+                    profileImage: { $ifNull: ['$user.avatar_url', { $ifNull: ['$user.avatar', 'https://ui-avatars.com/api/?name=User&background=random'] }] },
                     isVerified: { $ifNull: ['$user.is_verified', '$user.verified'] }
                 }
             }
@@ -645,7 +645,7 @@ router.get('/:userId/following', authenticate, async (req: any, res: Response) =
                     _id: '$user._id',
                     username: '$user.username',
                     fullName: { $ifNull: ['$user.full_name', '$user.name'] },
-                    profileImage: { $ifNull: ['$user.avatar_url', { $ifNull: ['$user.avatar', '/placeholder-user.jpg'] }] },
+                    profileImage: { $ifNull: ['$user.avatar_url', { $ifNull: ['$user.avatar', 'https://ui-avatars.com/api/?name=User&background=random'] }] },
                     isVerified: { $ifNull: ['$user.is_verified', '$user.verified'] }
                 }
             }
@@ -727,7 +727,7 @@ router.get('/:userId/mutual-followers', authenticate, async (req: any, res: Resp
                     profileImage: {
                         $ifNull: [
                             '$user_details.avatar_url',
-                            { $ifNull: ['$user_details.avatar', '/placeholder-user.jpg'] }
+                            { $ifNull: ['$user_details.avatar', 'https://ui-avatars.com/api/?name=User&background=random'] }
                         ]
                     },
                     isVerified: { $ifNull: ['$user_details.is_verified', '$user_details.verified'] }
@@ -834,7 +834,7 @@ router.get('/:userId/mutual-connections', authenticate, async (req: any, res: Re
                     profileImage: {
                         $ifNull: [
                             '$user_details.avatar_url',
-                            { $ifNull: ['$user_details.avatar', '/placeholder-user.jpg'] }
+                            { $ifNull: ['$user_details.avatar', 'https://ui-avatars.com/api/?name=User&background=random'] }
                         ]
                     },
                     isVerified: { $ifNull: ['$user_details.is_verified', '$user_details.verified'] }
@@ -972,7 +972,7 @@ router.get('/:username', async (req: any, res: Response) => {
             user_id: user._id,
             is_archived: { $ne: true }
         })
-const avatarUrl = user.avatar_url || user.avatar || user.profile_picture || user.profileImage || '/placeholder-user.jpg';
+const avatarUrl = user.avatar_url || user.avatar || user.profile_picture || user.profileImage || 'https://ui-avatars.com/api/?name=User&background=random';
 
         return res.json({
             _id: user._id.toString(),
@@ -1194,8 +1194,8 @@ return res.status(500).json({ message: 'Failed to retrieve updated user' })
             });
 // Add timestamp to avatar URLs for cache busting
             const timestamp = Date.now();
-            const avatarUrl = user?.avatar_url || user?.avatar || '/placeholder-user.jpg';
-            const avatarWithTimestamp = avatarUrl !== '/placeholder-user.jpg'
+            const avatarUrl = user?.avatar_url || user?.avatar || 'https://ui-avatars.com/api/?name=User&background=random';
+            const avatarWithTimestamp = avatarUrl !== 'https://ui-avatars.com/api/?name=User&background=random'
                 ? (avatarUrl.includes('?') ? `${avatarUrl}&_t=${timestamp}` : `${avatarUrl}?_t=${timestamp}`)
                 : avatarUrl;
 
@@ -1275,7 +1275,7 @@ return res.json(users.map(user => ({
             id: user._id.toString(),
             username: user.username,
             name: user.name || '',
-            avatar: user.avatar || '/placeholder-user.jpg',
+            avatar: user.avatar || 'https://ui-avatars.com/api/?name=User&background=random',
             verified: user.verified || false
         })))
     } catch (error: any) {
@@ -1633,7 +1633,7 @@ const result = followers.map(user => ({
             id: user._id.toString(),
             username: user.username,
             full_name: user.name || user.full_name || '',
-            avatar_url: user.avatar_url || user.avatar || '/placeholder-user.jpg',
+            avatar_url: user.avatar_url || user.avatar || 'https://ui-avatars.com/api/?name=User&background=random',
             is_verified: user.is_verified || user.verified || false,
             badge_type: user.badge_type || null,
             is_private: user.is_private || false,
@@ -1762,7 +1762,7 @@ const result = following.map(user => ({
             id: user._id.toString(),
             username: user.username,
             full_name: user.name || user.full_name || '',
-            avatar_url: user.avatar_url || user.avatar || '/placeholder-user.jpg',
+            avatar_url: user.avatar_url || user.avatar || 'https://ui-avatars.com/api/?name=User&background=random',
             is_verified: user.is_verified || user.verified || false,
             badge_type: user.badge_type || null,
             is_private: user.is_private || false,
@@ -1823,7 +1823,7 @@ router.get('/blocked', authenticate, async (req: any, res: Response) => {
                 id: user._id.toString(),
                 username: user.username,
                 name: user.full_name || user.name || '',
-                avatar: user.avatar_url || user.avatar || '/placeholder-user.jpg',
+                avatar: user.avatar_url || user.avatar || 'https://ui-avatars.com/api/?name=User&background=random',
                 verified: user.is_verified || user.verified || false
             }))
         })
@@ -1903,7 +1903,7 @@ router.get('/restricted', authenticate, async (req: any, res: Response) => {
                 id: user._id.toString(),
                 username: user.username,
                 name: user.full_name || user.name || '',
-                avatar: user.avatar_url || user.avatar || '/placeholder-user.jpg',
+                avatar: user.avatar_url || user.avatar || 'https://ui-avatars.com/api/?name=User&background=random',
                 verified: user.is_verified || user.verified || false
             }))
         })
@@ -2398,7 +2398,7 @@ router.get('/follow-requests', authenticate, async (req: any, res: Response) => 
                     id: requester?._id.toString(),
                     username: requester?.username,
                     full_name: requester?.full_name || requester?.name,
-                    avatar_url: requester?.avatar_url || requester?.avatar || '/placeholder-user.jpg',
+                    avatar_url: requester?.avatar_url || requester?.avatar || 'https://ui-avatars.com/api/?name=User&background=random',
                     is_verified: requester?.is_verified || false,
                     badge_type: requester?.badge_type
                 },
@@ -2912,7 +2912,7 @@ router.get('/muted', authenticate, async (req: any, res: Response) => {
             id: user._id.toString(),
             username: user.username,
             name: user.full_name || user.name || '',
-            avatar: user.avatar_url || user.avatar || '/placeholder-user.jpg',
+            avatar: user.avatar_url || user.avatar || 'https://ui-avatars.com/api/?name=User&background=random',
             verified: user.is_verified || user.verified || false
         }))
 
@@ -3047,7 +3047,7 @@ router.patch('/me', authenticate, async (req: any, res: Response) => {
             gender: updatedUser?.gender || '',
             birthday: updatedUser?.birthday || '',
             location: updatedUser?.location || '',
-            avatar: updatedUser?.avatar_url || updatedUser?.avatar || '/placeholder-user.jpg',
+            avatar: updatedUser?.avatar_url || updatedUser?.avatar || 'https://ui-avatars.com/api/?name=User&background=random',
             verified: updatedUser?.is_verified || updatedUser?.verified || false,
             isAnonymousMode: updatedUser?.isAnonymousMode || false,
             anonymousPersona: updatedUser?.anonymousPersona || null
@@ -3167,8 +3167,8 @@ router.get('/:username/posts', authenticate, async (req: any, res: Response) => 
             user: maskAnonymousUser({
                 id: targetUser._id.toString(),
                 username: targetUser.username,
-                avatar: targetUser.avatar_url || targetUser.avatar || '/placeholder-user.jpg',
-                avatar_url: targetUser.avatar_url || targetUser.avatar || '/placeholder-user.jpg',
+                avatar: targetUser.avatar_url || targetUser.avatar || 'https://ui-avatars.com/api/?name=User&background=random',
+                avatar_url: targetUser.avatar_url || targetUser.avatar || 'https://ui-avatars.com/api/?name=User&background=random',
                 verified: targetUser.is_verified || targetUser.verified || false,
                 is_verified: targetUser.is_verified || targetUser.verified || false,
                 badge_type: targetUser.badge_type || targetUser.verification_type || null,
@@ -3195,8 +3195,8 @@ router.get('/:username/posts', authenticate, async (req: any, res: Response) => 
             user: maskAnonymousUser({
                 id: targetUser._id.toString(),
                 username: targetUser.username,
-                avatar: targetUser.avatar_url || targetUser.avatar || '/placeholder-user.jpg',
-                avatar_url: targetUser.avatar_url || targetUser.avatar || '/placeholder-user.jpg',
+                avatar: targetUser.avatar_url || targetUser.avatar || 'https://ui-avatars.com/api/?name=User&background=random',
+                avatar_url: targetUser.avatar_url || targetUser.avatar || 'https://ui-avatars.com/api/?name=User&background=random',
                 verified: targetUser.is_verified || targetUser.verified || false,
                 is_verified: targetUser.is_verified || targetUser.verified || false,
                 badge_type: targetUser.badge_type || targetUser.verification_type || null,

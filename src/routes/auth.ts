@@ -266,19 +266,6 @@ router.post('/register', validate(registerSchema), async (req: Request, res: Res
       updatedAt: new Date()
     })
 
-    // 🚀 Notify Admins in Real-time
-    try {
-      const wsService = getWebSocketService();
-      wsService.notifyAdmin('new_user', {
-        username,
-        full_name: full_name || username,
-        email,
-        userId: result.insertedId.toString()
-      });
-    } catch (wsError) {
-      console.warn('[WS] Failed to notify admins of new user');
-    }
-
     // Generate JWT token (90 days - Instagram-style long session)
     const token = jwt.sign(
       {

@@ -32,19 +32,6 @@ router.post("/", async (req: any, res: Response) => {
 
     const result = await db.collection('reports').insertOne(reportData);
 
-    // 🚀 Notify Admins in Real-time
-    try {
-      const wsService = getWebSocketService();
-      wsService.notifyAdmin('new_report', {
-        reportId: result.insertedId.toString(),
-        target_type,
-        reason,
-        reporterId: userId
-      });
-    } catch (wsError) {
-      console.warn('[WS] Failed to notify admins of new report');
-    }
-
     res.status(201).json({
       success: true,
       message: "Report submitted successfully",

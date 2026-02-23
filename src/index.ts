@@ -53,7 +53,7 @@ import secretCrushRoutes from './routes/secret-crush'
 import premiumRoutes from './routes/premium'
 import demoRoutes from './routes/demo'
 import aiRoutes from './routes/ai'
-import adminRoutes from './routes/admin'
+
 import promBundle from 'express-prom-bundle'
 import swaggerUi from 'swagger-ui-express'
 import YAML from 'yamljs'
@@ -339,15 +339,7 @@ app.use('/api/demo', demoRoutes)
 app.use('/api/ai', aiRoutes)
 app.use('/api/professional', professionalRoutes)
 app.use('/api/verification', verificationRoutes)
-app.use('/api/admin', adminRoutes)
 
-// Performance Metrics Endpoint (Admin only)
-app.get('/api/metrics', (_req, res) => {
-  res.json({
-    summary: getPerformanceSummary(),
-    violations: checkPerformanceTargets()
-  });
-});
 
 // Global Error Handler (must be last)
 app.use(errorHandler)

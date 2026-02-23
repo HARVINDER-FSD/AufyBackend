@@ -34,7 +34,7 @@ export class PostService {
     let user: any = await cacheGet(cacheKey);
 
     if (!user) {
-       user = await usersCollection.findOne({ _id: new ObjectId(userId) })
+      user = await usersCollection.findOne({ _id: new ObjectId(userId) })
     }
 
     if (!user) {
@@ -96,19 +96,19 @@ export class PostService {
     } else {
       const postsCollection = db.collection('posts')
       const usersCollection = db.collection('users')
-      
+
       // Calculate skip
       const skip = (page - 1) * limit
 
       // Optimization: Get verified user IDs first to avoid expensive $lookup on all posts
       // This dramatically reduces the workload for the database
       const verifiedUsers = await usersCollection.find(
-        { 
+        {
           $or: [
             { is_verified: true },
             { badge_type: { $in: ['blue', 'gold', 'purple'] } }
           ],
-          isShadowBanned: { $ne: true } // 🛡️ EXCLUDE SHADOW BANNED USERS
+          is_active: true
         },
         { projection: { _id: 1 } }
       ).toArray()
@@ -166,7 +166,7 @@ export class PostService {
       ]
 
       posts = await postsCollection.aggregate(pipeline).toArray()
-      
+
       // Cache the raw results for 60 seconds
       await cacheSet(cacheKey, { posts, total }, 60)
     }
@@ -176,12 +176,12 @@ export class PostService {
     // The aggregate above attaches 'author'. We should make sure enrichPosts handles it or we format it correctly.
     // Based on previous code, enrichPosts fetches users if needed.
     // However, our aggregate already has the user (author). Let's prepare the posts for enrichPosts.
-    
+
     // We need to re-map the 'author' from lookup back to how enrichPosts expects it (or just let enrichPosts handle it if it does).
     // Let's look at enrichPosts implementation again. It seems it doesn't fetch users inside it? 
     // Wait, I didn't see the full enrichPosts code. Let's assume it handles "user" field or we need to attach it.
     // Actually, let's just manually format the posts here to be safe and efficient since we already have the author.
-    
+
     const enrichedPosts: Post[] = []
 
     // Helper to get likes status for the current user
@@ -192,7 +192,7 @@ export class PostService {
       // MongoDB driver returns ObjectId. JSON.parse returns string.
       // We should map posts to get IDs.
       const postIds = posts.map(p => new ObjectId(p._id))
-      
+
       const likes = await likesCollection.find({
         user_id: new ObjectId(currentUserId),
         post_id: { $in: postIds }
@@ -202,7 +202,7 @@ export class PostService {
 
     for (const post of posts) {
       const author = post.author
-      
+
       // Mask author if THEY are anonymous (unlikely for verified creators, but good practice)
       const displayUser = maskAnonymousUser({ ...author, is_anonymous: post.is_anonymous })
 
@@ -325,14 +325,14 @@ export class PostService {
     // 1. Batch fetch user likes (if logged in)
     let likedPostIds = new Set<string>()
     let userReactions = new Map<string, string>()
-    
+
     if (userId) {
       // Optimize: Only fetch necessary fields
       const likes = await likesCollection.find(
         { user_id: userId, post_id: { $in: postIds } },
         { projection: { post_id: 1, reaction: 1 } }
       ).toArray()
-      
+
       likes.forEach(like => {
         likedPostIds.add(like.post_id.toString())
         if (like.reaction) {
@@ -343,33 +343,33 @@ export class PostService {
 
     // 2. Batch fetch reaction summaries (Only if requested - Expensive operation)
     const reactionsMap = new Map<string, Record<string, number>>()
-    
-    if (includeReactionSummary) {
-        const reactionSummaries = await likesCollection.aggregate([
-          { $match: { post_id: { $in: postIds } } },
-          {
-            $group: {
-              _id: { post_id: '$post_id', reaction: '$reaction' },
-              count: { $sum: 1 }
-            }
-          }
-        ]).toArray()
 
-        reactionSummaries.forEach((item: any) => {
-            const postId = item._id.post_id.toString()
-            const reaction = item._id.reaction || '❤️'
-            if (!reactionsMap.has(postId)) {
-                reactionsMap.set(postId, {})
-            }
-            reactionsMap.get(postId)![reaction] = item.count
-        })
+    if (includeReactionSummary) {
+      const reactionSummaries = await likesCollection.aggregate([
+        { $match: { post_id: { $in: postIds } } },
+        {
+          $group: {
+            _id: { post_id: '$post_id', reaction: '$reaction' },
+            count: { $sum: 1 }
+          }
+        }
+      ]).toArray()
+
+      reactionSummaries.forEach((item: any) => {
+        const postId = item._id.post_id.toString()
+        const reaction = item._id.reaction || '❤️'
+        if (!reactionsMap.has(postId)) {
+          reactionsMap.set(postId, {})
+        }
+        reactionsMap.get(postId)![reaction] = item.count
+      })
     }
 
     // 3. Map everything back
     return posts.map(post => {
       const postId = post._id.toString()
       const isLiked = likedPostIds.has(postId)
-      
+
       return {
         id: postId,
         user_id: post.user_id.toString(),
@@ -381,15 +381,15 @@ export class PostService {
         created_at: post.created_at,
         updated_at: post.updated_at,
         user: maskAnonymousUser({ ...post.user, is_anonymous: post.is_anonymous }),
-        
+
         // Use stored counts if available, otherwise 0
         likes_count: post.likes_count || 0,
         comments_count: post.comments_count || 0,
-        
+
         is_liked: isLiked,
         userReaction: userReactions.get(postId) || null,
         reactions: reactionsMap.get(postId) || {}, // Empty if not requested
-        likedBy: [] 
+        likedBy: []
       } as Post
     })
   }
@@ -451,13 +451,13 @@ export class PostService {
     // Ensure dates are Date objects for enrichPosts if needed, or rely on enrichPosts handling it
     // To be safe, let's map dates back to objects if they are strings
     if (cachedData) {
-        posts = posts.map(p => ({
-            ...p,
-            created_at: new Date(p.created_at),
-            updated_at: new Date(p.updated_at),
-            _id: new ObjectId(p._id), // enrichPosts might expect ObjectId for _id if it calls toString()
-            user_id: new ObjectId(p.user_id)
-        }))
+      posts = posts.map(p => ({
+        ...p,
+        created_at: new Date(p.created_at),
+        updated_at: new Date(p.updated_at),
+        _id: new ObjectId(p._id), // enrichPosts might expect ObjectId for _id if it calls toString()
+        user_id: new ObjectId(p.user_id)
+      }))
     }
 
     const transformedPosts = await PostService.enrichPosts(posts, currentUserId, true) // Need reactions for user profile posts
@@ -497,7 +497,7 @@ export class PostService {
 
     // Frequency Analysis
     const tagFrequency: Record<string, number> = {}
-    
+
     likedPosts.forEach(post => {
       if (post.hashtags && Array.isArray(post.hashtags)) {
         post.hashtags.forEach((tag: string) => {
@@ -573,8 +573,8 @@ export class PostService {
     const cacheKey = cacheKeys.userFeed(userId, page, limit);
     const cached = await cacheGet(cacheKey);
     if (cached) {
-       logger.debug(`[Perf] Feed Cache Hit: ${Date.now() - startTime}ms`, { userId, page });
-       return cached;
+      logger.debug(`[Perf] Feed Cache Hit: ${Date.now() - startTime}ms`, { userId, page });
+      return cached;
     }
 
     const { page: validPage, limit: validLimit } = pagination.validateParams(page.toString(), limit.toString())
@@ -587,95 +587,95 @@ export class PostService {
     // Try to read from Redis List first (Makhan Mode)
     const listKey = `feed:${userId}:list`;
     const listLen = await cacheLLen(listKey);
-    
+
     let rawPosts: any[] = [];
     let total = 0;
     let isFanOutHit = false;
 
     if (listLen > 0) {
-        // We have a feed list!
-        const start = offset;
-        const stop = offset + validLimit - 1;
-        const postIds = await cacheLRange(listKey, start, stop);
-        
-        if (postIds.length > 0) {
-            logger.debug(`[Perf] Feed Fan-out Hit: ${postIds.length} items from list`);
-            
-            const objectIds = postIds.map(id => new ObjectId(id));
-            
-            // Fetch posts by ID (Point Query - Very Fast)
-            const tList = Date.now();
-            const fetchedPosts = await postsCollection.find({ _id: { $in: objectIds } }).toArray();
-            logger.debug(`[Perf] Fan-out DB Fetch: ${Date.now() - tList}ms`);
+      // We have a feed list!
+      const start = offset;
+      const stop = offset + validLimit - 1;
+      const postIds = await cacheLRange(listKey, start, stop);
 
-            // Re-order based on list order (MongoDB $in does not preserve order)
-            const postMap = new Map(fetchedPosts.map(p => [p._id.toString(), p]));
-            rawPosts = postIds.map(id => postMap.get(id)).filter(p => p); // Filter nulls
-            
-            total = listLen; // Approximate total from list (capped at 500 usually)
-            isFanOutHit = true;
-        }
+      if (postIds.length > 0) {
+        logger.debug(`[Perf] Feed Fan-out Hit: ${postIds.length} items from list`);
+
+        const objectIds = postIds.map(id => new ObjectId(id));
+
+        // Fetch posts by ID (Point Query - Very Fast)
+        const tList = Date.now();
+        const fetchedPosts = await postsCollection.find({ _id: { $in: objectIds } }).toArray();
+        logger.debug(`[Perf] Fan-out DB Fetch: ${Date.now() - tList}ms`);
+
+        // Re-order based on list order (MongoDB $in does not preserve order)
+        const postMap = new Map(fetchedPosts.map(p => [p._id.toString(), p]));
+        rawPosts = postIds.map(id => postMap.get(id)).filter(p => p); // Filter nulls
+
+        total = listLen; // Approximate total from list (capped at 500 usually)
+        isFanOutHit = true;
+      }
     }
 
     // Fallback to Pull Model if list is empty (Cold Start / Old Users)
     if (!isFanOutHit) {
-        logger.debug(`[Perf] Feed Fan-out Miss/Empty - Fallback to Pull Model`);
-        const followsCollection = db.collection('follows')
+      logger.debug(`[Perf] Feed Fan-out Miss/Empty - Fallback to Pull Model`);
+      const followsCollection = db.collection('follows')
 
-        // Get users that current user follows (check both field formats)
-        const t1 = Date.now();
-        const followsCacheKey = `user:following_ids:${userId}`;
-        let followingIds: string[] | null = await cacheGet(followsCacheKey);
+      // Get users that current user follows (check both field formats)
+      const t1 = Date.now();
+      const followsCacheKey = `user:following_ids:${userId}`;
+      let followingIds: string[] | null = await cacheGet(followsCacheKey);
 
-        if (!followingIds) {
-          const follows = await followsCollection.find({
-            $or: [
-              { follower_id: new ObjectId(userId) },
-              { followerId: new ObjectId(userId) }
-            ],
-            status: 'accepted' // Only accepted follows
-          }).toArray()
+      if (!followingIds) {
+        const follows = await followsCollection.find({
+          $or: [
+            { follower_id: new ObjectId(userId) },
+            { followerId: new ObjectId(userId) }
+          ],
+          status: 'accepted' // Only accepted follows
+        }).toArray()
 
-          followingIds = follows.map(f => (f.following_id || f.followingId).toString())
-          followingIds.push(userId) // Include own posts
+        followingIds = follows.map(f => (f.following_id || f.followingId).toString())
+        followingIds.push(userId) // Include own posts
 
-          // Cache following list for 5 minutes
-          await cacheSet(followsCacheKey, followingIds, 300);
-        }
-        logger.debug(`[Perf] Fetch Following IDs: ${Date.now() - t1}ms`, { count: followingIds.length });
-        
-        const followingObjectIds = followingIds.map(id => new ObjectId(id))
+        // Cache following list for 5 minutes
+        await cacheSet(followsCacheKey, followingIds, 300);
+      }
+      logger.debug(`[Perf] Fetch Following IDs: ${Date.now() - t1}ms`, { count: followingIds.length });
 
-        const matchQuery = {
-          user_id: { $in: followingObjectIds },
-          is_archived: { $ne: true }
-        }
+      const followingObjectIds = followingIds.map(id => new ObjectId(id))
 
-        const t2 = Date.now();
-        total = await postsCollection.countDocuments(matchQuery)
-        logger.debug(`[Perf] Count Documents: ${Date.now() - t2}ms`);
+      const matchQuery = {
+        user_id: { $in: followingObjectIds },
+        is_archived: { $ne: true }
+      }
 
-        // Optimization: Use find() + manual join instead of expensive aggregate $lookup
-        const t3 = Date.now();
-        rawPosts = await postsCollection.find(matchQuery)
-          .sort({ created_at: -1 })
-          .skip(offset)
-          .limit(validLimit)
-          .toArray();
-        logger.debug(`[Perf] Fetch Raw Posts: ${Date.now() - t3}ms`);
+      const t2 = Date.now();
+      total = await postsCollection.countDocuments(matchQuery)
+      logger.debug(`[Perf] Count Documents: ${Date.now() - t2}ms`);
+
+      // Optimization: Use find() + manual join instead of expensive aggregate $lookup
+      const t3 = Date.now();
+      rawPosts = await postsCollection.find(matchQuery)
+        .sort({ created_at: -1 })
+        .skip(offset)
+        .limit(validLimit)
+        .toArray();
+      logger.debug(`[Perf] Fetch Raw Posts: ${Date.now() - t3}ms`);
     }
 
     // Collect user IDs to fetch in bulk
     const userIds = [...new Set(rawPosts.map(p => p.user_id))];
     const usersCollection = db.collection('users');
-    
+
     const t4 = Date.now();
     const users = await usersCollection.find(
-        { 
-          _id: { $in: userIds },
-          isShadowBanned: { $ne: true } // 🛡️ EXCLUDE SHADOW BANNED USERS
-        },
-        { projection: { _id: 1, username: 1, name: 1, full_name: 1, avatar: 1, avatar_url: 1, is_verified: 1, badge_type: 1, verification_type: 1, isAnonymousMode: 1, anonymousPersona: 1 } }
+      {
+        _id: { $in: userIds },
+        is_active: true
+      },
+      { projection: { _id: 1, username: 1, name: 1, full_name: 1, avatar: 1, avatar_url: 1, is_verified: 1, badge_type: 1, verification_type: 1, isAnonymousMode: 1, anonymousPersona: 1 } }
     ).toArray();
     logger.debug(`[Perf] Fetch Users: ${Date.now() - t4}ms`);
 
@@ -685,11 +685,11 @@ export class PostService {
 
     // Attach users to posts and filter out missing authors (shadow banned)
     let posts = rawPosts.map(post => {
-        const user = userMap.get(post.user_id.toString());
-        return {
-            ...post,
-            author: user // Mimic the structure expected by enrichPosts or internal logic
-        };
+      const user = userMap.get(post.user_id.toString());
+      return {
+        ...post,
+        author: user // Mimic the structure expected by enrichPosts or internal logic
+      };
     }).filter(post => post.author); // 🛡️ Filter out posts from shadow-banned users
 
     // --- ALGORITHM INJECTION: Mix in "Mood" Suggestions ---
@@ -702,27 +702,27 @@ export class PostService {
           const suggestions = await PostService.getSuggestedPosts(userId, moodTags, currentPostIds, 4) // Fetch 4 suggestions
 
           if (suggestions.length > 0) {
-             // Interleave suggestions: Insert 1 suggestion every 4 posts
-             // [F, F, F, F, S, F, F, F, F, S, ...]
-             const mixedPosts = []
-             let sIdx = 0
-             
-             for (let i = 0; i < posts.length; i++) {
-               mixedPosts.push(posts[i])
-               // Insert suggestion after every 4th post
-               if ((i + 1) % 4 === 0 && sIdx < suggestions.length) {
-                 mixedPosts.push(suggestions[sIdx])
-                 sIdx++
-               }
-             }
-             
-             // Add remaining suggestions if feed is short
-             while (sIdx < suggestions.length) {
+            // Interleave suggestions: Insert 1 suggestion every 4 posts
+            // [F, F, F, F, S, F, F, F, F, S, ...]
+            const mixedPosts = []
+            let sIdx = 0
+
+            for (let i = 0; i < posts.length; i++) {
+              mixedPosts.push(posts[i])
+              // Insert suggestion after every 4th post
+              if ((i + 1) % 4 === 0 && sIdx < suggestions.length) {
                 mixedPosts.push(suggestions[sIdx])
                 sIdx++
-             }
-             
-             posts = mixedPosts
+              }
+            }
+
+            // Add remaining suggestions if feed is short
+            while (sIdx < suggestions.length) {
+              mixedPosts.push(suggestions[sIdx])
+              sIdx++
+            }
+
+            posts = mixedPosts
           }
         }
       } catch (err) {
@@ -856,21 +856,21 @@ export class PostService {
     // 🚀 Async Like Optimization for Million-User Scale
     // Push to queue immediately for instant response
     // A background worker will handle the DB write
-    
+
     // 1. Check if queue is available
     const queueAvailable = await isQueueAvailable();
     if (queueAvailable) {
-       logger.debug('⚡ Using Async Like Queue', { userId, postId, action: 'like' });
-       await addJob(QUEUE_NAMES.LIKES, 'process-like', {
-         userId,
-         postId,
-         is_anonymous,
-         action: 'like',
-         timestamp: new Date()
-       });
-       return; // Return immediately!
+      logger.debug('⚡ Using Async Like Queue', { userId, postId, action: 'like' });
+      await addJob(QUEUE_NAMES.LIKES, 'process-like', {
+        userId,
+        postId,
+        is_anonymous,
+        action: 'like',
+        timestamp: new Date()
+      });
+      return; // Return immediately!
     } else {
-       logger.warn('⚠️ Async Like Queue Unavailable - Falling back to sync DB write');
+      logger.warn('⚠️ Async Like Queue Unavailable - Falling back to sync DB write');
     }
 
     // Fallback to synchronous DB write if queue is down
@@ -895,23 +895,23 @@ export class PostService {
 
     // Increment likes count on post
     await postsCollection.updateOne(
-        { _id: new ObjectId(postId) },
-        { $inc: { likes_count: 1 } }
+      { _id: new ObjectId(postId) },
+      { $inc: { likes_count: 1 } }
     )
   }
 
   // Unlike post
   static async unlikePost(userId: string, postId: string): Promise<void> {
-     // 🚀 Async Unlike Optimization
-     if (await isQueueAvailable()) {
-        await addJob(QUEUE_NAMES.LIKES, 'process-like', {
-          userId,
-          postId,
-          action: 'unlike',
-          timestamp: new Date()
-        });
-        return;
-     }
+    // 🚀 Async Unlike Optimization
+    if (await isQueueAvailable()) {
+      await addJob(QUEUE_NAMES.LIKES, 'process-like', {
+        userId,
+        postId,
+        action: 'unlike',
+        timestamp: new Date()
+      });
+      return;
+    }
 
     const db = await getDatabase()
     const likesCollection = db.collection('likes')
@@ -928,8 +928,8 @@ export class PostService {
 
     // Decrement likes count on post
     await postsCollection.updateOne(
-        { _id: new ObjectId(postId) },
-        { $inc: { likes_count: -1 } }
+      { _id: new ObjectId(postId) },
+      { $inc: { likes_count: -1 } }
     )
   }
 
@@ -976,7 +976,7 @@ export class PostService {
         _id: like.id,
         is_anonymous: like.is_anonymous
       })
-      
+
       return {
         id: masked.id,
         username: masked.username,
