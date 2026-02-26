@@ -48,15 +48,15 @@ router.post('/anonymous/leave', auth, async (req, res) => {
 router.post('/anonymous/skip', auth, async (req, res) => {
   try {
     const { interests, currentConversationId } = req.body;
-    
+
     // 1. End current conversation (if any)
     if (currentConversationId) {
-        await AnonymousChatService.endAnonymousConversation(currentConversationId, req.userId!);
+      await AnonymousChatService.endAnonymousConversation(currentConversationId, req.userId!);
     }
-    
+
     // 2. Leave queue (just in case they were waiting)
     await AnonymousChatService.leaveQueue(req.userId!, interests);
-    
+
     // 3. Join Queue Immediately
     const result = await AnonymousChatService.joinQueue(req.userId!, interests);
     res.json(result);
@@ -71,6 +71,20 @@ router.post('/anonymous/request', auth, async (req, res) => {
     const { recipientId, content } = req.body;
     const message = await AnonymousChatService.sendAnonymousRequest(req.userId!, recipientId, content);
     res.json(message);
+  } catch (error: any) {
+    res.status(500).json({ message: error.message || 'Server error' });
+  }
+});
+
+// Report Stranger
+router.post('/anonymous/report', auth, async (req, res) => {
+  try {
+    const { reportedUserId, conversationId, reason } = req.body;
+    if (!reportedUserId || !conversationId || !reason) {
+      return res.status(400).json({ message: 'reportedUserId, conversationId, and reason are required' });
+    }
+    await AnonymousChatService.reportStranger(req.userId!, reportedUserId, conversationId, reason);
+    res.json({ success: true, message: 'Report submitted. The user has been blocked.' });
   } catch (error: any) {
     res.status(500).json({ message: error.message || 'Server error' });
   }

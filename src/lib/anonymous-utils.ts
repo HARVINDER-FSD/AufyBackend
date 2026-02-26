@@ -29,6 +29,15 @@ export const maskAnonymousUser = (user: any) => {
         avatar: 'https://ui-avatars.com/api/?name=Ghost+User&background=333&color=fff'
     };
 
+    // Generate badge based on reputation
+    const rep = user.anonymousReputation || 100;
+    let badge = 'Ghost';
+    if (rep >= 500) badge = 'Ancient Ghost 👑';
+    else if (rep >= 250) badge = 'Master Ghost 💎';
+    else if (rep >= 150) badge = 'Elite Ghost 🔥';
+    else if (rep >= 100) badge = 'Active Ghost ✅';
+    else if (rep < 50) badge = 'Suspected ⚠️';
+
     return {
         id: 'anonymous',
         username: persona.username,
@@ -36,6 +45,7 @@ export const maskAnonymousUser = (user: any) => {
         avatar_url: persona.avatar,
         is_verified: false,
         badge_type: null,
-        is_anonymous: true
+        is_anonymous: true,
+        reputation_badge: badge
     };
 };

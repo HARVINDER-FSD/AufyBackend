@@ -263,6 +263,10 @@ const userSchema = new mongoose.Schema({
   anonymousReputation: {
     type: Number,
     default: 100 // Starts at 100, goes up/down based on behavior
+  },
+  isShadowBanned: {
+    type: Boolean,
+    default: false
   }
 });
 
@@ -330,6 +334,7 @@ export interface IUser extends Document {
   isAnonymousMode?: boolean;
   anonymousPersona?: any;
   anonymousReputation?: number;
+  isShadowBanned?: boolean;
   comparePassword(candidatePassword: string): Promise<boolean>;
 }
 

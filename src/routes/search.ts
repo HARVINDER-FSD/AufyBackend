@@ -85,13 +85,36 @@ router.get("/", async (req: any, res) => {
     const prefixRegex = new RegExp(`^${q}`, 'i');
     const partialRegex = new RegExp(`${q}`, 'i');
 
-    // Find users with indexed prefix match first, then fallback to partial
-    // This is much faster than global OR on large datasets
-    const users = await User.find({
+    // Get users to exclude (Blocked users)
+    const blocks = await db.collection('blocked_users').find({
       $or: [
-        { username: partialRegex },
-        { full_name: partialRegex }
+        { userId: new ObjectId(currentUserId || "") },
+        { blockedUserId: new ObjectId(currentUserId || "") }
       ]
+    }).toArray()
+
+    const excludedUserIds = blocks.map((b: any) =>
+      b.userId.toString() === currentUserId ? b.blockedUserId : b.userId
+    )
+
+    // Find users with indexed prefix match first, then fallback to partial
+    const users = await User.find({
+      $and: [
+        {
+          $or: [
+            { username: partialRegex },
+            { full_name: partialRegex }
+          ]
+        },
+        {
+          $or: [
+            { isShadowBanned: { $ne: true } },
+            { _id: new ObjectId(currentUserId || "") }
+          ]
+        }
+      ],
+      _id: { $nin: excludedUserIds },
+      is_active: true
     })
       .select('username full_name avatar_url is_verified followers_count bio is_active')
       .sort({ followers_count: -1 })
@@ -125,14 +148,26 @@ router.get("/", async (req: any, res) => {
       })
     }
 
+    const requester = await db.collection('users').findOne({ _id: new ObjectId(currentUserId || "") });
+    const isAnonymousSearch = requester?.isAnonymousMode === true;
+
     // Search posts
-    const posts = await Post.find({
+    const postsQuery: any = {
       $or: [
         { caption: { $regex: q, $options: 'i' } },
         { description: { $regex: q, $options: 'i' } }
-      ]
-    })
-      .populate('user_id', 'username full_name avatar_url is_verified')
+      ],
+      user_id: { $nin: excludedUserIds }
+    };
+
+    // 🛡️ ANONYMOUS MODE CHECK: Hide video posts (treated as reels)
+    if (isAnonymousSearch) {
+      postsQuery.media_type = { $ne: 'video' };
+      console.log('[Search] Anonymous mode: Filtering out video posts and reels')
+    }
+
+    const posts = await Post.find(postsQuery)
+      .populate('user_id', 'username full_name avatar_url is_verified isShadowBanned')
       .limit(Number(limit))
       .lean()
 
@@ -157,23 +192,31 @@ router.get("/", async (req: any, res) => {
       }
     })
 
-    const formattedPosts = posts.map((p: any) => ({
-      id: p._id.toString(),
-      user: {
-        id: p.user_id._id.toString(),
-        username: p.user_id.username,
-        avatar: p.user_id.avatar_url,
-        verified: p.user_id.is_verified
-      },
-      content: p.caption || p.description || '',
-      image: p.media_urls?.[0],
-      likes: p.likes_count || 0,
-      comments: p.comments_count || 0,
-      shares: p.shares_count || 0,
-      timestamp: p.created_at,
-      liked: false,
-      bookmarked: false
-    }))
+    const { maskAnonymousUser } = require('../lib/anonymous-utils')
+    const formattedPosts = posts
+      .filter((p: any) => {
+        // 🛡️ SHADOWBAN FILTER: Hide posts from shadowbanned users
+        if (!p.user_id) return false;
+        const isAuthor = currentUserId && p.user_id._id.toString() === currentUserId;
+        if (p.user_id.isShadowBanned && !isAuthor) return false;
+        return true;
+      })
+      .map((p: any) => ({
+        id: p._id.toString(),
+        user: maskAnonymousUser({
+          ...p.user_id,
+          id: p.user_id._id.toString(),
+          is_anonymous: p.is_anonymous
+        }),
+        content: p.caption || p.description || '',
+        image: p.media_urls?.[0],
+        likes: p.likes_count || 0,
+        comments: p.comments_count || 0,
+        shares: p.shares_count || 0,
+        timestamp: p.created_at,
+        liked: false,
+        bookmarked: false
+      }))
 
     console.log('[Search] Returning:', {
       users: formattedUsers.length,

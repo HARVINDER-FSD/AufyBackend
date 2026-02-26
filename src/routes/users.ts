@@ -8,41 +8,27 @@ import { validateBody } from '../middleware/validate';
 import { followLimiter } from '../middleware/rateLimiter';
 import { getDatabase } from '../lib/database';
 import { PostService } from '../services/post';
+import { UserService } from '../services/user';
+import Follow from '../models/follow';
 import Joi from 'joi';
 
 const router = Router()
 
-const JWT_SECRET = process.env.JWT_SECRET || '4d9f1c8c6b27a67e9f3a81d2e5b0f78c72d1e7a64d59c83fb20e5a72a8c4d192'
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key'
 
-// Simple auth middleware
-const authenticate = (req: any, res: Response, next: any) => {
-    try {
-        const authHeader = req.headers.authorization
-        const token = authHeader && authHeader.split(' ')[1]
-
-        if (!token) {
-            return res.status(401).json({ message: 'Authentication required' })
-        }
-
-        const decoded = jwt.verify(token, JWT_SECRET) as any
-        req.userId = decoded.userId
-        next()
-    } catch (error) {
-        return res.status(403).json({ message: 'Invalid token' })
-    }
-}
+import { authenticateToken as authenticate } from '../middleware/auth'
 
 // Toggle anonymous mode
 router.post('/anonymous/toggle', authenticate, async (req: any, res: Response) => {
     try {
         const userId = req.userId
         const db = await getDatabase()
-        
+
         const user = await db.collection('users').findOne({ _id: new ObjectId(userId) })
         if (!user) return res.status(404).json({ message: 'User not found' })
 
         const newMode = !user.isAnonymousMode
-        const update: any = { 
+        const update: any = {
             isAnonymousMode: newMode,
             updated_at: new Date()
         }
@@ -60,8 +46,8 @@ router.post('/anonymous/toggle', authenticate, async (req: any, res: Response) =
         // Invalidate cache
         await cacheDel(`userProfile:${userId}`)
 
-        res.json({ 
-            success: true, 
+        res.json({
+            success: true,
             isAnonymousMode: newMode,
             anonymousPersona: user.anonymousPersona || update.anonymousPersona
         })
@@ -140,19 +126,6 @@ router.get('/me', authenticate, async (req: any, res: Response) => {
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
         }
-        // Counts
-        const followersCount = await db.collection('follows').countDocuments({
-            following_id: user._id,
-            status: 'accepted',
-        });
-        const followingCount = await db.collection('follows').countDocuments({
-            follower_id: user._id,
-            status: 'accepted',
-        });
-        const postsCount = await db.collection('posts').countDocuments({
-            user_id: user._id,
-            is_archived: { $ne: true },
-        });
         const response = {
             id: user._id.toString(),
             username: user.username,
@@ -163,26 +136,20 @@ router.get('/me', authenticate, async (req: any, res: Response) => {
             links: user.links || [],
             avatar: user.avatar_url || user.avatar || 'https://ui-avatars.com/api/?name=User&background=random',
             avatar_url: user.avatar_url || user.avatar || 'https://ui-avatars.com/api/?name=User&background=random',
-            followers: followersCount,
-            following: followingCount,
-            followers_count: followersCount,
-            following_count: followingCount,
-            followersCount,
-            followingCount,
-            verified: user.is_verified || user.verified || false,
-            is_verified: user.is_verified || user.verified || false,
-            badge_type: user.badge_type || user.verification_type || null,
-            badgeType: user.badge_type || user.verification_type || null,
-            posts_count: postsCount,
-            isPrivate: user.is_private || false,
+            followers_count: user.followers_count || 0,
+            following_count: user.following_count || 0,
+            verified: user.is_verified || false,
+            is_verified: user.is_verified || false,
+            badge_type: user.badge_type || null,
+            posts_count: user.posts_count || 0,
             is_private: user.is_private || false,
-            show_online_status: user.settings?.showOnlineStatus !== false,
-            isAnonymousMode: user.isAnonymousMode || false,
+            is_anonymousMode: user.isAnonymousMode || false,
             anonymousPersona: user.anonymousPersona || null,
             phone: user.phone || '',
             birthday: user.date_of_birth ? new Date(user.date_of_birth).toISOString().split('T')[0] : '',
             gender: user.gender || '',
             address: user.address || '',
+            reels_disabled: user.isAnonymousMode === true,
         };
         // Cache for 5 minutes (300 seconds)
         await cacheSet(cacheKey, response, 300);
@@ -203,7 +170,7 @@ router.patch('/me', authenticate, async (req: any, res: Response) => {
         const updateData: any = { updated_at: new Date() };
         if (phone !== undefined) updateData.phone = phone;
         if (birthday !== undefined) {
-             updateData.date_of_birth = birthday ? new Date(birthday) : null;
+            updateData.date_of_birth = birthday ? new Date(birthday) : null;
         }
         if (gender !== undefined) updateData.gender = gender;
         if (address !== undefined) updateData.address = address;
@@ -426,7 +393,20 @@ router.get('/username/:username', async (req: any, res: Response) => {
         const user = await db.collection('users').findOne({ username })
 
         if (!user) {
-return res.status(404).json({ message: 'User not found' })
+            return res.status(404).json({ message: 'User not found' })
+        }
+
+        // 🛡️ BLOCK CHECK (Mutual)
+        if (currentUserId) {
+            const blockExists = await db.collection('blocked_users').findOne({
+                $or: [
+                    { userId: new ObjectId(currentUserId), blockedUserId: user._id },
+                    { userId: user._id, blockedUserId: new ObjectId(currentUserId) }
+                ]
+            });
+            if (blockExists) {
+                return res.status(404).json({ message: 'User not found' });
+            }
         }
 
         // Check follow status if user is logged in
@@ -439,23 +419,25 @@ return res.status(404).json({ message: 'User not found' })
         if (currentUserId) {
             const followRecord = await db.collection('follows').findOne({
                 follower_id: new ObjectId(currentUserId),
-                following_id: user._id
+                following_id: user._id,
+                status: 'active'
             })
             isFollowing = !!followRecord;
 
             // Check if target user follows back
             const reverseFollow = await db.collection('follows').findOne({
                 follower_id: user._id,
-                following_id: new ObjectId(currentUserId)
+                following_id: new ObjectId(currentUserId),
+                status: 'active'
             })
             followsBack = !!reverseFollow;
             isMutualFollow = isFollowing && followsBack;
 
             // Check for pending follow request
             if (!isFollowing) {
-                const pendingRequest = await db.collection('followRequests').findOne({
-                    requester_id: new ObjectId(currentUserId),
-                    requested_id: user._id,
+                const pendingRequest = await db.collection('follows').findOne({
+                    follower_id: new ObjectId(currentUserId),
+                    following_id: user._id,
                     status: 'pending'
                 })
 
@@ -468,14 +450,14 @@ return res.status(404).json({ message: 'User not found' })
             }
         }
 
-        // Get follower/following counts (ACCEPTED ONLY)
+        // Get follower/following counts (ACTIVE ONLY)
         const followersCount = await db.collection('follows').countDocuments({
             following_id: user._id,
-            status: 'accepted'
+            status: 'active'
         })
         const followingCount = await db.collection('follows').countDocuments({
             follower_id: user._id,
-            status: 'accepted'
+            status: 'active'
         })
 
         // Get actual posts count from posts collection
@@ -483,7 +465,7 @@ return res.status(404).json({ message: 'User not found' })
             user_id: user._id,
             is_archived: { $ne: true }
         })
-const response = {
+        const response = {
             _id: user._id.toString(),
             id: user._id.toString(),
             username: user.username,
@@ -538,7 +520,7 @@ router.get('/:userId/followers', authenticate, async (req: any, res: Response) =
 
         const db = await getDatabase()
         const targetUser = await db.collection('users').findOne({ _id: new ObjectId(userId) })
-        
+
         if (!targetUser) {
             return res.status(404).json({ success: false, message: 'User not found' })
         }
@@ -548,7 +530,7 @@ router.get('/:userId/followers', authenticate, async (req: any, res: Response) =
             const isFollowing = await db.collection('follows').findOne({
                 follower_id: new ObjectId(currentUserId),
                 following_id: new ObjectId(userId),
-                status: 'accepted'
+                status: 'active'
             })
             if (!isFollowing) {
                 return res.status(403).json({ success: false, message: 'This account is private', code: 'PRIVATE_ACCOUNT' })
@@ -556,7 +538,7 @@ router.get('/:userId/followers', authenticate, async (req: any, res: Response) =
         }
 
         const followers = await db.collection('follows').aggregate([
-            { $match: { following_id: new ObjectId(userId), status: 'accepted' } },
+            { $match: { following_id: new ObjectId(userId), status: 'active' } },
             { $sort: { created_at: -1 } },
             { $skip: skip },
             { $limit: limit },
@@ -619,7 +601,7 @@ router.get('/:userId/following', authenticate, async (req: any, res: Response) =
             const isFollowing = await db.collection('follows').findOne({
                 follower_id: new ObjectId(currentUserId),
                 following_id: new ObjectId(userId),
-                status: 'accepted'
+                status: 'active'
             })
             if (!isFollowing) {
                 return res.status(403).json({ success: false, message: 'This account is private', code: 'PRIVATE_ACCOUNT' })
@@ -627,7 +609,7 @@ router.get('/:userId/following', authenticate, async (req: any, res: Response) =
         }
 
         const following = await db.collection('follows').aggregate([
-            { $match: { follower_id: new ObjectId(userId), status: 'accepted' } },
+            { $match: { follower_id: new ObjectId(userId), status: 'active' } },
             { $sort: { created_at: -1 } },
             { $skip: skip },
             { $limit: limit },
@@ -780,14 +762,14 @@ router.get('/:userId/mutual-connections', authenticate, async (req: any, res: Re
         // Logic: Find users U where:
         // 1. I follow U (follows.follower_id = Me, follows.following_id = U)
         // 2. U follows Target (follows.follower_id = U, follows.following_id = Target)
-        
+
         const mutualConnections = await db.collection('follows').aggregate([
             // Step 1: Find all users I follow
-            { 
-                $match: { 
+            {
+                $match: {
                     follower_id: new ObjectId(currentUserId),
                     status: 'active'
-                } 
+                }
             },
             // Step 2: Lookup if these users follow the target
             {
@@ -812,7 +794,7 @@ router.get('/:userId/mutual-connections', authenticate, async (req: any, res: Re
             },
             // Step 3: Keep only those who match (array not empty)
             { $match: { 'is_mutual.0': { $exists: true } } },
-            
+
             { $skip: skip },
             { $limit: limit },
 
@@ -870,8 +852,32 @@ router.get('/:userId([0-9a-fA-F]{24})', async (req: Request, res: Response) => {
 
         const db = await getDatabase()
         const user = await db.collection('users').findOne({ _id: new ObjectId(userId) })
-if (!user) {
+        if (!user) {
             return res.status(404).json({ message: 'User not found' })
+        }
+
+        // 🛡️ BLOCK CHECK
+        // Try to get current user ID (Optional for profile view but needed for block check)
+        let requesterId = null;
+        try {
+            const authHeader = req.headers.authorization;
+            const token = authHeader && authHeader.split(' ')[1];
+            if (token) {
+                const decoded = jwt.verify(token, JWT_SECRET) as any;
+                requesterId = decoded.userId;
+            }
+        } catch (err) { }
+
+        if (requesterId) {
+            const blockExists = await db.collection('blocked_users').findOne({
+                $or: [
+                    { userId: new ObjectId(requesterId), blockedUserId: user._id },
+                    { userId: user._id, blockedUserId: new ObjectId(requesterId) }
+                ]
+            });
+            if (blockExists) {
+                return res.status(404).json({ message: 'User not found' });
+            }
         }
 
         // Use avatar_url or avatar, with fallback - check all possible field names
@@ -957,14 +963,14 @@ router.get('/:username', async (req: any, res: Response) => {
             isMutualFollow = isFollowing && followsBack;
         }
 
-        // Get follower/following counts (ACCEPTED ONLY)
+        // Get follower/following counts (ACTIVE ONLY)
         const followersCount = await db.collection('follows').countDocuments({
             following_id: user._id,
-            status: 'accepted'
+            status: 'active'
         })
         const followingCount = await db.collection('follows').countDocuments({
             follower_id: user._id,
-            status: 'accepted'
+            status: 'active'
         })
 
         // Get actual posts count from posts collection
@@ -972,7 +978,7 @@ router.get('/:username', async (req: any, res: Response) => {
             user_id: user._id,
             is_archived: { $ne: true }
         })
-const avatarUrl = user.avatar_url || user.avatar || user.profile_picture || user.profileImage || 'https://ui-avatars.com/api/?name=User&background=random';
+        const avatarUrl = user.avatar_url || user.avatar || user.profile_picture || user.profileImage || 'https://ui-avatars.com/api/?name=User&background=random';
 
         return res.json({
             _id: user._id.toString(),
@@ -1080,7 +1086,7 @@ router.put('/profile', authenticate, async (req: any, res: Response) => {
 
         if (!user) {
             console.error('[Backend] User not found with either ObjectId or string ID');
-return res.status(404).json({ message: 'User not found' })
+            return res.status(404).json({ message: 'User not found' })
         }
 
         // Handle username change with 15-day restriction
@@ -1090,7 +1096,7 @@ return res.status(404).json({ message: 'User not found' })
             // Validate username format - only letters, numbers, underscore, and period
             const usernameRegex = /^[a-zA-Z0-9_.]+$/;
             if (!usernameRegex.test(username)) {
-return res.status(400).json({
+                return res.status(400).json({
                     message: 'Username can only contain letters, numbers, underscores (_), and periods (.)',
                     error: 'INVALID_USERNAME_FORMAT'
                 })
@@ -1098,7 +1104,7 @@ return res.status(400).json({
 
             // Check username length (3-30 characters)
             if (username.length < 3 || username.length > 30) {
-return res.status(400).json({
+                return res.status(400).json({
                     message: 'Username must be between 3 and 30 characters',
                     error: 'INVALID_USERNAME_LENGTH'
                 })
@@ -1135,7 +1141,7 @@ return res.status(400).json({
                         }
                     }
                 }
-return res.status(400).json({
+                return res.status(400).json({
                     message: 'Username is already taken',
                     error: 'USERNAME_TAKEN',
                     suggestions: suggestions.slice(0, 5) // Return up to 5 suggestions
@@ -1150,7 +1156,7 @@ return res.status(400).json({
 
             if (daysSinceLastChange < 15) {
                 const daysRemaining = Math.ceil(15 - daysSinceLastChange);
-return res.status(400).json({
+                return res.status(400).json({
                     message: `You can only change your username once every 15 days. Please wait ${daysRemaining} more day${daysRemaining > 1 ? 's' : ''}.`,
                     error: 'USERNAME_CHANGE_TOO_SOON',
                     daysRemaining
@@ -1178,7 +1184,7 @@ return res.status(400).json({
 
             if (!user) {
                 console.error('[Backend] User not found after update');
-return res.status(500).json({ message: 'Failed to retrieve updated user' })
+                return res.status(500).json({ message: 'Failed to retrieve updated user' })
             }
 
             console.log('[Backend] Updated user data:', {
@@ -1192,7 +1198,7 @@ return res.status(500).json({ message: 'Failed to retrieve updated user' })
                 website: user?.website,
                 location: user?.location
             });
-// Add timestamp to avatar URLs for cache busting
+            // Add timestamp to avatar URLs for cache busting
             const timestamp = Date.now();
             const avatarUrl = user?.avatar_url || user?.avatar || 'https://ui-avatars.com/api/?name=User&background=random';
             const avatarWithTimestamp = avatarUrl !== 'https://ui-avatars.com/api/?name=User&background=random'
@@ -1220,7 +1226,7 @@ return res.status(500).json({ message: 'Failed to retrieve updated user' })
             return res.json(responseData);
         } catch (updateError) {
             console.error('[Backend] Error updating user:', updateError);
-return res.status(500).json({ message: 'Failed to update profile' })
+            return res.status(500).json({ message: 'Failed to update profile' })
         }
     } catch (error: any) {
         console.error('Update profile error:', error)
@@ -1234,12 +1240,12 @@ router.get('/sent-requests', authenticate, async (req: any, res: Response) => {
         const currentUserId = req.userId
         const db = await getDatabase()
 
-        const requests = await db.collection('followRequests').find({
-            requester_id: new ObjectId(currentUserId),
+        const requests = await db.collection('follows').find({
+            follower_id: new ObjectId(currentUserId),
             status: 'pending'
         }).toArray()
 
-        const requestedIds = requests.map(r => r.requested_id.toString())
+        const requestedIds = requests.map(r => r.following_id.toString())
 
         return res.json({
             success: true,
@@ -1271,12 +1277,13 @@ router.get('/search', async (req: Request, res: Response) => {
                 { name: { $regex: q, $options: 'i' } }
             ]
         }).limit(20).toArray()
-return res.json(users.map(user => ({
+        return res.json(users.map(user => ({
             id: user._id.toString(),
             username: user.username,
             name: user.name || '',
             avatar: user.avatar || 'https://ui-avatars.com/api/?name=User&background=random',
-            verified: user.verified || false
+            verified: user.verified || false,
+            is_private: user.is_private || false
         })))
     } catch (error: any) {
         console.error('Search users error:', error)
@@ -1290,199 +1297,59 @@ router.post('/:userId/follow', authenticate, async (req: any, res: Response) => 
         const currentUserId = req.userId
         const { userId } = req.params
 
-        console.log('[FOLLOW] Request:', { currentUserId, userId });
-
         if (currentUserId === userId) {
             return res.status(400).json({ message: 'Cannot follow yourself' })
         }
 
         const db = await getDatabase()
 
-        // Get target user to check if private
-        const targetUser = await db.collection('users').findOne({ _id: new ObjectId(userId) })
-        if (!targetUser) {
-return res.status(404).json({ message: 'User not found' })
-        }
-
-        const isPrivate = targetUser.is_private || false
-        console.log('[FOLLOW] Target user is private:', isPrivate);
-
-        // Check if already following (use snake_case)
+        // Check current follow status
         const existingFollow = await db.collection('follows').findOne({
             follower_id: new ObjectId(currentUserId),
             following_id: new ObjectId(userId)
         })
 
         if (existingFollow) {
-            // UNFOLLOW - same for both private and public accounts
-            console.log('[FOLLOW] Unfollowing user');
-            await db.collection('follows').deleteOne({
-                follower_id: new ObjectId(currentUserId),
-                following_id: new ObjectId(userId)
-            })
+            // UNFOLLOW
+            await UserService.unfollowUser(currentUserId, userId);
 
-            // Remove any pending follow request if exists
-            await db.collection('followRequests').deleteMany({
-                requester_id: new ObjectId(currentUserId),
-                requested_id: new ObjectId(userId)
-            })
-
-            // Update user document counts
-            await db.collection('users').updateOne(
-                { _id: new ObjectId(userId) },
-                { $inc: { followers_count: -1 } }
-            )
-            await db.collection('users').updateOne(
-                { _id: new ObjectId(currentUserId) },
-                { $inc: { following_count: -1 } }
-            )
-
-            // Delete follow notification (non-blocking)
-            setImmediate(async () => {
-                try {
-                    const { deleteFollowNotification } = require('../lib/notifications');
-                    await deleteFollowNotification(userId, currentUserId);
-                } catch (err) {
-                    console.error('[UNFOLLOW] Notification deletion error:', err);
-                }
-            })
-
-            // Get updated count (ACCEPTED ONLY) - use snake_case
-            const followerCount = await db.collection('follows').countDocuments({
-                following_id: new ObjectId(userId),
-                status: 'accepted'
-            })
-// Invalidate profile cache for both users
-            await cacheInvalidate(`profile:*`)
+            // Get updated count
+            const targetUser = await db.collection('users').findOne({ _id: new ObjectId(userId) });
 
             return res.json({
                 message: 'Unfollowed successfully',
                 isFollowing: false,
                 isPending: false,
                 followRequestStatus: 'none',
-                followerCount,
+                followerCount: targetUser?.followers_count || 0,
                 isMutualFollow: false
             })
         } else {
-            // CHECK FOR EXISTING FOLLOW REQUEST
-            const existingRequest = await db.collection('followRequests').findOne({
-                requester_id: new ObjectId(currentUserId),
-                requested_id: new ObjectId(userId),
-                status: 'pending'
+            // FOLLOW
+            const result = await UserService.followUser(currentUserId, userId);
+
+            // Get target user for updated counts
+            const targetUser = await db.collection('users').findOne({ _id: new ObjectId(userId) });
+
+            // Check if this creates a mutual follow
+            const reverseFollow = await db.collection('follows').findOne({
+                follower_id: new ObjectId(userId),
+                following_id: new ObjectId(currentUserId),
+                status: 'active'
             })
 
-            if (existingRequest) {
-                // CANCEL PENDING REQUEST
-                console.log('[FOLLOW] Canceling pending follow request');
-                await db.collection('followRequests').deleteOne({
-                    _id: existingRequest._id
-                })
-// Invalidate profile cache
-                await cacheInvalidate(`profile:*`)
-
-                return res.json({
-                    message: 'Follow request canceled',
-                    isFollowing: false,
-                    isPending: false,
-                    followRequestStatus: 'none',
-                    followerCount: targetUser.followers_count || 0,
-                    isMutualFollow: false
-                })
-            }
-
-            // NEW FOLLOW/REQUEST
-            if (isPrivate) {
-                // PRIVATE ACCOUNT - Create follow request
-                console.log('[FOLLOW] Creating follow request for private account');
-
-                await db.collection('followRequests').insertOne({
-                    requester_id: new ObjectId(currentUserId),
-                    requested_id: new ObjectId(userId),
-                    status: 'pending',
-                    created_at: new Date(),
-                    updated_at: new Date()
-                })
-// Send notification (non-blocking)
-                setImmediate(async () => {
-                    try {
-                        const { createNotification } = require('../lib/notifications');
-                        await createNotification({
-                            userId: userId,
-                            actorId: currentUserId,
-                            type: 'follow_request',
-                            content: 'requested to follow you'
-                        });
-                    } catch (err) {
-                        console.error('[FOLLOW] Notification error:', err);
-                    }
-                })
-
-                return res.json({
-                    message: 'Follow request sent',
-                    isFollowing: false,
-                    isPending: true,
-                    followRequestStatus: 'pending',
-                    followerCount: targetUser.followers_count || 0,
-                    isMutualFollow: false
-                })
-            } else {
-                // PUBLIC ACCOUNT - Instant follow (use snake_case)
-                console.log('[FOLLOW] Following public account instantly');
-
-                await db.collection('follows').insertOne({
-                    follower_id: new ObjectId(currentUserId),
-                    following_id: new ObjectId(userId),
-                    status: 'accepted',
-                    created_at: new Date()
-                })
-
-                // Update user document counts
-                await db.collection('users').updateOne(
-                    { _id: new ObjectId(userId) },
-                    { $inc: { followers_count: 1 } }
-                )
-                await db.collection('users').updateOne(
-                    { _id: new ObjectId(currentUserId) },
-                    { $inc: { following_count: 1 } }
-                )
-
-                // Get updated count (ACCEPTED ONLY) - use snake_case
-                const followerCount = await db.collection('follows').countDocuments({
-                    following_id: new ObjectId(userId),
-                    status: 'accepted'
-                })
-
-                // Check if this creates a mutual follow (use snake_case)
-                const reverseFollow = await db.collection('follows').findOne({
-                    follower_id: new ObjectId(userId),
-                    following_id: new ObjectId(currentUserId)
-                })
-// Invalidate profile cache
-                await cacheInvalidate(`profile:*`)
-
-                // Create notification (non-blocking)
-                setImmediate(async () => {
-                    try {
-                        const { notifyFollow } = require('../lib/notifications');
-                        await notifyFollow(userId, currentUserId);
-                    } catch (err) {
-                        console.error('[FOLLOW] Notification error:', err);
-                    }
-                })
-
-                return res.json({
-                    message: 'Followed successfully',
-                    isFollowing: true,
-                    isPending: false,
-                    followRequestStatus: 'approved',
-                    followerCount,
-                    isMutualFollow: !!reverseFollow
-                })
-            }
+            return res.json({
+                message: result.status === 'pending' ? 'Follow request sent' : 'Followed successfully',
+                isFollowing: result.is_following,
+                isPending: result.is_pending,
+                followRequestStatus: result.status === 'active' ? 'approved' : 'pending',
+                followerCount: targetUser?.followers_count || 0,
+                isMutualFollow: !!reverseFollow
+            })
         }
     } catch (error: any) {
         console.error('Follow error:', error)
-        return res.status(500).json({ message: error.message || 'Failed to follow user' })
+        return res.status(error.status || 500).json({ message: error.message || 'Failed to follow user' })
     }
 })
 
@@ -1507,12 +1374,12 @@ router.get('/:userId/follow-status', authenticate, async (req: any, res: Respons
         })
 
         // Check for pending follow request
-        const pendingRequest = await db.collection('followRequests').findOne({
-            requester_id: new ObjectId(currentUserId),
-            requested_id: new ObjectId(userId),
+        const pendingRequest = await db.collection('follows').findOne({
+            follower_id: new ObjectId(currentUserId),
+            following_id: new ObjectId(userId),
             status: 'pending'
         })
-return res.json({
+        return res.json({
             isFollowing: !!isFollowing,
             isPending: !!pendingRequest,
             followsBack: !!followsBack,
@@ -1520,7 +1387,73 @@ return res.json({
         })
     } catch (error: any) {
         console.error('Follow status error:', error)
-        return res.status(500).json({ message: error.message || 'Failed to check follow status' })
+        return res.status(error.status || 500).json({ message: error.message || 'Failed to check follow status' })
+    }
+})
+
+// GET /api/users/follow-requests - Get pending follow requests
+router.get('/follow-requests', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.userId
+        const db = await getDatabase()
+
+        const requests = await db.collection('follows').aggregate([
+            { $match: { following_id: new ObjectId(userId), status: 'pending' } },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'follower_id',
+                    foreignField: '_id',
+                    as: 'user'
+                }
+            },
+            { $unwind: '$user' },
+            {
+                $project: {
+                    _id: 1,
+                    follower_id: 1,
+                    created_at: 1,
+                    user: {
+                        _id: '$user._id',
+                        username: '$user.username',
+                        fullName: { $ifNull: ['$user.full_name', '$user.name'] },
+                        avatar: { $ifNull: ['$user.avatar_url', '$user.avatar'] }
+                    }
+                }
+            }
+        ]).toArray()
+
+        return res.json({ success: true, data: requests })
+    } catch (error: any) {
+        return res.status(500).json({ success: false, message: error.message })
+    }
+})
+
+// POST /api/users/follow-requests/:followerId/accept - Accept follow request
+router.post('/follow-requests/:followerId/accept', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.userId
+        const { followerId } = req.params
+
+        await UserService.acceptFollowRequest(userId, followerId)
+
+        return res.json({ success: true, message: 'Follow request accepted' })
+    } catch (error: any) {
+        return res.status(error.status || 500).json({ success: false, message: error.message })
+    }
+})
+
+// POST /api/users/follow-requests/:followerId/reject - Reject follow request
+router.post('/follow-requests/:followerId/reject', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.userId
+        const { followerId } = req.params
+
+        await UserService.rejectFollowRequest(userId, followerId)
+
+        return res.json({ success: true, message: 'Follow request rejected' })
+    } catch (error: any) {
+        return res.status(error.status || 500).json({ success: false, message: error.message })
     }
 })
 
@@ -1547,7 +1480,7 @@ router.delete('/:userId/follow', authenticate, async (req: any, res: Response) =
             { _id: new ObjectId(userId) },
             { $inc: { followers: -1 } }
         )
-return res.json({ message: 'Unfollowed successfully' })
+        return res.json({ message: 'Unfollowed successfully' })
     } catch (error: any) {
         console.error('Unfollow error:', error)
         return res.status(500).json({ message: error.message || 'Failed to unfollow user' })
@@ -1574,7 +1507,7 @@ router.get('/:userId/followers', authenticate, async (req: any, res: Response) =
         // Check if target user is private
         const targetUser = await db.collection('users').findOne({ _id: new ObjectId(userId) })
         if (!targetUser) {
-return res.status(404).json({ message: 'User not found' })
+            return res.status(404).json({ message: 'User not found' })
         }
 
         const isPrivate = targetUser.is_private || false
@@ -1594,7 +1527,7 @@ return res.status(404).json({ message: 'User not found' })
         // If private account, check if current user is following
         if (isPrivate && !isOwnProfile) {
             if (!currentUserId) {
-return res.status(403).json({ message: 'This account is private' })
+                return res.status(403).json({ message: 'This account is private' })
             }
 
             const isFollowing = await db.collection('follows').findOne({
@@ -1604,7 +1537,7 @@ return res.status(403).json({ message: 'This account is private' })
             })
 
             if (!isFollowing) {
-return res.status(403).json({ message: 'This account is private' })
+                return res.status(403).json({ message: 'This account is private' })
             }
         }
 
@@ -1629,7 +1562,7 @@ return res.status(403).json({ message: 'This account is private' })
         }).toArray() : []
 
         const followingIds = new Set(currentUserFollowing.map(f => f.following_id.toString()))
-const result = followers.map(user => ({
+        const result = followers.map(user => ({
             id: user._id.toString(),
             username: user.username,
             full_name: user.name || user.full_name || '',
@@ -1677,7 +1610,7 @@ router.get('/:userId/followers/debug', async (req: Request, res: Response) => {
         const userProfile = await db.collection('users').findOne({
             _id: new ObjectId(userId)
         })
-return res.json({
+        return res.json({
             userId,
             followRecordsCount: follows.length,
             followRecords: follows.map(f => ({
@@ -1712,7 +1645,7 @@ router.get('/:userId/following', authenticate, async (req: any, res: Response) =
         // Check if target user is private
         const targetUser = await db.collection('users').findOne({ _id: new ObjectId(userId) })
         if (!targetUser) {
-return res.status(404).json({ message: 'User not found' })
+            return res.status(404).json({ message: 'User not found' })
         }
 
         const isPrivate = targetUser.is_private || false
@@ -1732,7 +1665,7 @@ return res.status(404).json({ message: 'User not found' })
         // If private account, check if current user is following
         if (isPrivate && !isOwnProfile) {
             if (!currentUserId) {
-return res.status(403).json({ message: 'This account is private' })
+                return res.status(403).json({ message: 'This account is private' })
             }
 
             const isFollowing = await db.collection('follows').findOne({
@@ -1742,7 +1675,7 @@ return res.status(403).json({ message: 'This account is private' })
             })
 
             if (!isFollowing) {
-return res.status(403).json({ message: 'This account is private' })
+                return res.status(403).json({ message: 'This account is private' })
             }
         }
 
@@ -1758,7 +1691,7 @@ return res.status(403).json({ message: 'This account is private' })
 
         // For following list, all users are already being followed (isFollowing = true)
         // This is because we're showing who the user is following
-const result = following.map(user => ({
+        const result = following.map(user => ({
             id: user._id.toString(),
             username: user.username,
             full_name: user.name || user.full_name || '',
@@ -1796,7 +1729,7 @@ router.delete('/delete', authenticate, async (req: any, res: Response) => {
                 { following_id: new ObjectId(userId) }
             ]
         })
-return res.json({ message: 'Account deleted successfully' })
+        return res.json({ message: 'Account deleted successfully' })
     } catch (error: any) {
         console.error('Delete account error:', error)
         return res.status(500).json({ message: error.message || 'Failed to delete account' })
@@ -1867,6 +1800,14 @@ router.post('/:userId/block', authenticate, async (req: any, res: Response) => {
                 createdAt: new Date()
             })
 
+            // 🛡️ Count active follows BEFORE deletion (for counter correction)
+            const activeFollows = await db.collection('follows').find({
+                $or: [
+                    { follower_id: new ObjectId(currentUserId), following_id: targetUserId, status: 'active' },
+                    { follower_id: targetUserId, following_id: new ObjectId(currentUserId), status: 'active' }
+                ]
+            }).toArray();
+
             // Also unfollow automatically
             await db.collection('follows').deleteMany({
                 $or: [
@@ -1874,6 +1815,16 @@ router.post('/:userId/block', authenticate, async (req: any, res: Response) => {
                     { follower_id: targetUserId, following_id: new ObjectId(currentUserId) }
                 ]
             })
+
+            // Correct follower/following counts for each active follow removed
+            for (const f of activeFollows) {
+                await db.collection('users').updateOne(
+                    { _id: f.follower_id }, { $inc: { following_count: -1 } }
+                );
+                await db.collection('users').updateOne(
+                    { _id: f.following_id }, { $inc: { followers_count: -1 } }
+                );
+            }
 
             return res.json({ message: 'User blocked', isBlocked: true })
         }
@@ -1979,13 +1930,13 @@ router.get('/:userId/posts', async (req: any, res: Response) => {
             // It's a username, look up the user
             targetUser = await db.collection('users').findOne({ username: userId })
             if (!targetUser) {
-return res.status(404).json({ success: false, message: 'User not found' })
+                return res.status(404).json({ success: false, message: 'User not found' })
             }
             userObjectId = targetUser._id
         }
 
         if (!targetUser) {
-return res.status(404).json({ success: false, message: 'User not found' })
+            return res.status(404).json({ success: false, message: 'User not found' })
         }
 
         // Get current user ID from token (optional)
@@ -2015,7 +1966,7 @@ return res.status(404).json({ success: false, message: 'User not found' })
 
             if (!isFollowing) {
                 // Private account and not following - return empty
-return res.json({
+                return res.json({
                     success: true,
                     data: [],
                     pagination: {
@@ -2797,9 +2748,9 @@ router.post('/me/contact', authenticate, async (req: any, res: Response) => {
 
         if (email) {
             // Check if email is already taken
-            const existingUser = await db.collection('users').findOne({ 
-                email, 
-                _id: { $ne: new ObjectId(userId) } 
+            const existingUser = await db.collection('users').findOne({
+                email,
+                _id: { $ne: new ObjectId(userId) }
             });
             if (existingUser) {
                 return res.status(400).json({ message: 'Email is already taken' });
@@ -2808,10 +2759,10 @@ router.post('/me/contact', authenticate, async (req: any, res: Response) => {
         }
 
         if (phone) {
-             // Check if phone is already taken
-             const existingUser = await db.collection('users').findOne({ 
-                phone, 
-                _id: { $ne: new ObjectId(userId) } 
+            // Check if phone is already taken
+            const existingUser = await db.collection('users').findOne({
+                phone,
+                _id: { $ne: new ObjectId(userId) }
             });
             if (existingUser) {
                 return res.status(400).json({ message: 'Phone number is already taken' });
@@ -3149,17 +3100,24 @@ router.get('/:username/posts', authenticate, async (req: any, res: Response) => 
             is_archived: { $ne: true }
         }).sort({ created_at: -1 }).toArray()
 
-        // Fetch ONLY this user's reels (not deleted)
-        const reels = await db.collection('reels').find({
-            user_id: targetUser._id,
-            is_deleted: { $ne: true }
-        }).sort({ created_at: -1 }).toArray()
+        // 🛡️ ANONYMOUS MODE CHECK: Do NOT fetch reels if requester is in anonymous mode
+        const requester = await db.collection('users').findOne({ _id: new ObjectId(currentUserId) });
+        let reels: any[] = [];
+        
+        // STRICT: Anonymous users cannot see any reels, including other users' reels
+        if (!requester?.isAnonymousMode) {
+            // Fetch ONLY this user's reels (not deleted, not archived)
+            reels = await db.collection('reels').find({
+                user_id: targetUser._id,
+                is_deleted: { $ne: true },
+                is_archived: { $ne: true }
+            }).sort({ created_at: -1 }).toArray()
+        } else {
+            console.log('[PROFILE] Anonymous mode active: Reels hidden from profile view')
+        }
 
         console.log('[PROFILE POSTS] Posts found:', posts.length)
         console.log('[PROFILE POSTS] Reels found:', reels.length)
-        if (reels.length > 0) {
-            console.log('[PROFILE POSTS] First reel:', JSON.stringify(reels[0], null, 2))
-        }
 
         // Transform posts to include user info
         const transformedPosts = posts.map(post => ({
@@ -3192,16 +3150,15 @@ router.get('/:username/posts', authenticate, async (req: any, res: Response) => 
         // Transform reels to match post format
         const transformedReels = reels.map(reel => ({
             id: reel._id.toString(),
-            user: maskAnonymousUser({
+            user: {
                 id: targetUser._id.toString(),
                 username: targetUser.username,
                 avatar: targetUser.avatar_url || targetUser.avatar || 'https://ui-avatars.com/api/?name=User&background=random',
                 avatar_url: targetUser.avatar_url || targetUser.avatar || 'https://ui-avatars.com/api/?name=User&background=random',
                 verified: targetUser.is_verified || targetUser.verified || false,
                 is_verified: targetUser.is_verified || targetUser.verified || false,
-                badge_type: targetUser.badge_type || targetUser.verification_type || null,
-                is_anonymous: reel.is_anonymous
-            }),
+                badge_type: targetUser.badge_type || targetUser.verification_type || null
+            },
             content: reel.description || '',
             caption: reel.description || reel.title || '',
             media_type: 'video',

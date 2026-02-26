@@ -86,36 +86,36 @@ export class ReelService {
       const listKey = `reels:feed:${currentUserId}:list`;
       let fanOutReels: any[] = [];
       let fanOutIds: string[] = [];
-      
+
       if (currentUserId && page === 1) { // Only check fan-out on first page for speed
-          const listLen = await cacheLLen(listKey);
-          if (listLen > 0) {
-              const reelIds = await cacheLRange(listKey, 0, 9); // Get top 10 new reels
-              if (reelIds.length > 0) {
-                  fanOutIds = reelIds;
-                  const objectIds = reelIds.map(id => new ObjectId(id));
-                  
-                  // Fetch these specific reels efficiently
-                  const fetchedReels = await reelsCollection.aggregate([
-                      { $match: { _id: { $in: objectIds } } },
-                      {
-                          $lookup: {
-                              from: 'users',
-                              localField: 'user_id',
-                              foreignField: '_id',
-                              as: 'user'
-                          }
-                      },
-                      { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
-                      { $addFields: { is_following_creator: true, is_liked: false, likes_count: 0, comments_count: 0 } } // Simplified for speed
-                  ]).toArray();
-                  
-                  // Re-order to match list order
-                  const reelMap = new Map(fetchedReels.map(r => [r._id.toString(), r]));
-                  fanOutReels = reelIds.map(id => reelMap.get(id)).filter(r => r);
-                  logger.debug(`[Perf] Reels Fan-out Hit: ${fanOutReels.length} items`);
-              }
+        const listLen = await cacheLLen(listKey);
+        if (listLen > 0) {
+          const reelIds = await cacheLRange(listKey, 0, 9); // Get top 10 new reels
+          if (reelIds.length > 0) {
+            fanOutIds = reelIds;
+            const objectIds = reelIds.map(id => new ObjectId(id));
+
+            // Fetch these specific reels efficiently
+            const fetchedReels = await reelsCollection.aggregate([
+              { $match: { _id: { $in: objectIds } } },
+              {
+                $lookup: {
+                  from: 'users',
+                  localField: 'user_id',
+                  foreignField: '_id',
+                  as: 'user'
+                }
+              },
+              { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+              { $addFields: { is_following_creator: true, is_liked: false, likes_count: 0, comments_count: 0 } } // Simplified for speed
+            ]).toArray();
+
+            // Re-order to match list order
+            const reelMap = new Map(fetchedReels.map(r => [r._id.toString(), r]));
+            fanOutReels = reelIds.map(id => reelMap.get(id)).filter(r => r);
+            logger.debug(`[Perf] Reels Fan-out Hit: ${fanOutReels.length} items`);
           }
+        }
       }
 
       // 1. Get Social Graph (Who does the user follow?)
@@ -136,9 +136,19 @@ export class ReelService {
         is_public: true
       }
 
-      // Exclude own reels
+      // 🛡️ BLOCK FILTER + Exclude own reels
       if (currentUserId && ObjectId.isValid(currentUserId)) {
-        matchQuery.user_id = { $ne: new ObjectId(currentUserId) }
+        const blocks = await db.collection('blocked_users').find({
+          $or: [
+            { userId: new ObjectId(currentUserId) },
+            { blockedUserId: new ObjectId(currentUserId) }
+          ]
+        }).toArray();
+        const excludedUserIds = blocks.map(b =>
+          b.userId.toString() === currentUserId ? b.blockedUserId : b.userId
+        );
+        excludedUserIds.push(new ObjectId(currentUserId)); // Also exclude own reels
+        matchQuery.user_id = { $nin: excludedUserIds };
       }
 
       // 3. The "The Algorithm" Aggregation Pipeline
@@ -157,6 +167,16 @@ export class ReelService {
           }
         },
         { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+
+        // 🛡️ SHADOWBAN FILTER
+        {
+          $match: {
+            $or: [
+              { 'user.isShadowBanned': { $ne: true } },
+              { 'user._id': currentUserId ? new ObjectId(currentUserId) : null }
+            ]
+          }
+        },
 
         // Count Likes (Real-time signal)
         {
@@ -584,6 +604,38 @@ export class ReelService {
     // Get user info
     const usersCollection = db.collection('users')
     const user = await usersCollection.findOne({ _id: reel.user_id })
+    if (!user) throw errors.notFound("Creator not found");
+
+    // 🛡️ BLOCK CHECK
+    if (currentUserId) {
+      const blockExists = await db.collection('blocked_users').findOne({
+        $or: [
+          { userId: new ObjectId(currentUserId), blockedUserId: reel.user_id },
+          { userId: reel.user_id, blockedUserId: new ObjectId(currentUserId) }
+        ]
+      });
+      if (blockExists) {
+        throw errors.notFound("Reel not found")
+      }
+    }
+
+    // 🛡️ PRIVACY CHECK: Check if reel is accessible
+    if (user.is_private && reel.user_id.toString() !== currentUserId) {
+      if (!currentUserId) {
+        throw errors.forbidden("This account is private. Sign in to view.")
+      }
+
+      const Follow = (await import('../models/follow')).default;
+      const isFollowing = await Follow.findOne({
+        follower_id: new ObjectId(currentUserId),
+        following_id: reel.user_id,
+        status: 'active'
+      });
+
+      if (!isFollowing) {
+        throw errors.forbidden("This account is private. Follow them to see their reels.")
+      }
+    }
 
     return {
       id: reel._id.toString(),
@@ -617,6 +669,18 @@ export class ReelService {
     const db = await getDatabase()
     const likesCollection = db.collection('likes')
     const reelsCollection = db.collection('reels')
+
+    const reel = await reelsCollection.findOne({ _id: new ObjectId(reelId) }, { projection: { user_id: 1 } })
+    if (!reel) throw errors.notFound("Reel not found")
+
+    // 🛡️ BLOCK CHECK
+    const blockExists = await db.collection('blocked_users').findOne({
+      $or: [
+        { userId: new ObjectId(userId), blockedUserId: reel.user_id },
+        { userId: reel.user_id, blockedUserId: new ObjectId(userId) }
+      ]
+    })
+    if (blockExists) throw errors.notFound("Reel not found")
 
     const existingLike = await likesCollection.findOne({
       user_id: new ObjectId(userId),
@@ -669,6 +733,18 @@ export class ReelService {
   static async toggleLikeReel(userId: string, reelId: string): Promise<{ liked: boolean; likes: number }> {
     const db = await getDatabase();
     const likesCollection = db.collection('likes');
+    const reel = await db.collection('reels').findOne({ _id: new ObjectId(reelId) }, { projection: { user_id: 1 } })
+    if (!reel) throw errors.notFound("Reel not found")
+
+    // 🛡️ BLOCK CHECK
+    const blockExists = await db.collection('blocked_users').findOne({
+      $or: [
+        { userId: new ObjectId(userId), blockedUserId: reel.user_id },
+        { userId: reel.user_id, blockedUserId: new ObjectId(userId) }
+      ]
+    })
+    if (blockExists) throw errors.notFound("Reel not found")
+
     const existing = await likesCollection.findOne({ user_id: new ObjectId(userId), post_id: new ObjectId(reelId) });
     if (existing) {
       // unlike

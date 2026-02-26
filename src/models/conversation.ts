@@ -67,7 +67,7 @@ export interface IConversation extends Document {
   updated_at: Date;
 }
 
-export interface IConversationModel extends Model<IConversation> {}
+export interface IConversationModel extends Model<IConversation> { }
 
 const Conversation = (mongoose.models.Conversation as IConversationModel) || mongoose.model<IConversation, IConversationModel>('Conversation', conversationSchema);
 

@@ -27,6 +27,36 @@ router.get('/', authenticate, async (req: any, res: Response) => {
       query.is_read = false;
     }
 
+    // 🛡️ Exclude notifications from blocked users
+    const blocks = await db.collection('blocked_users').find({
+      $or: [
+        { userId: new ObjectId(userId) },
+        { blockedUserId: new ObjectId(userId) }
+      ]
+    }).toArray();
+    const excludedIds = blocks.map(b =>
+      b.userId.toString() === userId ? b.blockedUserId : b.userId
+    );
+    if (excludedIds.length > 0) {
+      query.actor_id = { $nin: excludedIds };
+    }
+
+    // 🛡️ ANONYMOUS MODE CHECK: Filter out reel-related notifications
+    const user = await db.collection('users').findOne({ _id: new ObjectId(userId) });
+    if (user?.isAnonymousMode) {
+      // Exclude all reel-related notifications
+      query.$and = query.$and || [];
+      query.$and.push({
+        $and: [
+          { 'data.contentType': { $ne: 'reel' } },
+          { 'data.type': { $nin: ['reel_like', 'reel_comment', 'reel_share', 'reel_mention'] } },
+          { type: { $nin: ['reel_like', 'reel_comment', 'reel_share', 'reel_mention'] } },
+          { content: { $not: /reel/i } }
+        ]
+      });
+      console.log('[Notifications] Anonymous mode: Filtering out reel notifications')
+    }
+
     // Get notifications with actor details
     const notifications = await db.collection('notifications')
       .aggregate([
@@ -51,17 +81,19 @@ router.get('/', authenticate, async (req: any, res: Response) => {
         {
           // Convert string postId from data to ObjectId for lookup
           $addFields: {
-             lookupPostId: {
-                $cond: {
-                  if: { $and: [
+            lookupPostId: {
+              $cond: {
+                if: {
+                  $and: [
                     { $ne: ["$data.postId", null] },
                     { $ne: ["$data.postId", undefined] },
                     { $ne: ["$data.postId", ""] }
-                  ]},
-                  then: { $toObjectId: "$data.postId" },
-                  else: null
-                }
-             }
+                  ]
+                },
+                then: { $toObjectId: "$data.postId" },
+                else: null
+              }
+            }
           }
         },
         {

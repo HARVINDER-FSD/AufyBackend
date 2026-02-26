@@ -55,7 +55,7 @@ class MemoryCache {
   async ltrim(key: string, start: number, stop: number) {
     const item = this.cache.get(key);
     if (!item || !Array.isArray(item.value)) return 'OK';
-    
+
     // Redis LTRIM keeps elements in range [start, stop]
     const end = stop === -1 ? undefined : stop + 1;
     item.value = item.value.slice(start, end);
@@ -73,15 +73,20 @@ const memoryCache = new MemoryCache();
 let useMemoryFallback = false;
 
 export const initRedis = () => {
-  if (redis) return redis;
+  if (redis && !useMemoryFallback) return redis;
+
+  // If user explicitly wants to bypass cloud during development
+  if (process.env.DISABLE_REDIS_CLOUD === 'true') {
+    console.log('🛡️  Offline Mode: Redis Cloud disabled, using In-Memory Cache');
+    useMemoryFallback = true;
+    return null;
+  }
 
   try {
-    // Check if using Upstash Redis (REST API)
     const upstashUrl = process.env.UPSTASH_REDIS_REST_URL;
     const upstashToken = process.env.UPSTASH_REDIS_REST_TOKEN;
 
-    // Prefer Upstash HTTP client if REST credentials are provided
-    if (upstashUrl && upstashToken) {
+    if (upstashUrl && upstashToken && !useMemoryFallback) {
       console.log('🔗 Connecting to Upstash Redis (HTTP)');
       redis = new UpstashRedis({
         url: upstashUrl,
@@ -89,11 +94,12 @@ export const initRedis = () => {
       });
       return redis;
     } else {
-      // Fallback to local Redis or standard TCP Redis
+      // TCP / Local Connection
       console.log('🔗 Connecting to local/TCP Redis');
+      // ... existing logic ...
 
       let client: Redis;
-      
+
       // Support REDIS_URL (Standard on Render/Heroku)
       if (process.env.REDIS_URL) {
         client = new Redis(process.env.REDIS_URL, {
@@ -165,16 +171,16 @@ export const getRedis = () => {
 export const cacheGet = async (key: string) => {
   try {
     if (useMemoryFallback) {
-        return memoryCache.get(key);
+      return memoryCache.get(key);
     }
     const redis = getRedis();
     if (!redis) {
-        useMemoryFallback = true;
-        return memoryCache.get(key);
+      useMemoryFallback = true;
+      return memoryCache.get(key);
     }
     // Check if it's ioredis (status property) and if it's connected
     if ((redis as any).status && (redis as any).status !== 'ready') {
-         return memoryCache.get(key);
+      return memoryCache.get(key);
     }
 
     try {
@@ -197,33 +203,33 @@ export const cacheGet = async (key: string) => {
 export const cacheSet = async (key: string, data: any, ttlSeconds: number = 3600) => {
   try {
     if (useMemoryFallback) {
-        return memoryCache.set(key, data, ttlSeconds);
+      return memoryCache.set(key, data, ttlSeconds);
     }
 
     const redis = getRedis();
     if (!redis) {
-         useMemoryFallback = true;
-         return memoryCache.set(key, data, ttlSeconds);
+      useMemoryFallback = true;
+      return memoryCache.set(key, data, ttlSeconds);
     }
 
     // Check if it's ioredis (status property) and if it's connected
     if ((redis as any).status && (redis as any).status !== 'ready') {
-        return memoryCache.set(key, data, ttlSeconds);
+      return memoryCache.set(key, data, ttlSeconds);
     }
 
     const value = JSON.stringify(data);
-    
+
     // Handle both ioredis and Upstash signatures
     // ioredis: set(key, value, 'EX', ttl)
     // Upstash: set(key, value, { ex: ttl }) or set(key, value, 'EX', ttl)
-    
+
     // We'll try the common denominator or check type
     if ((redis as any).setex) {
-        // ioredis often has setex
-         await (redis as any).setex(key, ttlSeconds, value);
+      // ioredis often has setex
+      await (redis as any).setex(key, ttlSeconds, value);
     } else {
-         // Upstash or generic
-         await redis.set(key, value, { ex: ttlSeconds } as any);
+      // Upstash or generic
+      await redis.set(key, value, { ex: ttlSeconds } as any);
     }
   } catch (error) {
     // console.warn('Cache set error:', error);
@@ -244,13 +250,11 @@ export const cacheDel = async (key: string) => {
 
 export const cacheInvalidate = async (pattern: string) => {
   const client = initRedis();
+
   if (!client || useMemoryFallback) {
-    // Memory cache doesn't support pattern matching easily without iterating
-    // For now, ignore or implement simple scan if critical
-    // Simple implementation:
+    // Memory cache fallback matching
     // @ts-ignore
     for (const key of memoryCache.cache.keys()) {
-      // Simple wildcard match
       const regex = new RegExp('^' + pattern.replace('*', '.*') + '$');
       if (regex.test(key)) {
         memoryCache.del(key);
@@ -260,9 +264,39 @@ export const cacheInvalidate = async (pattern: string) => {
   }
 
   try {
-    const keys = await client.keys(pattern);
-    if (keys.length > 0) {
-      await client.del(...keys);
+    // Check if it's IORedis (TCP)
+    if ((client as any).scanStream) {
+      return new Promise<void>((resolve, reject) => {
+        const stream = (client as any).scanStream({
+          match: pattern,
+          count: 100, // Process in batches of 100
+        });
+
+        stream.on('data', async (keys: string[]) => {
+          if (keys.length > 0) {
+            // Pause stream while deleting to prevent overwhelming
+            stream.pause();
+            await (client as any).del(...keys);
+            stream.resume();
+          }
+        });
+
+        stream.on('end', () => resolve());
+        stream.on('error', (err: Error) => reject(err));
+      });
+    } else {
+      // Upstash REST Client SCAN implementation
+      let cursor = "0";
+      do {
+        const [nextCursor, keys] = await (client as any).scan(cursor, {
+          match: pattern,
+          count: 100,
+        });
+        cursor = nextCursor;
+        if (keys && keys.length > 0) {
+          await (client as any).del(...keys);
+        }
+      } while (cursor !== "0");
     }
   } catch (error) {
     console.error('Redis invalidate error:', error);
@@ -301,15 +335,15 @@ export const cacheLTrim = async (key: string, start: number, stop: number) => {
 export const cacheLLen = async (key: string): Promise<number> => {
   try {
     if (useMemoryFallback) {
-        return memoryCache.llen(key);
+      return memoryCache.llen(key);
     }
     const redis = getRedis();
     if (!redis) {
-        useMemoryFallback = true;
-        return memoryCache.llen(key);
+      useMemoryFallback = true;
+      return memoryCache.llen(key);
     }
     if ((redis as any).status && (redis as any).status !== 'ready') {
-        return memoryCache.llen(key);
+      return memoryCache.llen(key);
     }
     return await redis.llen(key);
   } catch (error) {
@@ -321,15 +355,15 @@ export const cacheLLen = async (key: string): Promise<number> => {
 export const cacheLRange = async (key: string, start: number, stop: number): Promise<string[]> => {
   try {
     if (useMemoryFallback) {
-        return memoryCache.lrange(key, start, stop);
+      return memoryCache.lrange(key, start, stop);
     }
     const redis = getRedis();
     if (!redis) {
-        useMemoryFallback = true;
-        return memoryCache.lrange(key, start, stop);
+      useMemoryFallback = true;
+      return memoryCache.lrange(key, start, stop);
     }
     if ((redis as any).status && (redis as any).status !== 'ready') {
-        return memoryCache.lrange(key, start, stop);
+      return memoryCache.lrange(key, start, stop);
     }
     return await redis.lrange(key, start, stop);
   } catch (error) {

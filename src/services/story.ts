@@ -44,7 +44,7 @@ export class StoryService {
       media_type: storyDoc.media_type as "image" | "video",
       content: storyDoc.caption,
       expires_at: storyDoc.expires_at,
-      is_archived: storyDoc.is_deleted, 
+      is_archived: storyDoc.is_deleted,
       created_at: storyDoc.created_at,
       user: user ? {
         id: user._id.toString(),
@@ -84,11 +84,27 @@ export class StoryService {
       is_deleted: false
     }).sort({ created_at: -1 });
 
-    // Get user info (assumed same for all stories)
-    const user = await UserModel.findById(userId).select('username full_name avatar_url is_verified');
+    const user = await UserModel.findById(userId).select('username full_name avatar_url is_verified is_private is_active');
 
     if (!user || !user.is_active) {
-        return [];
+      return [];
+    }
+
+    // 🛡️ PRIVACY CHECK: Check if stories are accessible
+    if (user.is_private && userId !== currentUserId) {
+      if (!currentUserId) {
+        throw errors.forbidden("This account is private. Sign in to view.")
+      }
+
+      const isFollowing = await FollowModel.findOne({
+        follower_id: currentUserId,
+        following_id: userId,
+        status: 'active'
+      });
+
+      if (!isFollowing) {
+        throw errors.forbidden("This account is private. Follow them to see their stories.")
+      }
     }
 
     const stories = await Promise.all(
@@ -140,13 +156,13 @@ export class StoryService {
   // Get stories feed (stories from followed users)
   static async getStoriesFeed(userId: string): Promise<Array<{ user: any; stories: Story[] }>> {
     // Get following list
-    const following = await FollowModel.find({ 
-      follower_id: userId, 
-      status: 'active' 
+    const following = await FollowModel.find({
+      follower_id: userId,
+      status: 'active'
     }).select('following_id');
-    
+
     const followingIds = following.map(f => f.following_id);
-    
+
     // Also include own stories
     followingIds.push(new mongoose.Types.ObjectId(userId));
 
@@ -176,14 +192,14 @@ export class StoryService {
 
       // Stories already contain user info, so we can extract it from the first story
       const user = stories[0].user;
-      
+
       return {
         user: {
-            id: user!.id,
-            username: user!.username,
-            full_name: user!.full_name,
-            avatar_url: user!.avatar_url,
-            is_verified: user!.is_verified
+          id: user!.id,
+          username: user!.username,
+          full_name: user!.full_name,
+          avatar_url: user!.avatar_url,
+          is_verified: user!.is_verified
         },
         stories,
       }
@@ -197,9 +213,9 @@ export class StoryService {
   static async viewStory(storyId: string, viewerId: string): Promise<void> {
     // Check if story exists and is not expired
     const story = await StoryModel.findOne({
-        _id: storyId,
-        expires_at: { $gt: new Date() },
-        is_deleted: false
+      _id: storyId,
+      expires_at: { $gt: new Date() },
+      is_deleted: false
     });
 
     if (!story) {
@@ -213,19 +229,19 @@ export class StoryService {
 
     // Insert view record (ignore if already exists handled by unique index)
     try {
-        await StoryViewModel.create({
-            story_id: storyId,
-            viewer_id: viewerId
-        });
-        
-        // Increment view count on story
-        story.views_count = (story.views_count || 0) + 1;
-        await story.save();
-        
+      await StoryViewModel.create({
+        story_id: storyId,
+        viewer_id: viewerId
+      });
+
+      // Increment view count on story
+      story.views_count = (story.views_count || 0) + 1;
+      await story.save();
+
     } catch (error: any) {
-        if (error.code !== 11000) { // 11000 is duplicate key error
-            throw error;
-        }
+      if (error.code !== 11000) { // 11000 is duplicate key error
+        throw error;
+      }
     }
 
     // Clear cache
@@ -236,31 +252,31 @@ export class StoryService {
   static async getStoryViews(storyId: string, userId: string): Promise<Array<any>> {
     // Verify story ownership
     const story = await StoryModel.findById(storyId);
-    
+
     if (!story) {
-        throw errors.notFound("Story not found");
+      throw errors.notFound("Story not found");
     }
-    
+
     if (story.user_id.toString() !== userId) {
       throw errors.forbidden("You can only view your own story views")
     }
 
     const views = await StoryViewModel.find({ story_id: storyId })
-        .sort({ viewed_at: -1 })
-        .populate('viewer_id', 'username full_name avatar_url is_verified');
+      .sort({ viewed_at: -1 })
+      .populate('viewer_id', 'username full_name avatar_url is_verified');
 
     return views.map((view) => {
-        const viewer = view.viewer_id as any; // populated
-        if (!viewer) return null;
-        
-        return {
-            id: viewer._id.toString(),
-            username: viewer.username,
-            full_name: viewer.full_name,
-            avatar_url: viewer.avatar_url,
-            is_verified: viewer.is_verified,
-            viewed_at: view.viewed_at,
-        }
+      const viewer = view.viewer_id as any; // populated
+      if (!viewer) return null;
+
+      return {
+        id: viewer._id.toString(),
+        username: viewer.username,
+        full_name: viewer.full_name,
+        avatar_url: viewer.avatar_url,
+        is_verified: viewer.is_verified,
+        viewed_at: view.viewed_at,
+      }
     }).filter(v => v !== null);
   }
 
@@ -284,7 +300,7 @@ export class StoryService {
     // Delete media file from S3
     try {
       const urlParts = story.media_url.split("/")
-      const key = urlParts.slice(-3).join("/") 
+      const key = urlParts.slice(-3).join("/")
       await StorageService.deleteFile(key)
     } catch (error) {
       console.error("Failed to delete story media:", error)
@@ -298,11 +314,11 @@ export class StoryService {
   // Archive expired stories (cleanup job)
   static async archiveExpiredStories(): Promise<number> {
     const result = await StoryModel.updateMany(
-        { expires_at: { $lte: new Date() }, is_deleted: false },
-        { $set: { is_deleted: true } } // Assuming archive means soft delete here, or maybe we should leave them as expired?
-        // Original SQL: UPDATE stories SET is_archived = true WHERE expires_at <= NOW() AND is_archived = false
-        // My Model has is_deleted, not is_archived field.
-        // If I assume is_deleted == is_archived
+      { expires_at: { $lte: new Date() }, is_deleted: false },
+      { $set: { is_deleted: true } } // Assuming archive means soft delete here, or maybe we should leave them as expired?
+      // Original SQL: UPDATE stories SET is_archived = true WHERE expires_at <= NOW() AND is_archived = false
+      // My Model has is_deleted, not is_archived field.
+      // If I assume is_deleted == is_archived
     );
 
     // Clear all stories cache

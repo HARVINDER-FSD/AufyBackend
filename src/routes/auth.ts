@@ -64,6 +64,14 @@ router.post('/login', validate(loginSchema), async (req: Request, res: Response)
       })
     }
 
+    // Check if account is active
+    if (user.is_active === false) {
+      console.log('[LOGIN] Account is deactivated/banned');
+      return res.status(403).json({
+        message: "Your account has been deactivated or banned. Please contact support."
+      })
+    }
+
     console.log('[LOGIN] Has password:', !!user.password);
 
     // Compare passwords
@@ -142,9 +150,9 @@ router.post('/login', validate(loginSchema), async (req: Request, res: Response)
         bio: user.bio || "",
         avatar: avatarUrl,
         avatar_url: avatarUrl,
-        followers: user.followers || 0,
-        following: user.following || 0,
-        verified: user.verified || false
+        followers_count: user.followers_count || user.followers || 0,
+        following_count: user.following_count || user.following || 0,
+        is_verified: user.is_verified || user.verified || false
       },
       token: token
     })
@@ -237,42 +245,30 @@ router.post('/register', validate(registerSchema), async (req: Request, res: Res
       }
     }
 
-    // Hash password (8 rounds for faster mobile performance)
-    const hashedPassword = await bcrypt.hash(password, 8)
+    // Use Mongoose Model for registration to ensure hooks and validation run
+    const User = (await import('../models/user')).default;
 
-    // Create new user with proper avatar fields
+    // Create new user (Mongoose will handle password hashing via pre-save hook)
     const defaultAvatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(username)}&background=0095f6&color=fff&size=128`;
 
-    const result = await usersCollection.insertOne({
+    const newUser = new User({
       email,
-      password: hashedPassword,
+      password, // Plain password, will be hashed by pre-save hook in models/user.ts
       username,
-      name: full_name || username,
       full_name: full_name || username,
-      bio: "",
-      avatar: defaultAvatar,
       avatar_url: defaultAvatar,
-      followers: 0,
-      following: 0,
-      followers_count: 0,
-      following_count: 0,
-      verified: false,
-      is_verified: false,
       dob: dob ? new Date(dob) : null,
-      contentWarnings: 0,
-      isBlocked: false,
-      blockedUntil: null,
-      createdAt: new Date(),
-      updatedAt: new Date()
-    })
+    });
+
+    await newUser.save();
 
     // Generate JWT token (90 days - Instagram-style long session)
     const token = jwt.sign(
       {
-        userId: result.insertedId.toString(),
+        userId: newUser._id.toString(),
         email,
         username,
-        name: full_name || username
+        name: newUser.full_name
       },
       JWT_SECRET,
       { expiresIn: '90d' }
@@ -297,18 +293,18 @@ router.post('/register', validate(registerSchema), async (req: Request, res: Res
 
     return res.json({
       user: {
-        _id: result.insertedId.toString(),
-        id: result.insertedId.toString(),
+        _id: newUser._id.toString(),
+        id: newUser._id.toString(),
         username,
         email,
-        name: full_name || username,
-        fullName: full_name || username,
+        name: newUser.full_name,
+        fullName: newUser.full_name,
         bio: "",
         avatar: defaultAvatar,
         avatar_url: defaultAvatar,
-        followers: 0,
-        following: 0,
-        verified: false
+        followers_count: 0,
+        following_count: 0,
+        is_verified: false
       },
       token
     })

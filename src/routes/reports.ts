@@ -1,15 +1,27 @@
 import { Router, Response } from "express"
 import { ObjectId } from "mongodb"
 import { getDatabase } from "../lib/database"
-import { getWebSocketService } from "../lib/websocket"
-
+import { authenticateToken } from "../middleware/auth"
 const router = Router()
 
 // Create report
-router.post("/", async (req: any, res: Response) => {
+router.post("/", authenticateToken, async (req: any, res: Response) => {
   try {
     const { target_id, target_type, reason, description } = req.body
-    const userId = req.userId // Assuming middleware populates this, although authenticateToken is used
+    const userId = req.userId
+
+    const db = await getDatabase();
+
+    // 🛡️ ANONYMOUS MODE CHECK: Reels are not part of anonymous mode
+    if (target_type === 'reel') {
+      const user = await db.collection('users').findOne({ _id: new ObjectId(userId) });
+      if (user?.isAnonymousMode) {
+        return res.status(403).json({
+          success: false,
+          error: "Reels are not available in Anonymous Mode."
+        });
+      }
+    }
 
     if (!target_id || !target_type || !reason) {
       return res.status(400).json({
@@ -18,7 +30,6 @@ router.post("/", async (req: any, res: Response) => {
       })
     }
 
-    const db = await getDatabase();
     const reportData = {
       reporter_id: userId ? new ObjectId(userId) : null,
       target_id: new ObjectId(target_id),

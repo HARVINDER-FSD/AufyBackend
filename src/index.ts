@@ -76,6 +76,28 @@ const app = express()
 const httpServer = createServer(app)
 const PORT = parseInt(process.env.PORT || '8000')
 
+// --- STRICT SECURITY CHECK ---
+if (process.env.NODE_ENV === 'production') {
+  const REQUIRED_ENV = ['JWT_SECRET', 'MONGODB_URI', 'APP_SECRET', 'ENCRYPTION_KEY'];
+  const missing = REQUIRED_ENV.filter(key => !process.env[key] || process.env[key]?.includes('your-'));
+  if (missing.length > 0) {
+    console.error(`❌ FATAL ERROR: Missing or weak security environment variables: ${missing.join(', ')}`);
+    process.exit(1);
+  }
+}
+
+// Global Process Error Handlers - Prevents server from dying on hidden bugs
+process.on('uncaughtException', (err) => {
+  console.error('🚨 UNCAUGHT EXCEPTION! Shutting down gracefully...', err);
+  // Give it a second to log before exiting
+  setTimeout(() => process.exit(1), 1000);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('🚨 UNHANDLED REJECTION at:', promise, 'reason:', reason);
+});
+// -----------------------------
+
 // Initialize Firebase for push notifications
 initializeFirebase()
 
@@ -99,8 +121,8 @@ queueRedis.on('error', (err) => {
 let redisHealthy = false
 let redisLastCheck = 0
 
-const REDIS_CHECK_INTERVAL = 5000
-const REDIS_CHECK_TIMEOUT = 150
+const REDIS_CHECK_INTERVAL = 30000 // 30 seconds
+const REDIS_CHECK_TIMEOUT = 500 // Increase timeout for safety
 
 const redisClient = getRedis()
 
@@ -210,9 +232,9 @@ import {
   corsOptions
 } from './middleware/security'
 
-// Body Parsing (Must be BEFORE security middleware that accesses req.body)
-app.use(express.json({ limit: '50mb' }))
-app.use(express.urlencoded({ extended: true, limit: '50mb' }))
+// Body Parsing (Strict limits for security)
+app.use(express.json({ limit: '2mb' }))
+app.use(express.urlencoded({ extended: true, limit: '2mb' }))
 app.use(cookieParser())
 
 // Middleware

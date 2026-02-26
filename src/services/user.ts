@@ -6,7 +6,9 @@ import UserModel from "../models/user"
 import FollowModel from "../models/follow"
 import PostModel from "../models/post"
 import { NotificationService } from "./notification"
-import type { Model } from "mongoose"
+import mongoose, { Model } from "mongoose"
+
+const { ObjectId } = mongoose.Types;
 
 // Type assertions to fix Mongoose model type issues
 const User = UserModel as any as Model<any>
@@ -25,7 +27,7 @@ export class UserService {
     const offset = pagination.getOffset(validPage, validLimit)
 
     const searchRegex = new RegExp(searchTerm, 'i')
-    
+
     const searchFilter: any = {
       $or: [
         { username: searchRegex },
@@ -33,13 +35,13 @@ export class UserService {
       ],
       is_active: true
     }
-    
+
     if (currentUserId) {
       searchFilter._id = { $ne: currentUserId }
     }
 
     const total = await User.countDocuments(searchFilter).exec()
-    
+
     const users = await User.find(searchFilter)
       .select('id username email full_name bio avatar_url is_verified is_private created_at')
       .sort({ is_verified: -1, created_at: -1 })
@@ -60,7 +62,7 @@ export class UserService {
   // Update user profile
   static async updateProfile(userId: string, updates: Partial<User>) {
     const allowedFields = ["username", "full_name", "bio", "avatar_url", "phone", "website", "location", "is_private"]
-    
+
     // Only update allowed fields
     const filteredUpdates: any = {}
     Object.keys(updates).forEach((field) => {
@@ -68,22 +70,22 @@ export class UserService {
         filteredUpdates[field] = updates[field as keyof User]
       }
     })
-    
+
     // Update user in database
     await User.findByIdAndUpdate(userId, {
       ...filteredUpdates,
       updated_at: new Date()
     }).exec()
-    
+
     // Clear cache
     await cache.del(cacheKeys.user(userId))
-    
+
     return {
       success: true,
       message: 'Profile updated successfully'
     }
   }
-  
+
   // Get user profile
   static async getUserProfile(
     userId: string,
@@ -137,7 +139,7 @@ export class UserService {
         following_count: followingCount,
         posts_count: postsCount,
       }
-      
+
       // Cache base profile for 60 seconds
       await cache.set(cacheKey, profile, 60)
     }
@@ -145,14 +147,14 @@ export class UserService {
     // Check follow status if current user is provided (always real-time)
     if (currentUserId && currentUserId !== userId) {
       const [isFollowing, isFollowedBy] = await Promise.all([
-        Follow.findOne({ 
-          follower_id: currentUserId, 
-          following_id: userId 
+        Follow.findOne({
+          follower_id: currentUserId,
+          following_id: userId
         }).select('status').lean().exec() as Promise<any>,
-        
-        Follow.findOne({ 
-          follower_id: userId, 
-          following_id: currentUserId 
+
+        Follow.findOne({
+          follower_id: userId,
+          following_id: currentUserId
         }).select('status').lean().exec() as Promise<any>
       ])
 
@@ -162,14 +164,27 @@ export class UserService {
         is_followed_by: isFollowedBy?.status === "active"
       }
     }
-    
+
     return profile
   }
 
   // Follow user
-  static async followUser(followerId: string, followingId: string): Promise<void> {
+  static async followUser(followerId: string, followingId: string): Promise<any> {
     if (followerId === followingId) {
       throw errors.badRequest("Cannot follow yourself")
+    }
+
+    // 🛡️ BLOCK CHECK — prevent follow between blocked parties
+    const { getDatabase } = require('../lib/database');
+    const db_block = await getDatabase();
+    const blockExists = await db_block.collection('blocked_users').findOne({
+      $or: [
+        { userId: new ObjectId(followerId), blockedUserId: new ObjectId(followingId) },
+        { userId: new ObjectId(followingId), blockedUserId: new ObjectId(followerId) }
+      ]
+    });
+    if (blockExists) {
+      throw errors.notFound("User not found");
     }
 
     // Check if target user exists
@@ -181,9 +196,9 @@ export class UserService {
     const isPrivate = targetUser.is_private
 
     // Check if already following
-    const existingFollow: any = await Follow.findOne({ 
-      follower_id: followerId, 
-      following_id: followingId 
+    const existingFollow: any = await Follow.findOne({
+      follower_id: followerId,
+      following_id: followingId
     }).lean().exec()
 
     if (existingFollow) {
@@ -198,17 +213,8 @@ export class UserService {
     // Determine status based on privacy
     const status = isPrivate ? "pending" : "active"
 
-    // Insert or update follow record
-    await Follow.findOneAndUpdate(
-      { follower_id: followerId, following_id: followingId },
-      { 
-        follower_id: followerId, 
-        following_id: followingId, 
-        status,
-        created_at: new Date()
-      },
-      { upsert: true, new: true }
-    ).exec()
+    // Use the model's static method which handles everything (including counters via hooks)
+    await (Follow as any).followUser(followerId, followingId, status);
 
     // Clear cache
     await cache.del(cacheKeys.userFollowers(followingId))
@@ -222,16 +228,19 @@ export class UserService {
     } else {
       await NotificationService.notifyFollowRequest(followerId, followingId)
     }
+
+    return {
+      status,
+      is_following: status === 'active',
+      is_pending: status === 'pending'
+    }
   }
 
   // Unfollow user
   static async unfollowUser(followerId: string, followingId: string): Promise<void> {
-    const result = await Follow.deleteOne({ 
-      follower_id: followerId, 
-      following_id: followingId 
-    }).exec()
+    const result = await (Follow as any).unfollowUser(followerId, followingId);
 
-    if (result.deletedCount === 0) {
+    if (!result) {
       throw errors.notFound("Follow relationship not found")
     }
 
@@ -251,14 +260,14 @@ export class UserService {
     const { page: validPage, limit: validLimit } = pagination.validateParams(page.toString(), limit.toString())
     const offset = pagination.getOffset(validPage, validLimit)
 
-    const total = await Follow.countDocuments({ 
-      following_id: userId, 
-      status: 'active' 
+    const total = await Follow.countDocuments({
+      following_id: userId,
+      status: 'active'
     }).exec()
 
-    const follows = await Follow.find({ 
-      following_id: userId, 
-      status: 'active' 
+    const follows = await Follow.find({
+      following_id: userId,
+      status: 'active'
     })
       .sort({ created_at: -1 })
       .skip(offset)
@@ -267,9 +276,9 @@ export class UserService {
       .exec()
 
     const followerIds = follows.map((f: any) => f.follower_id)
-    const users = await User.find({ 
+    const users = await User.find({
       _id: { $in: followerIds },
-      is_active: true 
+      is_active: true
     })
       .select('id username full_name avatar_url is_verified')
       .lean()
@@ -301,14 +310,14 @@ export class UserService {
     const { page: validPage, limit: validLimit } = pagination.validateParams(page.toString(), limit.toString())
     const offset = pagination.getOffset(validPage, validLimit)
 
-    const total = await Follow.countDocuments({ 
-      follower_id: userId, 
-      status: 'active' 
+    const total = await Follow.countDocuments({
+      follower_id: userId,
+      status: 'active'
     }).exec()
 
-    const follows = await Follow.find({ 
-      follower_id: userId, 
-      status: 'active' 
+    const follows = await Follow.find({
+      follower_id: userId,
+      status: 'active'
     })
       .sort({ created_at: -1 })
       .skip(offset)
@@ -317,9 +326,9 @@ export class UserService {
       .exec()
 
     const followingIds = follows.map((f: any) => f.following_id)
-    const users = await User.find({ 
+    const users = await User.find({
       _id: { $in: followingIds },
-      is_active: true 
+      is_active: true
     })
       .select('id username full_name avatar_url is_verified')
       .lean()
@@ -344,37 +353,38 @@ export class UserService {
 
   // Accept follow request
   static async acceptFollowRequest(userId: string, followerId: string): Promise<void> {
-    const result = await Follow.updateOne(
-      { 
-        follower_id: followerId, 
-        following_id: userId, 
-        status: "pending" 
-      },
-      { status: "active" }
-    ).exec()
+    const follow = await Follow.findOne({
+      follower_id: new ObjectId(followerId),
+      following_id: new ObjectId(userId),
+      status: "pending"
+    }).exec();
 
-    if (result.matchedCount === 0) {
+    if (!follow) {
       throw errors.notFound("Follow request not found")
     }
+
+    follow.status = "active";
+    await follow.save();
+
+    // Send notification
+    await NotificationService.notifyFollow(followerId, userId);
 
     // Clear cache
     await cache.del(cacheKeys.userFollowers(userId))
     await cache.del(cacheKeys.userFollowing(followerId))
     await cache.del(`${cacheKeys.user(userId)}:profile`)
     await cache.del(`${cacheKeys.user(followerId)}:profile`)
-
-    // TODO: Send notification
   }
 
   // Reject follow request
   static async rejectFollowRequest(userId: string, followerId: string): Promise<void> {
-    const result = await Follow.deleteOne({ 
-      follower_id: followerId, 
-      following_id: userId, 
-      status: "pending" 
-    }).exec()
+    const result = await Follow.findOneAndDelete({
+      follower_id: new ObjectId(followerId),
+      following_id: new ObjectId(userId),
+      status: "pending"
+    }).exec();
 
-    if (result.deletedCount === 0) {
+    if (!result) {
       throw errors.notFound("Follow request not found")
     }
 
@@ -392,14 +402,14 @@ export class UserService {
     const { page: validPage, limit: validLimit } = pagination.validateParams(page.toString(), limit.toString())
     const offset = pagination.getOffset(validPage, validLimit)
 
-    const total = await Follow.countDocuments({ 
-      following_id: userId, 
-      status: 'pending' 
+    const total = await Follow.countDocuments({
+      following_id: new ObjectId(userId),
+      status: 'pending'
     }).exec()
 
-    const follows = await Follow.find({ 
-      following_id: userId, 
-      status: 'pending' 
+    const follows = await Follow.find({
+      following_id: new ObjectId(userId),
+      status: 'pending'
     })
       .sort({ created_at: -1 })
       .skip(offset)
@@ -408,9 +418,9 @@ export class UserService {
       .exec()
 
     const requesterIds = follows.map((f: any) => f.follower_id)
-    const users = await User.find({ 
+    const users = await User.find({
       _id: { $in: requesterIds },
-      is_active: true 
+      is_active: true
     })
       .select('id username full_name avatar_url is_verified')
       .lean()

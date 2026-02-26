@@ -6,11 +6,17 @@ import { maskAnonymousUser } from "../lib/anonymous-utils"
 import { addJob, QUEUE_NAMES, isQueueAvailable } from "../lib/queue"
 import { cacheGet, cacheSet, cacheDel, cacheLLen, cacheLRange } from "../lib/redis"
 import { logger } from "../middleware/logger"
+import { ModerationService } from './moderation'
 
 export class PostService {
   // Create new post
   static async createPost(userId: string, postData: CreatePostRequest): Promise<Post> {
     const { content, media_urls, media_type, location } = postData
+
+    // 🛡️ Content Moderation (AI/Keyword)
+    if (content) {
+      await ModerationService.checkContent(content, userId);
+    }
 
     // Validate post data
     if (!content && (!media_urls || media_urls.length === 0)) {
@@ -102,21 +108,23 @@ export class PostService {
 
       // Optimization: Get verified user IDs first to avoid expensive $lookup on all posts
       // This dramatically reduces the workload for the database
-      const verifiedUsers = await usersCollection.find(
+      // Inclusion: Verified Creators OR High-Reputation Strangers (150+)
+      const reputableUsers = await usersCollection.find(
         {
           $or: [
             { is_verified: true },
-            { badge_type: { $in: ['blue', 'gold', 'purple'] } }
+            { badge_type: { $in: ['blue', 'gold', 'purple'] } },
+            { anonymousReputation: { $gt: 150 } }
           ],
           is_active: true
         },
         { projection: { _id: 1 } }
       ).toArray()
 
-      const verifiedUserIds = verifiedUsers.map(u => u._id)
+      const allowedUserIds = reputableUsers.map(u => u._id)
 
-      // If no verified users, return empty result early
-      if (verifiedUserIds.length === 0) {
+      // If no reputable users, return empty result early
+      if (allowedUserIds.length === 0) {
         return {
           success: true,
           data: [],
@@ -124,10 +132,25 @@ export class PostService {
         }
       }
 
-      const matchQuery = {
+      // Get users to exclude (Blocked users)
+      const blocks = await db.collection('blocked_users').find({
+        $or: [
+          { userId: new ObjectId(currentUserId) },
+          { blockedUserId: new ObjectId(currentUserId) }
+        ]
+      }).toArray()
+
+      const excludedUserIds = blocks.map(b =>
+        b.userId.toString() === currentUserId ? b.blockedUserId : b.userId
+      )
+
+      const matchQuery: any = {
         is_archived: { $ne: true },
         is_deleted: { $ne: true },
-        user_id: { $in: verifiedUserIds }
+        user_id: {
+          $in: allowedUserIds,
+          $nin: excludedUserIds
+        }
       }
 
       // Get total count for pagination
@@ -137,13 +160,19 @@ export class PostService {
       const pipeline = [
         { $match: matchQuery },
         {
-          // Add a field for engagement score
+          // Add a field for engagement score with Freshness Boost
           $addFields: {
-            engagementScore: { $add: [{ $ifNull: ['$likes_count', 0] }, { $multiply: [{ $ifNull: ['$comments_count', 0] }, 2] }] } // Comments weighted x2
+            // Score = (Likes + Comments*2) - (Time Decay)
+            engagementScore: {
+              $add: [
+                { $add: [{ $ifNull: ['$likes_count', 0] }, { $multiply: [{ $ifNull: ['$comments_count', 0] }, 2] }] },
+                { $divide: [{ $subtract: [new Date(), '$created_at'] }, -3600000 / 5] } // 5 points per hour freshness
+              ]
+            }
           }
         },
         {
-          $sort: { engagementScore: -1, created_at: -1 } // Highest engagement first
+          $sort: { engagementScore: -1, created_at: -1 } // Highest engagement + fresh first
         },
         {
           $skip: skip
@@ -151,7 +180,6 @@ export class PostService {
         {
           $limit: limit
         },
-        // Lookup author only for the paginated results
         {
           $lookup: {
             from: 'users',
@@ -252,6 +280,38 @@ export class PostService {
 
     if (!user) {
       throw errors.notFound("User not found")
+    }
+
+    // 🛡️ BLOCK CHECK
+    if (currentUserId) {
+      const blockExists = await db.collection('blocked_users').findOne({
+        $or: [
+          { userId: new ObjectId(currentUserId), blockedUserId: post.user_id },
+          { userId: post.user_id, blockedUserId: new ObjectId(currentUserId) }
+        ]
+      });
+
+      if (blockExists) {
+        throw errors.notFound("Post not found")
+      }
+    }
+
+    // 🛡️ PRIVACY CHECK: Check if post is accessible
+    if (user.is_private && post.user_id.toString() !== currentUserId) {
+      if (!currentUserId) {
+        throw errors.forbidden("This account is private. Sign in to view.")
+      }
+
+      const Follow = (await import('../models/follow')).default;
+      const isFollowing = await Follow.findOne({
+        follower_id: new ObjectId(currentUserId),
+        following_id: post.user_id,
+        status: 'active'
+      });
+
+      if (!isFollowing) {
+        throw errors.forbidden("This account is private. Follow them to see their posts.")
+      }
     }
 
     // Get likes and comments count
@@ -633,7 +693,7 @@ export class PostService {
             { follower_id: new ObjectId(userId) },
             { followerId: new ObjectId(userId) }
           ],
-          status: 'accepted' // Only accepted follows
+          status: 'active' // Only active follows
         }).toArray()
 
         followingIds = follows.map(f => (f.following_id || f.followingId).toString())
@@ -646,8 +706,20 @@ export class PostService {
 
       const followingObjectIds = followingIds.map(id => new ObjectId(id))
 
+      // Get users to exclude (Blocked users)
+      const blocks = await db.collection('blocked_users').find({
+        $or: [
+          { userId: new ObjectId(userId) },
+          { blockedUserId: new ObjectId(userId) }
+        ]
+      }).toArray()
+      const excludedUserIds = blocks.map(b => b.userId.toString() === userId ? b.blockedUserId : b.userId)
+
       const matchQuery = {
-        user_id: { $in: followingObjectIds },
+        user_id: {
+          $in: followingObjectIds,
+          $nin: excludedUserIds
+        },
         is_archived: { $ne: true }
       }
 
@@ -690,7 +762,14 @@ export class PostService {
         ...post,
         author: user // Mimic the structure expected by enrichPosts or internal logic
       };
-    }).filter(post => post.author); // 🛡️ Filter out posts from shadow-banned users
+    }).filter(post => {
+      // 🛡️ SHADOWBAN FILTER
+      // A shadowbanned user's posts are only visible to themselves
+      if (!post.author) return false;
+      const isAuthor = post.author._id.toString() === userId;
+      if (post.author.isShadowBanned && !isAuthor) return false;
+      return true;
+    });
 
     // --- ALGORITHM INJECTION: Mix in "Mood" Suggestions ---
     // Only on first few pages to spark interest

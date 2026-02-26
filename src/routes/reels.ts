@@ -13,6 +13,23 @@ router.get("/", optionalAuth, async (req: any, res: Response) => {
   try {
     const { page, limit, username } = req.query
 
+    // 🛡️ ANONYMOUS MODE CHECK: Reels are not part of anonymous mode
+    if (req.user?.isAnonymousMode) {
+      console.log('[Reels Route] Anonymous mode active: Hiding reels');
+      return res.json({
+        success: true,
+        data: [],
+        pagination: {
+          page: 1,
+          limit: Number.parseInt(limit as string) || 20,
+          total: 0,
+          totalPages: 0,
+          hasNext: false,
+          hasPrev: false
+        }
+      });
+    }
+
     // If username is provided, get that user's reels
     if (username) {
       console.log('[Reels Route] Getting reels for username:', username)
@@ -30,8 +47,6 @@ router.get("/", optionalAuth, async (req: any, res: Response) => {
         })
       }
 
-      console.log('[Reels Route] Found user:', user.username, 'ID:', user._id.toString())
-
       // Get reels for this specific user
       const currentUserId = req.userId || req.user?._id?.toString() || req.user?.id
       const result = await ReelService.getUserReels(
@@ -41,19 +56,11 @@ router.get("/", optionalAuth, async (req: any, res: Response) => {
         Number.parseInt(limit as string) || 20,
       )
 
-      console.log('[Reels Route] Returning', result.data?.length || 0, 'reels for user', username)
       return res.json(result)
     }
 
     // Use req.userId which is set by optionalAuth middleware
     const currentUserId = req.userId || req.user?._id?.toString() || req.user?.id
-
-    console.log('[Reels Route] Auth debug:', {
-      hasToken: !!req.headers.authorization,
-      userId: req.userId,
-      userIdFromUser: req.user?._id?.toString(),
-      finalUserId: currentUserId
-    })
 
     const result = await ReelService.getReelsFeed(
       currentUserId,
@@ -91,6 +98,16 @@ router.get("/liked", authenticateToken, async (req: any, res: Response) => {
       console.log('[Reels/Liked] Converted to ObjectId:', userObjectId.toString())
     } catch (err) {
       console.error('[Reels/Liked] Failed to convert userId to ObjectId:', err)
+      return res.json({
+        success: true,
+        reels: [],
+        pagination: { page, limit, total: 0, totalPages: 0, hasNext: false, hasPrev: false }
+      })
+    }
+
+    // 🛡️ ANONYMOUS MODE CHECK
+    const user = await db.collection('users').findOne({ _id: userObjectId })
+    if (user?.isAnonymousMode) {
       return res.json({
         success: true,
         reels: [],
@@ -229,6 +246,16 @@ router.get("/saved", authenticateToken, async (req: any, res: Response) => {
       })
     }
 
+    // 🛡️ ANONYMOUS MODE CHECK
+    const user = await db.collection('users').findOne({ _id: userObjectId })
+    if (user?.isAnonymousMode) {
+      return res.json({
+        success: true,
+        reels: [],
+        pagination: { page, limit, total: 0, totalPages: 0, hasNext: false, hasPrev: false }
+      })
+    }
+
     console.log('[Reels/Saved] Using userObjectId:', userObjectId.toString())
 
     // Get total count of saved reels
@@ -341,6 +368,27 @@ router.get("/user/:userId", optionalAuth, async (req: any, res: Response) => {
     // Use req.userId which is set by optionalAuth middleware
     const currentUserId = req.userId || req.user?._id?.toString() || req.user?.id
 
+    // 🛡️ ANONYMOUS MODE CHECK
+    const { getDatabase } = require('../lib/database')
+    const { ObjectId } = require('mongodb')
+    const db = await getDatabase()
+    const user = await db.collection('users').findOne({ _id: new ObjectId(currentUserId) })
+
+    if (user?.isAnonymousMode) {
+      return res.json({
+        success: true,
+        data: [],
+        pagination: {
+          page: Number.parseInt(page as string) || 1,
+          limit: Number.parseInt(limit as string) || 20,
+          total: 0,
+          totalPages: 0,
+          hasNext: false,
+          hasPrev: false
+        }
+      })
+    }
+
     const result = await ReelService.getUserReels(
       userId,
       currentUserId,
@@ -361,6 +409,19 @@ router.get("/user/:userId", optionalAuth, async (req: any, res: Response) => {
 router.post("/", authenticateToken, validateAgeAndContent, async (req: any, res: Response) => {
   try {
     const { video_url, thumbnail_url, title, description, duration } = req.body
+
+    // 🛡️ ANONYMOUS MODE CHECK: Prevent creating reels in anonymous mode
+    const { getDatabase } = require('../lib/database')
+    const { ObjectId } = require('mongodb')
+    const db = await getDatabase()
+    const user = await db.collection('users').findOne({ _id: new ObjectId(req.userId) })
+
+    if (user?.isAnonymousMode) {
+      return res.status(403).json({
+        success: false,
+        error: "Reels cannot be created while in Anonymous Mode. Please turn off anonymous mode to post reels."
+      })
+    }
 
     const reel = await ReelService.createReel(req.userId!, {
       video_url,
@@ -387,6 +448,15 @@ router.post("/", authenticateToken, validateAgeAndContent, async (req: any, res:
 router.get("/:reelId", optionalAuth, async (req: any, res: Response) => {
   try {
     const { reelId } = req.params
+
+    // 🛡️ ANONYMOUS MODE CHECK
+    if (req.user?.isAnonymousMode) {
+      return res.status(403).json({
+        success: false,
+        error: "Reels are not available in Anonymous Mode."
+      })
+    }
+
     const reel = await ReelService.getReelById(reelId, req.user?.userId)
 
     res.json({
@@ -405,6 +475,20 @@ router.get("/:reelId", optionalAuth, async (req: any, res: Response) => {
 router.delete("/:reelId", authenticateToken, async (req: any, res: Response) => {
   try {
     const { reelId } = req.params
+
+    // 🛡️ ANONYMOUS MODE CHECK
+    const { getDatabase } = require('../lib/database')
+    const { ObjectId } = require('mongodb')
+    const db = await getDatabase()
+    const user = await db.collection('users').findOne({ _id: new ObjectId(req.userId) })
+
+    if (user?.isAnonymousMode) {
+      return res.status(403).json({
+        success: false,
+        error: "Managing reels is not allowed in Anonymous Mode."
+      })
+    }
+
     await ReelService.deleteReel(reelId, req.userId!)
 
     res.json({
@@ -423,8 +507,21 @@ router.delete("/:reelId", authenticateToken, async (req: any, res: Response) => 
 router.post("/:reelId/like", authenticateToken, likeLimiter, async (req: any, res: Response) => {
   try {
     const { reelId } = req.params
-    
-    // 🚀 ASYNC PROCESSING: Offload DB write to BullMQ
+
+    // �️ ANONYMOUS MODE CHECK
+    const { getDatabase } = require('../lib/database')
+    const { ObjectId } = require('mongodb')
+    const db = await getDatabase()
+    const user = await db.collection('users').findOne({ _id: new ObjectId(req.userId) })
+
+    if (user?.isAnonymousMode) {
+      return res.status(403).json({
+        success: false,
+        error: "Interacting with reels is not allowed in Anonymous Mode."
+      })
+    }
+
+    // �🚀 ASYNC PROCESSING: Offload DB write to BullMQ
     await addJob(QUEUE_NAMES.LIKES, 'like-reel', {
       userId: req.userId!,
       postId: reelId, // Worker expects 'postId'
@@ -449,7 +546,20 @@ router.post("/:reelId/like", authenticateToken, likeLimiter, async (req: any, re
 router.delete("/:reelId/like", authenticateToken, async (req: any, res: Response) => {
   try {
     const { reelId } = req.params
-    
+
+    // 🛡️ ANONYMOUS MODE CHECK
+    const { getDatabase } = require('../lib/database')
+    const { ObjectId } = require('mongodb')
+    const db = await getDatabase()
+    const user = await db.collection('users').findOne({ _id: new ObjectId(req.userId) })
+
+    if (user?.isAnonymousMode) {
+      return res.status(403).json({
+        success: false,
+        error: "Interacting with reels is not allowed in Anonymous Mode."
+      })
+    }
+
     // 🚀 ASYNC PROCESSING
     await addJob(QUEUE_NAMES.LIKES, 'unlike-reel', {
       userId: req.userId!,
@@ -474,6 +584,20 @@ router.delete("/:reelId/like", authenticateToken, async (req: any, res: Response
 router.post("/:reelId/share", authenticateToken, async (req: any, res: Response) => {
   try {
     const { reelId } = req.params
+
+    // 🛡️ ANONYMOUS MODE CHECK
+    const { getDatabase } = require('../lib/database')
+    const { ObjectId } = require('mongodb')
+    const db = await getDatabase()
+    const user = await db.collection('users').findOne({ _id: new ObjectId(req.userId) })
+
+    if (user?.isAnonymousMode) {
+      return res.status(403).json({
+        success: false,
+        error: "Sharing reels is not allowed in Anonymous Mode."
+      })
+    }
+
     await ReelService.incrementShareCount(reelId)
 
     res.json({
@@ -493,6 +617,14 @@ router.get("/:reelId/likes", optionalAuth, async (req: any, res: Response) => {
   try {
     const { reelId } = req.params
     const { page, limit } = req.query
+
+    // 🛡️ ANONYMOUS MODE CHECK
+    if (req.user?.isAnonymousMode) {
+      return res.status(403).json({
+        success: false,
+        error: "Reels are not available in Anonymous Mode."
+      })
+    }
 
     const result = await ReelService.getReelLikes(
       reelId,
@@ -514,6 +646,14 @@ router.get("/:reelId/comments", optionalAuth, async (req: any, res: Response) =>
   try {
     const { reelId } = req.params
     const { page, limit, sort } = req.query
+
+    // 🛡️ ANONYMOUS MODE CHECK
+    if (req.user?.isAnonymousMode) {
+      return res.status(403).json({
+        success: false,
+        error: "Reels are not available in Anonymous Mode."
+      })
+    }
 
     const result = await CommentService.getPostComments(
       reelId,
@@ -537,6 +677,19 @@ router.post("/:reelId/comments", authenticateToken, async (req: any, res: Respon
   try {
     const { reelId } = req.params
     const { content, parent_comment_id } = req.body
+
+    // 🛡️ ANONYMOUS MODE CHECK
+    const { getDatabase } = require('../lib/database')
+    const { ObjectId } = require('mongodb')
+    const db = await getDatabase()
+    const user = await db.collection('users').findOne({ _id: new ObjectId(req.userId) })
+
+    if (user?.isAnonymousMode) {
+      return res.status(403).json({
+        success: false,
+        error: "Commenting on reels is not allowed in Anonymous Mode."
+      })
+    }
 
     const comment = await CommentService.createComment(req.userId!, reelId, {
       content,

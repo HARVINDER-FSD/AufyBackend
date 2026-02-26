@@ -1,21 +1,23 @@
 import { Router, Request } from "express"
 import { PostService } from "../services/post"
 import { ReelService } from "../services/reel"
-import { authenticateToken } from "../middleware/auth"
+import { authenticateToken, optionalAuth } from "../middleware/auth"
 import { getDatabase } from "../lib/database"
+import { ObjectId } from "mongodb"
 
 // Extend Express Request type
 interface AuthRequest extends Request {
   user?: {
     userId: string;
     username: string;
+    isAnonymousMode?: boolean;
   };
 }
 
 const router = Router()
 
 // Get trending posts
-router.get("/trending", async (req, res) => {
+router.get("/trending", optionalAuth, async (req: any, res) => {
   try {
     const { category = 'all', limit = 20 } = req.query
     const limitNum = Number.parseInt(limit as string) || 20
@@ -85,49 +87,66 @@ router.get("/trending", async (req, res) => {
       ])
       .toArray()
 
-    // Get trending reels
-    const reels = await db.collection('reels')
-      .aggregate([
-        {
-          $match: {
-            is_archived: { $ne: true },
-            created_at: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
-          }
-        },
-        {
-          $lookup: {
-            from: 'users',
-            localField: 'user_id',
-            foreignField: '_id',
-            as: 'user'
-          }
-        },
-        {
-          $unwind: { path: '$user', preserveNullAndEmptyArrays: true }
-        },
-        {
-          $addFields: {
-            engagement_score: {
-              $add: [
-                { $ifNull: ['$view_count', 0] },
-                { $multiply: [{ $ifNull: ['$likes_count', 0] }, 3] }
-              ]
+    const reels = []
+
+    // 🛡️ ANONYMOUS MODE CHECK: Reels are NOT available in anonymous mode
+    const currentUserId = req.userId || req.user?._id?.toString() || req.userId;
+    let isAnonymous = false;
+    if (currentUserId) {
+      const user = await db.collection('users').findOne({ _id: new ObjectId(currentUserId) });
+      isAnonymous = user?.isAnonymousMode === true;
+    }
+
+    // STRICT: Do NOT fetch reels if user is in anonymous mode
+    if (!isAnonymous) {
+      const reelsData = await db.collection('reels')
+        .aggregate([
+          {
+            $match: {
+              is_archived: { $ne: true },
+              is_deleted: { $ne: true },
+              is_public: true,
+              created_at: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+            }
+          },
+          {
+            $lookup: {
+              from: 'users',
+              localField: 'user_id',
+              foreignField: '_id',
+              as: 'user'
+            }
+          },
+          {
+            $unwind: { path: '$user', preserveNullAndEmptyArrays: true }
+          },
+          {
+            $addFields: {
+              engagement_score: {
+                $add: [
+                  { $ifNull: ['$view_count', 0] },
+                  { $multiply: [{ $ifNull: ['$likes_count', 0] }, 3] }
+                ]
+              }
+            }
+          },
+          {
+            $sort: { engagement_score: -1, created_at: -1 }
+          },
+          {
+            $limit: Math.floor(limitNum / 2) // Half for reels
+          },
+          {
+            $project: {
+              engagement_score: 0
             }
           }
-        },
-        {
-          $sort: { engagement_score: -1, created_at: -1 }
-        },
-        {
-          $limit: Math.floor(limitNum / 2) // Half for reels
-        },
-        {
-          $project: {
-            engagement_score: 0
-          }
-        }
-      ])
-      .toArray()
+        ])
+        .toArray()
+      reels.push(...reelsData)
+    } else {
+      console.log('[Explore] Anonymous mode active: Reels hidden from explore feed')
+    }
 
     res.json({
       success: true,
@@ -203,12 +222,33 @@ router.get("/suggested-users", async (req, res) => {
 })
 
 // Get explore feed
-router.get("/feed", authenticateToken, async (req: AuthRequest, res) => {
+router.get("/feed", authenticateToken, async (req: any, res) => {
   try {
     const { page, limit } = req.query
+    const userId = req.userId || req.user?.userId;
+
+    // 🛡️ ANONYMOUS MODE CHECK
+    const db = await getDatabase();
+    const { ObjectId } = require('mongodb');
+    const user = await db.collection('users').findOne({ _id: new ObjectId(userId) });
+
+    if (user?.isAnonymousMode) {
+      return res.json({
+        success: true,
+        data: [],
+        pagination: {
+          page: Number.parseInt(page as string) || 1,
+          limit: Number.parseInt(limit as string) || 20,
+          total: 0,
+          totalPages: 0,
+          hasNext: false,
+          hasPrev: false
+        }
+      });
+    }
 
     const result = await ReelService.getReelsFeed(
-      req.user?.userId,
+      userId,
       Number.parseInt(page as string) || 1,
       Number.parseInt(limit as string) || 20,
     )

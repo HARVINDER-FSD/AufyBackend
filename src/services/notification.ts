@@ -28,12 +28,14 @@ export class NotificationService {
     data?: any,
   ): Promise<Notification> {
     const notification = await NotificationModel.create({
-        user_id: userId,
-        type,
-        title,
-        content,
-        data,
-        is_read: false
+      user_id: userId,
+      actor_id: data?.actorId || data?.senderId || data?.followerId || data?.likedByUserId,
+      type,
+      title,
+      content,
+      is_anonymous: data?.isAnonymous || false,
+      data,
+      is_read: false
     });
 
     const notifObj: Notification = {
@@ -67,15 +69,15 @@ export class NotificationService {
 
     const query: any = { user_id: userId };
     if (unreadOnly) {
-        query.is_read = false;
+      query.is_read = false;
     }
 
     const total = await NotificationModel.countDocuments(query);
-    
+
     const docs = await NotificationModel.find(query)
-        .sort({ created_at: -1 })
-        .skip(skip)
-        .limit(validLimit);
+      .sort({ created_at: -1 })
+      .skip(skip)
+      .limit(validLimit);
 
     const notifications = docs.map((doc) => ({
       id: doc._id.toString(),
@@ -101,8 +103,8 @@ export class NotificationService {
   // Mark notification as read
   static async markAsRead(notificationId: string, userId: string): Promise<void> {
     const result = await NotificationModel.updateOne(
-        { _id: notificationId, user_id: userId },
-        { is_read: true }
+      { _id: notificationId, user_id: userId },
+      { is_read: true }
     );
 
     if (result.matchedCount === 0) {
@@ -113,8 +115,8 @@ export class NotificationService {
   // Mark all notifications as read
   static async markAllAsRead(userId: string): Promise<void> {
     await NotificationModel.updateMany(
-        { user_id: userId, is_read: false },
-        { is_read: true }
+      { user_id: userId, is_read: false },
+      { is_read: true }
     );
   }
 
@@ -131,53 +133,111 @@ export class NotificationService {
   static async notifyLike(postId: string, likedByUserId: string, postOwnerId: string): Promise<void> {
     if (likedByUserId === postOwnerId) return // Don't notify self
 
-    const user = await UserModel.findById(likedByUserId).select('username full_name');
+    const user = await UserModel.findById(likedByUserId).select('username full_name isAnonymousMode anonymousPersona');
     if (!user) return
 
-    const displayName = user.full_name || user.username
+    const isAnonymous = user.isAnonymousMode === true;
+    const displayName = isAnonymous ? (user.anonymousPersona?.name || "A Ghost User") : (user.full_name || user.username)
 
-    await this.createNotification(postOwnerId, "like", "New Like", `${displayName} liked your post`, {
-      postId,
-      likedByUserId,
-      likedByUsername: user.username,
-      likedByName: displayName,
-    })
+    await NotificationModel.create({
+      user_id: postOwnerId,
+      actor_id: likedByUserId,
+      type: "like",
+      title: "New Like",
+      content: `${displayName} liked your post`,
+      is_anonymous: isAnonymous,
+      data: {
+        postId,
+        likedByUserId,
+        likedByUsername: isAnonymous ? "anonymous" : user.username,
+        likedByName: displayName,
+      }
+    });
+
+    // Real-time
+    const wsService = getWebSocketService()
+    wsService.sendNotificationToUser(postOwnerId.toString(), {
+      type: 'like',
+      title: 'New Like',
+      content: `${displayName} liked your post`,
+      is_anonymous: isAnonymous,
+      data: { postId }
+    } as any)
   }
 
   static async notifyComment(postId: string, commentedByUserId: string, postOwnerId: string): Promise<void> {
     if (commentedByUserId === postOwnerId) return // Don't notify self
 
-    const user = await UserModel.findById(commentedByUserId).select('username full_name');
+    const user = await UserModel.findById(commentedByUserId).select('username full_name isAnonymousMode anonymousPersona');
     if (!user) return
 
-    const displayName = user.full_name || user.username
+    const isAnonymous = user.isAnonymousMode === true;
+    const displayName = isAnonymous ? (user.anonymousPersona?.name || "A Ghost User") : (user.full_name || user.username)
 
-    await this.createNotification(postOwnerId, "comment", "New Comment", `${displayName} commented on your post`, {
-      postId,
-      commentedByUserId,
-      commentedByUsername: user.username,
-      commentedByName: displayName,
-    })
+    await NotificationModel.create({
+      user_id: postOwnerId,
+      actor_id: commentedByUserId,
+      type: "comment",
+      title: "New Comment",
+      content: `${displayName} commented on your post`,
+      is_anonymous: isAnonymous,
+      data: {
+        postId,
+        commentedByUserId,
+        commentedByUsername: isAnonymous ? "anonymous" : user.username,
+        commentedByName: displayName,
+      }
+    });
+
+    // Real-time
+    const wsService = getWebSocketService()
+    wsService.sendNotificationToUser(postOwnerId.toString(), {
+      type: 'comment',
+      title: 'New Comment',
+      content: `${displayName} commented on your post`,
+      is_anonymous: isAnonymous,
+      data: { postId }
+    } as any)
   }
 
   static async notifyFollow(followerId: string, followingId: string): Promise<void> {
-    const user = await UserModel.findById(followerId).select('username full_name');
+    const user = await UserModel.findById(followerId).select('username full_name isAnonymousMode anonymousPersona');
     if (!user) return
 
-    const displayName = user.full_name || user.username
+    const isAnonymous = user.isAnonymousMode === true;
+    const displayName = isAnonymous ? (user.anonymousPersona?.name || "A Ghost User") : (user.full_name || user.username)
 
-    await this.createNotification(followingId, "follow", "New Follower", `${displayName} started following you`, {
-      followerId,
-      followerUsername: user.username,
-      followerName: displayName,
-    })
+    await NotificationModel.create({
+      user_id: followingId,
+      actor_id: followerId,
+      type: "follow",
+      title: "New Follower",
+      content: `${displayName} started following you`,
+      is_anonymous: isAnonymous,
+      data: {
+        followerId,
+        followerUsername: isAnonymous ? "anonymous" : user.username,
+        followerName: displayName,
+      }
+    });
+
+    // Real-time
+    const wsService = getWebSocketService()
+    wsService.sendNotificationToUser(followingId.toString(), {
+      type: 'follow',
+      title: 'New Follower',
+      content: `${displayName} started following you`,
+      is_anonymous: isAnonymous,
+      data: { followerId }
+    } as any)
   }
 
   static async notifyFollowRequest(followerId: string, followingId: string): Promise<void> {
-    const user = await UserModel.findById(followerId).select('username full_name');
+    const user = await UserModel.findById(followerId).select('username full_name isAnonymousMode anonymousPersona');
     if (!user) return
 
-    const displayName = user.full_name || user.username
+    const isAnonymous = user.isAnonymousMode === true;
+    const displayName = isAnonymous ? (user.anonymousPersona?.name || "A Ghost User") : (user.full_name || user.username)
 
     await this.createNotification(
       followingId,
@@ -186,8 +246,9 @@ export class NotificationService {
       `${displayName} wants to follow you`,
       {
         followerId,
-        followerUsername: user.username,
+        followerUsername: isAnonymous ? "anonymous" : user.username,
         followerName: displayName,
+        isAnonymous,
       },
     )
   }
@@ -195,26 +256,45 @@ export class NotificationService {
   static async notifyMessage(conversationId: string, senderId: string, recipientId: string): Promise<void> {
     if (senderId === recipientId) return // Don't notify self
 
-    const user = await UserModel.findById(senderId).select('username full_name');
+    const user = await UserModel.findById(senderId).select('username full_name isAnonymousMode anonymousPersona');
     if (!user) return
 
-    const displayName = user.full_name || user.username
+    const isAnonymous = user.isAnonymousMode === true;
+    const displayName = isAnonymous ? (user.anonymousPersona?.name || "A Ghost User") : (user.full_name || user.username)
 
-    await this.createNotification(recipientId, "message", "New Message", `${displayName} sent you a message`, {
-      conversationId,
-      senderId,
-      senderUsername: user.username,
-      senderName: displayName,
-    })
+    await NotificationModel.create({
+      user_id: recipientId,
+      actor_id: senderId,
+      type: "message",
+      title: "New Message",
+      content: `${displayName} sent you a message`,
+      is_anonymous: isAnonymous,
+      data: {
+        conversationId,
+        senderId,
+        senderUsername: isAnonymous ? "anonymous" : user.username,
+        senderName: displayName,
+      }
+    });
+
+    // Real-time
+    const wsService = getWebSocketService()
+    wsService.sendNotificationToUser(recipientId.toString(), {
+      type: 'message',
+      title: 'New Message',
+      content: `${displayName} sent you a message`,
+      is_anonymous: isAnonymous,
+      data: { conversationId }
+    } as any)
   }
 
   // Clean up old notifications (cleanup job)
   static async cleanupOldNotifications(daysOld = 30): Promise<number> {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - daysOld);
-    
+
     const result = await NotificationModel.deleteMany({
-        created_at: { $lt: cutoffDate }
+      created_at: { $lt: cutoffDate }
     });
 
     return result.deletedCount || 0

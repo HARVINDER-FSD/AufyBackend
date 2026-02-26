@@ -16,41 +16,48 @@ let connection: Redis | null = null;
 let workersInitialized = false;
 
 try {
-  connection = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
-    maxRetriesPerRequest: null,
-    connectTimeout: 5000,
-    retryStrategy: (times) => {
-      if (times > 3) {
-        logger.warn('⚠️  Workers Redis connection failed, workers disabled');
-        return null;
-      }
-      const delay = Math.min(times * 50, 2000);
-      return delay;
-    },
-    tls: process.env.REDIS_URL?.startsWith('rediss://') ? {} : undefined,
-    lazyConnect: true,
-  });
+    connection = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
+        maxRetriesPerRequest: null,
+        connectTimeout: 5000,
+        retryStrategy: (times) => {
+            if (times > 3) {
+                logger.warn('⚠️  Workers Redis connection failed, workers disabled');
+                return null;
+            }
+            const delay = Math.min(times * 50, 2000);
+            return delay;
+        },
+        tls: process.env.REDIS_URL?.startsWith('rediss://') ? {} : undefined,
+        lazyConnect: true,
+    });
 
-  connection.on('connect', () => {
-    logger.info('✅ Workers Redis connected');
-    workersInitialized = true;
-  });
+    connection.on('connect', () => {
+        logger.info('✅ Workers Redis connected');
+        workersInitialized = true;
+    });
 
-  connection.on('error', (err) => {
-    logger.warn('⚠️  Workers Redis error:', err.message);
-  });
+    connection.on('error', (err) => {
+        logger.warn('⚠️  Workers Redis error:', err.message);
+    });
 
-  connection.connect().catch(() => {
-    logger.warn('⚠️  Workers Redis unavailable');
-  });
+    connection.connect().catch(() => {
+        logger.warn('⚠️  Workers Redis unavailable');
+    });
 } catch (error) {
-  logger.warn('⚠️  Failed to initialize Workers Redis:', error);
-  connection = null;
+    logger.warn('⚠️  Failed to initialize Workers Redis:', error);
+    connection = null;
 }
 
 // Initialize specialized workers
 setupLikeWorker(connection);
 setupChatWorker(connection);
+
+const workerSettings = {
+    connection,
+    stalledInterval: 60000, // Check for stalled jobs every 60s instead of 30s
+    lockDuration: 60000,    // Keep locks longer to reduce renewal commands
+    drainDelay: 10          // Wait 10s before checking for new jobs when empty
+};
 
 // 1. Notification Worker
 const notificationWorker = connection ? new Worker(QUEUE_NAMES.NOTIFICATIONS, async (job: Job) => {
@@ -65,6 +72,7 @@ const notificationWorker = connection ? new Worker(QUEUE_NAMES.NOTIFICATIONS, as
             title: title,
             content: body,
             data: data,
+            is_anonymous: data?.isAnonymous || false,
             is_read: false
         });
         logger.info(`Saved in-app notification for ${recipientId}`);
@@ -91,8 +99,8 @@ const notificationWorker = connection ? new Worker(QUEUE_NAMES.NOTIFICATIONS, as
         title: title || 'New Notification',
         body: body || 'You have a new activity on Anufy',
         data: {
-          ...data,
-          _displayInForeground: true // Moved to data for correct typing
+            ...data,
+            _displayInForeground: true // Moved to data for correct typing
         },
         priority: 'high',
         badge: 1,
@@ -108,59 +116,75 @@ const notificationWorker = connection ? new Worker(QUEUE_NAMES.NOTIFICATIONS, as
     } catch (error) {
         logger.error(`Error sending push notification to ${recipientId}:`, error);
     }
-}, { connection }) : null;
+}, workerSettings) : null;
 
 // 2. Feed Update Worker (Invalidates cache for followers)
 const feedUpdateWorker = connection ? new Worker(QUEUE_NAMES.FEED_UPDATES, async (job: Job) => {
     const { userId, type, postId, reelId } = job.data;
     const db = await getDatabase();
-    const { cacheInvalidate, cacheLPush, cacheLTrim } = await import('../lib/redis');
 
-    if (type === 'new_post') {
-        // Use cursor for memory efficiency with large follower counts
-        const cursor = db.collection('follows').find({
-            following_id: new ObjectId(userId),
-            status: 'accepted'
-        });
+    // 🛡️ SHADOWBAN CHECK: Don't fan-out to followers if user is shadowbanned
+    const user = await db.collection('users').findOne({ _id: new ObjectId(userId) });
+    if (user?.isShadowBanned) {
+        return;
+    }
 
-        // Process in batches to prevent blocking event loop too long
-        while (await cursor.hasNext()) {
-            const follow = await cursor.next();
-            if (!follow) continue;
-            
-            const followerId = follow.follower_id.toString();
-            
-            // 1. Fan-out: Push to Redis List
-            if (postId) {
-                await cacheLPush(`feed:${followerId}:list`, postId.toString());
-                // Keep only latest 500 posts in the feed list to save memory
-                await cacheLTrim(`feed:${followerId}:list`, 0, 499);
+    const { cacheDel, cacheLPush, cacheLTrim, getRedis } = await import('../lib/redis');
+    const redisClient = getRedis();
+
+    const cursor = db.collection('follows').find({
+        following_id: new ObjectId(userId),
+        status: 'active', // Standard status for feeds
+        // status: 'accepted' - REMOVED: Status must match models/follow.ts ('active')
+    });
+
+    let batchCount = 0;
+    let pipeline = (redisClient as any).pipeline ? (redisClient as any).pipeline() : null;
+
+    while (await cursor.hasNext()) {
+        const follow = await cursor.next();
+        if (!follow) continue;
+
+        const followerId = follow.follower_id.toString();
+
+        if (type === 'new_post' && postId) {
+            const listKey = `feed:${followerId}:list`;
+            if (pipeline) {
+                pipeline.lpush(listKey, postId.toString());
+                pipeline.ltrim(listKey, 0, 499);
+                pipeline.del(`feed:${followerId}`);
+                batchCount++;
+            } else {
+                await cacheLPush(listKey, postId.toString());
+                await cacheLTrim(listKey, 0, 499);
+                await cacheDel(`feed:${followerId}`);
             }
-
-            // 2. Invalidate API Cache (Page Cache)
-            await cacheInvalidate(`feed:${followerId}:*`);
+        } else if (type === 'new_reel' && reelId) {
+            const listKey = `reels:feed:${followerId}:list`;
+            if (pipeline) {
+                pipeline.lpush(listKey, reelId.toString());
+                pipeline.ltrim(listKey, 0, 199);
+                pipeline.del(`reels:feed:${followerId}`);
+                batchCount++;
+            } else {
+                await cacheLPush(listKey, reelId.toString());
+                await cacheLTrim(listKey, 0, 199);
+                await cacheDel(`reels:feed:${followerId}`);
+            }
         }
-    } else if (type === 'new_reel') {
-        const cursor = db.collection('follows').find({
-            following_id: new ObjectId(userId),
-            status: 'accepted'
-        });
 
-        while (await cursor.hasNext()) {
-            const follow = await cursor.next();
-            if (!follow) continue;
-
-            const followerId = follow.follower_id.toString();
-            
-            // Fan-out: Push to Redis List
-            if (reelId) {
-                await cacheLPush(`reels:feed:${followerId}:list`, reelId.toString());
-                // Keep only latest 200 reels in the feed list
-                await cacheLTrim(`reels:feed:${followerId}:list`, 0, 199);
-            }
+        // Execute every 50 followers
+        if (pipeline && batchCount >= 50) {
+            await pipeline.exec();
+            pipeline = (redisClient as any).pipeline();
+            batchCount = 0;
         }
     }
-}, { connection }) : null;
+
+    if (pipeline && batchCount > 0) {
+        await pipeline.exec();
+    }
+}, workerSettings) : null;
 
 
 

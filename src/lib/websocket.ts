@@ -93,8 +93,28 @@ export class WebSocketService {
       // Handle joining chat rooms
       socket.on('chat:join', async (data: { chatId: string }) => {
         const { chatId } = data;
-        socket.join(`chat:${chatId}`);
-        console.log(`👥 User ${userId} joined chat ${chatId}`);
+
+        // 🛡️ SECURITY CHECK: Verify user is a participant before joining room
+        try {
+          const Conversation = require('../models/conversation').default;
+          const conversation = await Conversation.findOne({
+            _id: chatId,
+            'participants.user': userId,
+            'participants.left_at': null
+          });
+
+          if (!conversation) {
+            console.warn(`🛡️ User ${userId} tried to join room ${chatId} without permission`);
+            socket.emit('error', { message: 'Access denied: You are not a participant of this conversation' });
+            return;
+          }
+
+          socket.join(`chat:${chatId}`);
+          console.log(`👥 User ${userId} joined chat ${chatId}`);
+        } catch (error) {
+          console.error('Error joining chat:', error);
+          socket.emit('error', { message: 'Failed to join chat' });
+        }
       });
 
       // Handle leaving chat rooms

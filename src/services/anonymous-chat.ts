@@ -6,6 +6,7 @@ import ConversationModel from "../models/conversation"
 import UserModel from "../models/user"
 import { getWebSocketService } from "../lib/websocket"
 import { ModerationService } from "./moderation"
+import { ObjectId } from "mongodb"
 
 export class AnonymousChatService {
   private static QUEUE_PREFIX = "anon_chat_queue:"
@@ -17,7 +18,7 @@ export class AnonymousChatService {
     const tag = interest.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
     const queueKey = `${this.QUEUE_PREFIX}${tag || 'general'}`
     if ('llen' in redis) {
-        return await redis.llen(queueKey)
+      return await redis.llen(queueKey)
     }
     return 0
   }
@@ -32,12 +33,12 @@ export class AnonymousChatService {
     // Check Reputation
     const user = await UserModel.findById(userId);
     if (!user) throw errors.notFound("User not found");
-    
+
     // Default to 100 if undefined
     const reputation = user.anonymousReputation !== undefined ? user.anonymousReputation : 100;
-    
+
     if (reputation < 50) {
-        throw errors.forbidden("Your anonymous reputation is too low to join random chat.");
+      throw errors.forbidden("Your anonymous reputation is too low to join random chat.");
     }
 
     // Normalize interests (lowercase, trim, max 5, max length 20, no special chars)
@@ -46,62 +47,86 @@ export class AnonymousChatService {
       .map(t => t.toLowerCase().trim().replace(/[^a-z0-9]/g, '')) // Remove non-alphanumeric
       .filter(t => t.length > 0 && t.length <= 20)
       .slice(0, 5); // Max 5 tags
-    
+
     // If no valid tags, default to "general"
     if (tags.length === 0) tags.push("general")
 
     // Try to find a match in any of the tags
     let partnerId: string | null = null
     let matchedTag: string | null = null
+    const db = await (async () => {
+      const { getDatabase } = await import('../lib/database');
+      return await getDatabase();
+    })();
+
+    const maxPopAttempts = 5; // Avoid infinite loop
+    let attempts = 0;
 
     for (const tag of tags) {
+      if (attempts >= maxPopAttempts) break;
       const queueKey = `${this.QUEUE_PREFIX}${tag}`
+
       if ('lpop' in redis) {
-        partnerId = await redis.lpop(queueKey) as string | null
-        if (partnerId) {
-          matchedTag = tag
-          break // Found a match!
+        while (attempts < maxPopAttempts) {
+          partnerId = await redis.lpop(queueKey) as string | null
+          if (!partnerId) break; // Queue empty for this tag
+
+          attempts++;
+
+          // --- SAFETY CHECKS ---
+
+          // 1. Don't match with self
+          if (partnerId === userId) {
+            continue; // Discard and try next pop
+          }
+
+          // 2. Check if partner is active and hasn't blocked us (or vice versa)
+          const partner = await UserModel.findById(partnerId).select('is_active');
+          if (!partner || !partner.is_active) {
+            continue; // Discard inactive partner
+          }
+
+          // 3. Block Check (Mutual)
+          const blockExists = await db.collection('blocked_users').findOne({
+            $or: [
+              { userId: new ObjectId(userId), blockedUserId: new ObjectId(partnerId) },
+              { userId: new ObjectId(partnerId), blockedUserId: new ObjectId(userId) }
+            ]
+          });
+
+          if (blockExists) {
+            // Put blocker/blocked guy back at the END of the queue to try someone else?
+            // Actually, better to just discard or put back at the END.
+            await this.addToQueue(partnerId, tag);
+            continue;
+          }
+
+          // Match Found!
+          matchedTag = tag;
+          break;
         }
       }
+      if (partnerId && matchedTag) break;
     }
 
-    // Ensure we don't match with ourselves (if user spams join)
-    if (partnerId === userId) {
-      // Put it back and wait
-      await this.addToQueue(userId, tags[0]) // Wait in primary tag
-      return { status: "queued" }
-    }
-
-    if (partnerId) {
+    if (partnerId && matchedTag) {
       // 2. Match found! Create conversation
-      // Check if partner is still available (sanity check)
-      // Create conversation
       const conversation = await this.createAnonymousConversation(userId, partnerId, matchedTag!)
-      
+
       // Notify partner (via WebSocket)
       const wsService = getWebSocketService();
-      
-      // We need to fetch the persona of the user who initiated the match (userId) to show to partnerId
-      // And vice versa.
-      // For simplicity, let's just send the conversation ID and let frontend fetch details.
-      // OR better: send the masked persona right away.
-      
-      wsService.notifyAnonymousMatch(partnerId, { 
+
+      wsService.notifyAnonymousMatch(partnerId, {
         conversationId: conversation.id,
-        partnerPersona: { 
-            // In a real app, we'd fetch the user's persona. 
-            // For now, let frontend handle the "loading" or fetch conversation details.
-            // We can just say "You matched!"
-            matchType: 'random',
-            topic: matchedTag
-        } 
+        partnerPersona: {
+          matchType: 'random',
+          topic: matchedTag
+        }
       });
 
       return { status: "matched", conversationId: conversation.id }
     } else {
-      // 3. No one waiting, add to queue
-      // We only add to the FIRST tag queue to avoid duplication/race conditions
-      // (User waits in their primary interest)
+      // 3. No one waiting or all skipped, add to queue
       await this.addToQueue(userId, tags[0])
       return { status: "queued" }
     }
@@ -112,7 +137,7 @@ export class AnonymousChatService {
     const redis = getRedis()
     if (!redis) return
     const queueKey = `${this.QUEUE_PREFIX}${tag}`
-    
+
     if ('rpush' in redis) {
       await redis.rpush(queueKey, userId)
     }
@@ -126,18 +151,18 @@ export class AnonymousChatService {
     // If interests provided, try to remove from those specific queues
     // If not, we might need to know which queue they are in.
     // Ideally, frontend sends the same tags they joined with.
-    
+
     const tags = interests.length > 0 ? interests : ["general"]
-    
+
     // We only put them in the FIRST tag queue in joinQueue, so we only remove from there
     // Ensure tag is valid
     let primaryTag = tags[0].toLowerCase().trim().replace(/[^a-z0-9]/g, '');
     if (primaryTag.length === 0 || primaryTag.length > 20) {
-        primaryTag = 'general'
+      primaryTag = 'general'
     }
-    
+
     const queueKey = `${this.QUEUE_PREFIX}${primaryTag}`
-    
+
     // Removing specific item from list is O(N), but queue is expected to be short (matches happen fast)
     if ('lrem' in redis) {
       await redis.lrem(queueKey, 0, userId)
@@ -146,26 +171,26 @@ export class AnonymousChatService {
 
   // End Anonymous Conversation (Skip/Next or User Leaves)
   static async endAnonymousConversation(conversationId: string, endedByUserId: string) {
-     const conversation = await ConversationModel.findById(conversationId);
-     if (!conversation) return;
+    const conversation = await ConversationModel.findById(conversationId);
+    if (!conversation) return;
 
-     const now = new Date();
-     // Set left_at for ALL participants to effectively close it
-     conversation.participants.forEach(p => {
-        if (!p.left_at) {
-             p.left_at = now;
-        }
-     });
-     
-     await conversation.save();
+    const now = new Date();
+    // Set left_at for ALL participants to effectively close it
+    conversation.participants.forEach(p => {
+      if (!p.left_at) {
+        p.left_at = now;
+      }
+    });
 
-     // Notify all participants
-     const wsService = getWebSocketService();
-     wsService.sendMessageToConversation(conversationId, {
-        type: 'conversation_ended',
-        endedBy: endedByUserId,
-        timestamp: now
-     });
+    await conversation.save();
+
+    // Notify all participants
+    const wsService = getWebSocketService();
+    wsService.sendMessageToConversation(conversationId, {
+      type: 'conversation_ended',
+      endedBy: endedByUserId,
+      timestamp: now
+    });
   }
 
   // Create Anonymous Conversation
@@ -214,13 +239,13 @@ export class AnonymousChatService {
         participants: [
           { user: senderId, role: 'member', joined_at: new Date() },
           { user: recipientId, role: 'member', joined_at: new Date() }
-        ]
+        ],
       })
     }
 
     // Create Message
-    // Moderation Check
-    await ModerationService.checkContent(content);
+    // 🛡️ AI Moderation Check
+    await ModerationService.checkContent(content, senderId);
 
     const message = await MessageModel.create({
       conversation_id: conversation._id,
@@ -232,5 +257,52 @@ export class AnonymousChatService {
     })
 
     return message
+  }
+
+  /**
+   * Update Reputation based on behavior (Stranger Mode Power)
+   */
+  static async updateReputation(userId: string, change: number) {
+    try {
+      await UserModel.findByIdAndUpdate(userId, {
+        $inc: { anonymousReputation: change }
+      });
+      console.log(`[ANON REPUTATION] User ${userId} updated by ${change}`);
+    } catch (err) {
+      console.error("Failed to update reputation:", err);
+    }
+  }
+
+  /**
+   * Report Stranger (Safety First)
+   */
+  static async reportStranger(reporterId: string, reportedUserId: string, conversationId: string, reason: string) {
+    const db = await (async () => {
+      const { getDatabase } = await import('../lib/database');
+      return await getDatabase();
+    })();
+
+    // 1. Save Report
+    await db.collection('anonymous_reports').insertOne({
+      reporterId: new ObjectId(reporterId),
+      reportedUserId: new ObjectId(reportedUserId),
+      conversationId: new ObjectId(conversationId),
+      reason,
+      created_at: new Date()
+    });
+
+    // 2. Penalize Reputation (-20 points for a report)
+    await this.updateReputation(reportedUserId, -20);
+
+    // 3. Auto-block them from each other in Random Chat
+    await db.collection('blocked_users').insertOne({
+      userId: new ObjectId(reporterId),
+      blockedUserId: new ObjectId(reportedUserId),
+      createdAt: new Date(),
+      type: 'anonymous'
+    });
+
+    // 4. End conversation
+    await this.endAnonymousConversation(conversationId, reporterId);
   }
 }

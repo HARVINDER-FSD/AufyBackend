@@ -30,6 +30,38 @@ export const setupLikeWorker = (connection: any) => {
       if (action === 'like') {
         // Optimistic Like: Try to insert directly
         try {
+          // --- BLOCK CHECK ---
+          // 1. Fetch target owner
+          let targetOwnerId: string | null = null;
+          if (type === 'reel') {
+            const reel = await reelsCollection.findOne({ _id: new ObjectId(postId) }, { projection: { user_id: 1 } });
+            if (reel) targetOwnerId = reel.user_id.toString();
+          } else if (type === 'comment') {
+            const comment = await commentsCollection.findOne({ _id: new ObjectId(postId) }, { projection: { user_id: 1 } });
+            if (comment) targetOwnerId = comment.user_id.toString();
+          } else {
+            const post = await postsCollection.findOne({ _id: new ObjectId(postId) }, { projection: { user_id: 1 } });
+            if (post) targetOwnerId = post.user_id.toString();
+          }
+
+          if (!targetOwnerId) {
+            logger.debug(`[Stranger Safe] Target content ${postId} (${type}) not found. Discarding like.`);
+            return;
+          }
+
+          // 2. Check for blocks
+          const blockExists = await db.collection('blocked_users').findOne({
+            $or: [
+              { userId: new ObjectId(userId), blockedUserId: new ObjectId(targetOwnerId) },
+              { userId: new ObjectId(targetOwnerId), blockedUserId: new ObjectId(userId) }
+            ]
+          });
+
+          if (blockExists) {
+            logger.info(`[Stranger Safe] Blocking like: User ${userId} <-> Owner ${targetOwnerId} relationship is restricted.`);
+            return; // Discard silently
+          }
+
           await likesCollection.insertOne({
             user_id: new ObjectId(userId),
             post_id: new ObjectId(postId),
@@ -37,42 +69,36 @@ export const setupLikeWorker = (connection: any) => {
             is_anonymous: is_anonymous || false,
             content_type: contentType // Use standard field name
           });
-          
+
           // Increment likes count on post, reel, or comment
-          let targetOwnerId: string | null = null;
           let realPostId = postId;
-          
+
           if (type === 'reel') {
-             await reelsCollection.updateOne(
-                { _id: new ObjectId(postId) },
-                { $inc: { likes_count: 1 } }
-             );
-             const reel = await reelsCollection.findOne({ _id: new ObjectId(postId) }, { projection: { user_id: 1 } });
-             if (reel) targetOwnerId = reel.user_id.toString();
+            await reelsCollection.updateOne(
+              { _id: new ObjectId(postId) },
+              { $inc: { likes_count: 1 } }
+            );
           } else if (type === 'comment') {
-             await commentsCollection.updateOne(
-                { _id: new ObjectId(postId) },
-                { $inc: { likes_count: 1 } }
-             );
-             const comment = await commentsCollection.findOne({ _id: new ObjectId(postId) }, { projection: { user_id: 1, post_id: 1 } });
-             if (comment) {
-                 targetOwnerId = comment.user_id.toString();
-                 realPostId = comment.post_id.toString();
-             }
+            await commentsCollection.updateOne(
+              { _id: new ObjectId(postId) },
+              { $inc: { likes_count: 1 } }
+            );
+            const comment = await commentsCollection.findOne({ _id: new ObjectId(postId) }, { projection: { post_id: 1 } });
+            if (comment) {
+              realPostId = comment.post_id.toString();
+            }
           } else {
-             await postsCollection.updateOne(
-                { _id: new ObjectId(postId) },
-                { $inc: { likes_count: 1 } }
-             );
-             const post = await postsCollection.findOne({ _id: new ObjectId(postId) }, { projection: { user_id: 1 } });
-             if (post) targetOwnerId = post.user_id.toString();
+            await postsCollection.updateOne(
+              { _id: new ObjectId(postId) },
+              { $inc: { likes_count: 1 } }
+            );
           }
 
           // Send Notification (if not own content)
           if (targetOwnerId && targetOwnerId !== userId) {
             const liker = await usersCollection.findOne({ _id: new ObjectId(userId) }, { projection: { username: 1 } });
             const likerName = is_anonymous ? "A Ghost User 👻" : (liker?.username || "Someone");
-            
+
             await addJob(QUEUE_NAMES.NOTIFICATIONS, 'like-notification', {
               recipientId: targetOwnerId,
               title: 'New Like ❤️',
@@ -82,7 +108,8 @@ export const setupLikeWorker = (connection: any) => {
                 commentId: type === 'comment' ? postId : undefined,
                 type: 'like',
                 contentType: type,
-                actorId: userId
+                actorId: userId,
+                isAnonymous: is_anonymous || false
               }
             });
           }
@@ -101,23 +128,23 @@ export const setupLikeWorker = (connection: any) => {
         });
 
         if (result.deletedCount > 0) {
-            // Decrement likes count
-            if (type === 'reel') {
-                await reelsCollection.updateOne(
-                    { _id: new ObjectId(postId) },
-                    { $inc: { likes_count: -1 } }
-                );
-            } else if (type === 'comment') {
-                await commentsCollection.updateOne(
-                    { _id: new ObjectId(postId) },
-                    { $inc: { likes_count: -1 } }
-                );
-            } else {
-                await postsCollection.updateOne(
-                    { _id: new ObjectId(postId) },
-                    { $inc: { likes_count: -1 } }
-                );
-            }
+          // Decrement likes count
+          if (type === 'reel') {
+            await reelsCollection.updateOne(
+              { _id: new ObjectId(postId) },
+              { $inc: { likes_count: -1 } }
+            );
+          } else if (type === 'comment') {
+            await commentsCollection.updateOne(
+              { _id: new ObjectId(postId) },
+              { $inc: { likes_count: -1 } }
+            );
+          } else {
+            await postsCollection.updateOne(
+              { _id: new ObjectId(postId) },
+              { $inc: { likes_count: -1 } }
+            );
+          }
         }
       }
     } catch (error: any) {

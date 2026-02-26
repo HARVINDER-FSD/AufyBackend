@@ -34,13 +34,26 @@ export class StorageService {
     const extension = file.getExtension(fileName)
     const publicId = `${folder}/${userId}/${uuidv4()}.${extension}`.replace(/\.[^/.]+$/, "")
 
+    let processedBuffer = fileBuffer;
+
+    // 🕵️ PRIVACY: Strip EXIF metadata from images
+    if (file.isImage(mimeType)) {
+      try {
+        const { MediaUtils } = await import('./media-utils');
+        processedBuffer = await MediaUtils.stripMetadata(fileBuffer);
+        console.log(`[STORAGE] Metadata stripped for user: ${userId}`);
+      } catch (err) {
+        console.warn("[STORAGE] Metadata stripping failed, using original buffer:", err);
+      }
+    }
+
     try {
       const result: any = await new Promise((resolve, reject) => {
         const stream = cloudinary.uploader.upload_stream(
           { folder, resource_type: "auto", public_id: publicId },
           (error, result) => (error ? reject(error) : resolve(result))
         )
-        stream.end(fileBuffer)
+        stream.end(processedBuffer)
       })
 
       return { url: result.secure_url, publicId: result.public_id }

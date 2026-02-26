@@ -11,16 +11,16 @@ export const setupChatWorker = (connection: any) => {
 
   const worker = new Worker(QUEUE_NAMES.MESSAGES, async (job: Job) => {
     try {
-      const { 
+      const {
         _id, // Pre-generated ID from socket server
-        conversation_id, 
-        sender_id, 
-        content, 
-        message_type, 
-        media_url, 
-        reply_to_id, 
+        conversation_id,
+        sender_id,
+        content,
+        message_type,
+        media_url,
+        reply_to_id,
         status,
-        created_at 
+        created_at
       } = job.data;
 
       const db = await getDatabase();
@@ -37,6 +37,7 @@ export const setupChatWorker = (connection: any) => {
         message_type,
         media_url,
         reply_to_id: reply_to_id ? new ObjectId(reply_to_id) : undefined,
+        is_anonymous: job.data.is_anonymous || false,
         status: status || 'sent',
         created_at: new Date(created_at),
         updated_at: new Date(created_at),
@@ -50,7 +51,7 @@ export const setupChatWorker = (connection: any) => {
       } catch (err: any) {
         // If duplicate key error (rare, maybe retried), ignore
         if (err.code !== 11000) {
-            throw err;
+          throw err;
         }
       }
 
@@ -58,11 +59,11 @@ export const setupChatWorker = (connection: any) => {
       // This makes the "inbox" sort order update immediately
       await conversationsCollection.updateOne(
         { _id: new ObjectId(conversation_id) },
-        { 
-          $set: { 
+        {
+          $set: {
             last_message: messageDoc._id,
             updated_at: new Date(created_at)
-          } 
+          }
         }
       );
 
@@ -70,8 +71,8 @@ export const setupChatWorker = (connection: any) => {
       logger.error(`Failed to process chat job ${job.id}:`, error);
       throw error;
     }
-  }, { 
-    connection, 
+  }, {
+    connection,
     concurrency: 20 // High concurrency for chat messages
   });
 

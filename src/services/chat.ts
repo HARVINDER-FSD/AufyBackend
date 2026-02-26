@@ -32,6 +32,31 @@ export class ChatService {
       return await this.getConversationWithParticipants(existingConversation._id.toString(), userId1)
     }
 
+    // 🛡️ PRIVACY CHECK: Check if recipient allows messages from sender
+    const recipient = await UserModel.findById(userId2).select('settings is_active');
+    if (!recipient || !recipient.is_active) {
+      throw errors.notFound("Recipient not found or account deactivated");
+    }
+
+    const messsageSetting = recipient.settings?.whoCanMessage || 'everyone';
+
+    if (messsageSetting !== 'everyone') {
+      const Follow = (await import('../models/follow')).default;
+      const isFollowing = await Follow.findOne({
+        follower_id: userId1,
+        following_id: userId2,
+        status: 'active'
+      });
+
+      if (!isFollowing && messsageSetting === 'followers_only') {
+        throw errors.forbidden("This user only allows messages from their followers.");
+      }
+
+      if (messsageSetting === 'none') {
+        throw errors.forbidden("This user has disabled direct messaging.");
+      }
+    }
+
     // Create new conversation
     const newConversation = await ConversationModel.create({
       type: 'direct',
@@ -142,6 +167,17 @@ export class ChatService {
       .filter(p => !p.left_at)
       .map(p => {
         const u = p.user as any;
+        const isOtherUser = u._id.toString() !== userId;
+
+        // Mask other participant if it's an anonymous conversation
+        if (conversation.is_anonymous && isOtherUser) {
+          return {
+            ...maskAnonymousUser({ ...u, isAnonymousMode: true, is_anonymous: true }),
+            role: p.role,
+            joined_at: p.joined_at
+          };
+        }
+
         return {
           id: u._id.toString(),
           username: u.username,
@@ -326,31 +362,32 @@ export class ChatService {
         message_type: message_type || 'text',
         media_url,
         reply_to_id,
+        is_anonymous: sender.isAnonymousMode === true,
         status: 'sent',
         created_at: createdAt
       });
     } else {
-        // Fallback to sync write if queue fails (Safety)
-        console.error("Messages queue missing, falling back to sync write");
-        await MessageModel.create({
-            _id: messageId,
-            conversation_id: conversationId,
-            sender_id: senderId,
-            content,
-            media_url,
-            media_type,
-            message_type: message_type || 'text',
-            reply_to_id,
-            is_anonymous: sender.isAnonymousMode === true,
-            status: 'sent',
-            read_by: [{ user_id: senderId, read_at: createdAt }],
-            created_at: createdAt,
-            updated_at: createdAt
-        });
-        await ConversationModel.findByIdAndUpdate(conversationId, {
-            last_message: messageId,
-            updated_at: createdAt
-        });
+      // Fallback to sync write if queue fails (Safety)
+      console.error("Messages queue missing, falling back to sync write");
+      await MessageModel.create({
+        _id: messageId,
+        conversation_id: conversationId,
+        sender_id: senderId,
+        content,
+        media_url,
+        media_type,
+        message_type: message_type || 'text',
+        reply_to_id,
+        is_anonymous: sender.isAnonymousMode === true,
+        status: 'sent',
+        read_by: [{ user_id: senderId, read_at: createdAt }],
+        created_at: createdAt,
+        updated_at: createdAt
+      });
+      await ConversationModel.findByIdAndUpdate(conversationId, {
+        last_message: messageId,
+        updated_at: createdAt
+      });
     }
 
     // 4. Clear conversation cache

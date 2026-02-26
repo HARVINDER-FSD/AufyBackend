@@ -1,4 +1,4 @@
-import { cache } from "../lib/database"
+import { cache, getDatabase } from "../lib/database"
 import type { Comment, CreateCommentRequest, PaginatedResponse } from "../lib/types"
 import { pagination, errors, cacheKeys } from "../lib/utils"
 import { maskAnonymousUser } from "../lib/anonymous-utils"
@@ -38,14 +38,14 @@ export class CommentService {
 
       // Moderation Check (Safety)
       if (is_anonymous) {
-        await ModerationService.checkContent(content);
+        await ModerationService.checkContent(content, userId);
       }
 
       // Check if post or reel exists
       console.log('[COMMENT CREATE] Checking if post/reel exists...')
       let targetType = 'post';
       let targetEntity: any = await Post.findById(postId).lean().exec();
-      
+
       if (!targetEntity) {
         targetEntity = await Reel.findById(postId).lean().exec();
         if (targetEntity) {
@@ -58,6 +58,18 @@ export class CommentService {
       }
       console.log(`[COMMENT CREATE] ${targetType} found`)
 
+      // 🛡️ BLOCK CHECK
+      const db_raw = await getDatabase();
+      const blockExists = await db_raw.collection('blocked_users').findOne({
+        $or: [
+          { userId: new ObjectId(userId), blockedUserId: targetEntity.user_id },
+          { userId: targetEntity.user_id, blockedUserId: new ObjectId(userId) }
+        ]
+      });
+      if (blockExists) {
+        throw new Error("Post or Reel not found")
+      }
+
       // Check if parent comment exists (if provided)
       let finalParentId = parent_comment_id || null;
       if (parent_comment_id) {
@@ -66,30 +78,30 @@ export class CommentService {
         if (!parentExists) {
           throw new Error("Parent comment not found")
         }
-        
+
         // Check for nesting depth - Flatten if necessary (max 1 level depth: Comment -> Reply)
         if (parentExists.parent_comment_id) {
-            console.log('[COMMENT CREATE] Flattening nested reply...');
-            finalParentId = parentExists.parent_comment_id.toString();
+          console.log('[COMMENT CREATE] Flattening nested reply...');
+          finalParentId = parentExists.parent_comment_id.toString();
         }
       }
 
       // --- MENTIONS EXTRACTION LOGIC ---
       const mentionRegex = /@(\w+)/g;
       const mentionedUsernames = [...new Set((content.match(mentionRegex) || []).map(m => m.substring(1)))];
-      
+
       let validMentions: string[] = [];
       let mentionedUserIds: string[] = [];
 
       if (mentionedUsernames.length > 0) {
-          // Verify users exist
-          const foundUsers = await User.find({ username: { $in: mentionedUsernames } })
-              .select('_id username')
-              .lean()
-              .exec();
-          
-          validMentions = foundUsers.map((u: any) => u.username);
-          mentionedUserIds = foundUsers.map((u: any) => u._id.toString());
+        // Verify users exist
+        const foundUsers = await User.find({ username: { $in: mentionedUsernames } })
+          .select('_id username')
+          .lean()
+          .exec();
+
+        validMentions = foundUsers.map((u: any) => u.username);
+        mentionedUserIds = foundUsers.map((u: any) => u._id.toString());
       }
 
       // Get user data
@@ -126,7 +138,7 @@ export class CommentService {
       } else {
         await Post.updateOne({ _id: postId }, { $inc: { comments_count: 1 } });
       }
-      
+
       // Increment replies count on parent comment if applicable
       if (finalParentId) {
         await Comment.updateOne({ _id: finalParentId }, { $inc: { replies_count: 1 } });
@@ -157,8 +169,8 @@ export class CommentService {
             recipientId: postOwnerId,
             title: 'New Comment 💬',
             body: isAnonymous ? `A Ghost User 👻 commented on your ${entityName}.` : `${user.username} commented on your ${entityName}.`,
-            data: { 
-              postId, 
+            data: {
+              postId,
               commentId: newComment._id.toString(),
               type: 'comment',
               actorId: userId
@@ -168,39 +180,39 @@ export class CommentService {
 
         // --- NOTIFY REPLY TO PARENT COMMENT ---
         if (parent_comment_id) {
-            const parentComment: any = await Comment.findById(parent_comment_id).lean().exec();
-            if (parentComment && parentComment.user_id.toString() !== userId && parentComment.user_id.toString() !== postOwnerId) {
-                 // Only notify if parent author is different from current user AND different from post owner (who already got a notification)
-                 await addJob(QUEUE_NAMES.NOTIFICATIONS, 'reply-notification', {
-                    recipientId: parentComment.user_id.toString(),
-                    title: 'New Reply ↩️',
-                    body: isAnonymous ? `A Ghost User replied to your comment.` : `${user.username} replied to your comment: "${content.substring(0, 50)}${content.length > 50 ? '...' : ''}"`,
-                    data: {
-                        postId,
-                        commentId: newComment._id.toString(),
-                        type: 'reply',
-                        actorId: userId
-                    }
-                });
-            }
+          const parentComment: any = await Comment.findById(parent_comment_id).lean().exec();
+          if (parentComment && parentComment.user_id.toString() !== userId && parentComment.user_id.toString() !== postOwnerId) {
+            // Only notify if parent author is different from current user AND different from post owner (who already got a notification)
+            await addJob(QUEUE_NAMES.NOTIFICATIONS, 'reply-notification', {
+              recipientId: parentComment.user_id.toString(),
+              title: 'New Reply ↩️',
+              body: isAnonymous ? `A Ghost User replied to your comment.` : `${user.username} replied to your comment: "${content.substring(0, 50)}${content.length > 50 ? '...' : ''}"`,
+              data: {
+                postId,
+                commentId: newComment._id.toString(),
+                type: 'reply',
+                actorId: userId
+              }
+            });
+          }
         }
 
         // --- NOTIFY MENTIONED USERS ---
         for (const mentionedUserId of mentionedUserIds) {
-            // Don't notify if user mentions themselves (weird but possible)
-            if (mentionedUserId !== userId) {
-                await addJob(QUEUE_NAMES.NOTIFICATIONS, 'mention-notification', {
-                    recipientId: mentionedUserId,
-                    title: 'You were mentioned 📣',
-                    body: isAnonymous ? `A Ghost User mentioned you in a comment.` : `${user.username} mentioned you: "${content.substring(0, 50)}${content.length > 50 ? '...' : ''}"`,
-                    data: {
-                        postId,
-                        commentId: newComment._id.toString(),
-                        type: 'mention',
-                        actorId: userId
-                    }
-                });
-            }
+          // Don't notify if user mentions themselves (weird but possible)
+          if (mentionedUserId !== userId) {
+            await addJob(QUEUE_NAMES.NOTIFICATIONS, 'mention-notification', {
+              recipientId: mentionedUserId,
+              title: 'You were mentioned 📣',
+              body: isAnonymous ? `A Ghost User mentioned you in a comment.` : `${user.username} mentioned you: "${content.substring(0, 50)}${content.length > 50 ? '...' : ''}"`,
+              data: {
+                postId,
+                commentId: newComment._id.toString(),
+                type: 'mention',
+                actorId: userId
+              }
+            });
+          }
         }
       } catch (err) {
         console.error('[COMMENT CREATE] Notification error:', err)
@@ -255,7 +267,7 @@ export class CommentService {
 
     // Get all comment IDs to fetch replies in batch
     const commentIds = comments.map((c: any) => c._id)
-    
+
     // Fetch all replies for these comments in one query
     const allReplies = await Comment.find({
       parent_comment_id: { $in: commentIds },
@@ -275,24 +287,24 @@ export class CommentService {
     // Fetch likes if user is logged in
     let likedCommentIds = new Set<string>();
     if (currentUserId) {
-        const allFetchedCommentIds = [...commentIds, ...allReplies.map((r: any) => r._id)];
-        const likes = await Like.find({
-            user_id: currentUserId,
-            post_id: { $in: allFetchedCommentIds },
-            content_type: 'Comment'
-        }).select('post_id').lean().exec();
-        
-        likes.forEach((l: any) => likedCommentIds.add(l.post_id.toString()));
+      const allFetchedCommentIds = [...commentIds, ...allReplies.map((r: any) => r._id)];
+      const likes = await Like.find({
+        user_id: currentUserId,
+        post_id: { $in: allFetchedCommentIds },
+        content_type: 'Comment'
+      }).select('post_id').lean().exec();
+
+      likes.forEach((l: any) => likedCommentIds.add(l.post_id.toString()));
     }
 
     const commentsWithData = comments.map((comment: any) => {
       const user = users.find((u: any) => u._id.toString() === comment.user_id.toString())
-      
+
       // Filter replies for this comment (limit to 3 per comment as before)
       const commentReplies = allReplies
         .filter((r: any) => r.parent_comment_id.toString() === comment._id.toString())
         .slice(0, 3)
-      
+
       const repliesWithUsers = commentReplies.map((reply: any) => {
         const replyUser = replyUsers.find((u: any) => u._id.toString() === reply.user_id.toString())
         return {
@@ -355,14 +367,14 @@ export class CommentService {
     // Fetch likes if user is logged in
     let likedCommentIds = new Set<string>();
     if (currentUserId) {
-        const replyIds = replies.map((r: any) => r._id);
-        const likes = await Like.find({
-            user_id: currentUserId,
-            post_id: { $in: replyIds },
-            content_type: 'Comment'
-        }).select('post_id').lean().exec();
-        
-        likes.forEach((l: any) => likedCommentIds.add(l.post_id.toString()));
+      const replyIds = replies.map((r: any) => r._id);
+      const likes = await Like.find({
+        user_id: currentUserId,
+        post_id: { $in: replyIds },
+        content_type: 'Comment'
+      }).select('post_id').lean().exec();
+
+      likes.forEach((l: any) => likedCommentIds.add(l.post_id.toString()));
     }
 
     const repliesWithUsers = replies.map((reply: any) => {
@@ -498,12 +510,12 @@ export class CommentService {
 
     let isLiked = false;
     if (currentUserId) {
-        const like = await Like.findOne({
-            user_id: currentUserId,
-            post_id: commentId,
-            content_type: 'Comment'
-        }).lean().exec();
-        isLiked = !!like;
+      const like = await Like.findOne({
+        user_id: currentUserId,
+        post_id: commentId,
+        content_type: 'Comment'
+      }).lean().exec();
+      isLiked = !!like;
     }
 
     return {
@@ -517,6 +529,18 @@ export class CommentService {
   static async likeComment(userId: string, commentId: string): Promise<void> {
     const comment: any = await Comment.findById(commentId).lean().exec()
     if (!comment) {
+      throw errors.notFound("Comment not found")
+    }
+
+    // 🛡️ BLOCK CHECK
+    const db_raw = await getDatabase();
+    const blockExists = await db_raw.collection('blocked_users').findOne({
+      $or: [
+        { userId: new ObjectId(userId), blockedUserId: comment.user_id },
+        { userId: comment.user_id, blockedUserId: new ObjectId(userId) }
+      ]
+    });
+    if (blockExists) {
       throw errors.notFound("Comment not found")
     }
 
@@ -545,12 +569,12 @@ export class CommentService {
     try {
       if (comment.user_id.toString() !== userId) {
         const liker: any = await User.findById(userId).select('username full_name isAnonymousMode').lean().exec()
-        
+
         // Don't notify if liker is anonymous? Or notify as Ghost?
         // Usually likes are public or semi-public. If user is in anonymous mode, maybe we mask it?
         // But for likes, maybe we just show "Someone liked your comment" or "Ghost liked"?
         // Let's use the standard notification pattern.
-        
+
         const isAnonymous = liker.isAnonymousMode === true;
         const displayName = isAnonymous ? "A Ghost User" : (liker.full_name || liker.username);
 

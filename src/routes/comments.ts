@@ -21,15 +21,27 @@ const createCommentSchema = Joi.object({
 router.post("/", authenticateToken, validateBody(createCommentSchema), async (req, res) => {
   try {
     const { post_id, content, parent_comment_id, is_anonymous } = req.body
-    
+
     // Check if user is in anonymous mode
     const db = await getDatabase();
     const user = await db.collection('users').findOne({ _id: new ObjectId(req.userId!) });
-    
+
     // Determine effective anonymous state:
     // 1. Explicitly requested via is_anonymous param (highest priority)
     // 2. User's global anonymous mode setting
     const effectiveIsAnonymous = is_anonymous !== undefined ? is_anonymous : (user?.isAnonymousMode || false);
+
+    // 🛡️ ANONYMOUS MODE CHECK: Reels are not part of anonymous mode
+    if (user?.isAnonymousMode) {
+      // Check if the target is a Reel
+      const reel = await db.collection('reels').findOne({ _id: new ObjectId(post_id) });
+      if (reel) {
+        return res.status(403).json({
+          success: false,
+          error: "Reels are not available in Anonymous Mode."
+        });
+      }
+    }
 
     const result = await CommentService.createComment(
       req.userId!,
@@ -113,11 +125,13 @@ router.get("/my-comments", authenticateToken, async (req: any, res) => {
               $cond: [
                 { $gt: [{ $size: '$post' }, 0] },
                 { $substr: [{ $arrayElemAt: ['$post.content', 0] }, 0, 50] },
-                { $cond: [
-                  { $gt: [{ $size: '$reel' }, 0] },
-                  { $arrayElemAt: ['$reel.title', 0] },
-                  'Post'
-                ]}
+                {
+                  $cond: [
+                    { $gt: [{ $size: '$reel' }, 0] },
+                    { $arrayElemAt: ['$reel.title', 0] },
+                    'Post'
+                  ]
+                }
               ]
             },
             createdAt: '$created_at',
@@ -167,10 +181,10 @@ router.get("/:commentId/replies", optionalAuth, async (req: any, res) => {
     const currentUserId = req.userId || null
 
     const result = await CommentService.getCommentReplies(
-        commentId,
-        page,
-        limit,
-        currentUserId
+      commentId,
+      page,
+      limit,
+      currentUserId
     )
 
     res.json(result)
