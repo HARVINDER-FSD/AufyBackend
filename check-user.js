@@ -3,7 +3,7 @@ require('dotenv').config();
 const { MongoClient } = require('mongodb');
 
 const MONGODB_URI = process.env.MONGODB_URI;
-const TARGET_EMAIL = 'harvindersinghharvinder9999@gmail.com';
+const TARGET_EMAIL = 'harvindersinghharvinder99999@gmail.com';
 
 async function checkUser() {
   console.log('🔍 Checking for user:', TARGET_EMAIL);

@@ -7,43 +7,16 @@ import Redis from 'ioredis';
 let connection: Redis | null = null;
 let redisAvailable = false;
 
+// Redis explicitly disabled by user
+logger.info('🛡️  Offline Mode: Queue Redis explicitly disabled by user, queues disabled');
+connection = null;
+redisAvailable = false;
+
+/*
 try {
   connection = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
-    maxRetriesPerRequest: null,
-    connectTimeout: 5000,
-    retryStrategy: (times) => {
-      if (times > 3) {
-        logger.warn('⚠️  Queue Redis connection failed after 3 retries, queues disabled');
-        redisAvailable = false;
-        return null;
-      }
-      const delay = Math.min(times * 50, 2000);
-      return delay;
-    },
-    tls: process.env.REDIS_URL?.startsWith('rediss://') ? {} : undefined,
-    lazyConnect: true,
-  });
-
-  connection.on('connect', () => {
-    logger.info('✅ Queue Redis connected');
-    redisAvailable = true;
-  });
-
-  connection.on('error', (err) => {
-    logger.warn('⚠️  Queue Redis Connection Error:', err.message);
-    redisAvailable = false;
-  });
-
-  // Try to connect but don't block
-  connection.connect().catch(() => {
-    logger.warn('⚠️  Queue Redis unavailable, queues will be disabled');
-    redisAvailable = false;
-  });
-} catch (error) {
-  logger.warn('⚠️  Failed to initialize Queue Redis:', error);
-  connection = null;
-  redisAvailable = false;
-}
+    ...
+*/
 
 // Define Queue Names
 export const QUEUE_NAMES = {

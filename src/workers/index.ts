@@ -15,38 +15,16 @@ const expo = new Expo();
 let connection: Redis | null = null;
 let workersInitialized = false;
 
+// Redis explicitly disabled by user
+logger.info('🛡️  Offline Mode: Workers Redis explicitly disabled by user, workers disabled');
+connection = null;
+workersInitialized = false;
+
+/*
 try {
     connection = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
-        maxRetriesPerRequest: null,
-        connectTimeout: 5000,
-        retryStrategy: (times) => {
-            if (times > 3) {
-                logger.warn('⚠️  Workers Redis connection failed, workers disabled');
-                return null;
-            }
-            const delay = Math.min(times * 50, 2000);
-            return delay;
-        },
-        tls: process.env.REDIS_URL?.startsWith('rediss://') ? {} : undefined,
-        lazyConnect: true,
-    });
-
-    connection.on('connect', () => {
-        logger.info('✅ Workers Redis connected');
-        workersInitialized = true;
-    });
-
-    connection.on('error', (err) => {
-        logger.warn('⚠️  Workers Redis error:', err.message);
-    });
-
-    connection.connect().catch(() => {
-        logger.warn('⚠️  Workers Redis unavailable');
-    });
-} catch (error) {
-    logger.warn('⚠️  Failed to initialize Workers Redis:', error);
-    connection = null;
-}
+        ...
+*/
 
 // Initialize specialized workers
 setupLikeWorker(connection);

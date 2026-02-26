@@ -73,91 +73,10 @@ const memoryCache = new MemoryCache();
 let useMemoryFallback = false;
 
 export const initRedis = () => {
-  if (redis && !useMemoryFallback) return redis;
-
-  // If user explicitly wants to bypass cloud during development
-  if (process.env.DISABLE_REDIS_CLOUD === 'true') {
-    console.log('🛡️  Offline Mode: Redis Cloud disabled, using In-Memory Cache');
-    useMemoryFallback = true;
-    return null;
-  }
-
-  try {
-    const upstashUrl = process.env.UPSTASH_REDIS_REST_URL;
-    const upstashToken = process.env.UPSTASH_REDIS_REST_TOKEN;
-
-    if (upstashUrl && upstashToken && !useMemoryFallback) {
-      console.log('🔗 Connecting to Upstash Redis (HTTP)');
-      redis = new UpstashRedis({
-        url: upstashUrl,
-        token: upstashToken,
-      });
-      return redis;
-    } else {
-      // TCP / Local Connection
-      console.log('🔗 Connecting to local/TCP Redis');
-      // ... existing logic ...
-
-      let client: Redis;
-
-      // Support REDIS_URL (Standard on Render/Heroku)
-      if (process.env.REDIS_URL) {
-        client = new Redis(process.env.REDIS_URL, {
-          retryStrategy: (times) => {
-            if (times > 3) {
-              console.warn('⚠️  Redis connection failed, switching to In-Memory Cache');
-              useMemoryFallback = true;
-              return null;
-            }
-            return Math.min(times * 50, 2000);
-          },
-          maxRetriesPerRequest: null,
-          connectTimeout: 2000, // Faster timeout
-          lazyConnect: true
-        });
-      } else {
-        // Manual configuration
-        client = new Redis({
-          host: process.env.REDIS_HOST || 'localhost',
-          port: parseInt(process.env.REDIS_PORT || '6379'),
-          password: process.env.REDIS_PASSWORD,
-          retryStrategy: (times) => {
-            if (times > 3) {
-              console.warn('⚠️  Redis connection failed, switching to In-Memory Cache');
-              useMemoryFallback = true;
-              return null;
-            }
-            return Math.min(times * 50, 2000);
-          },
-          maxRetriesPerRequest: null,
-          connectTimeout: 2000, // Faster timeout
-          lazyConnect: true
-        });
-      }
-
-      client.on('connect', () => {
-        console.log('✅ Redis connected successfully');
-        useMemoryFallback = false;
-      });
-
-      client.on('error', (err) => {
-        // console.warn('⚠️  Redis error (continuing without cache):', err.message);
-      });
-
-      // Try to connect but don't block if it fails
-      client.connect().catch(() => {
-        console.warn('⚠️  Redis unavailable, switching to In-Memory Cache');
-        useMemoryFallback = true;
-      });
-
-      redis = client;
-      return redis;
-    }
-  } catch (error) {
-    console.warn('⚠️  Failed to initialize Redis:', error);
-    useMemoryFallback = true;
-    return null;
-  }
+  // Always use In-Memory Cache and disable Redis logic as requested by user
+  console.log('🛡️  Offline Mode: Redis explicitly disabled by user, using In-Memory Cache');
+  useMemoryFallback = true;
+  return null;
 };
 
 export const getRedis = () => {

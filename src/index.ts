@@ -104,19 +104,27 @@ initializeFirebase()
 initRedis()
 
 // Initialize Workers
+// Redis explicitly disabled by user
+console.log('🛡️  Offline Mode: Like Worker Redis explicitly disabled by user');
+const queueRedis: any = null;
+
+/*
 const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
 const queueRedis = new Redis(redisUrl, {
   maxRetriesPerRequest: null, // Required by BullMQ
 });
 
-queueRedis.on('connect', () => {
-  console.log('👷 Like Worker connected to Redis');
-  setupLikeWorker(queueRedis);
-});
+if (queueRedis) {
+  queueRedis.on('connect', () => {
+    console.log('👷 Like Worker connected to Redis');
+    setupLikeWorker(queueRedis);
+  });
 
-queueRedis.on('error', (err) => {
-  console.warn('⚠️ Like Worker Redis error:', err.message);
-});
+  queueRedis.on('error', (err) => {
+    console.warn('⚠️ Like Worker Redis error:', err.message);
+  });
+}
+*/
 
 let redisHealthy = false
 let redisLastCheck = 0
