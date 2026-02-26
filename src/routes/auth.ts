@@ -257,7 +257,7 @@ router.post('/register', validate(registerSchema), async (req: Request, res: Res
       username,
       full_name: full_name || username,
       avatar_url: defaultAvatar,
-      dob: dob ? new Date(dob) : null,
+      date_of_birth: dob ? new Date(dob) : null,
     });
 
     await newUser.save();

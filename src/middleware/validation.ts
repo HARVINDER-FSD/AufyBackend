@@ -32,5 +32,5 @@ export const registerSchema = Joi.object({
     'string.pattern.base': 'Username can only contain letters, numbers, underscores, and periods',
   }),
   full_name: Joi.string().min(2).max(50).required(),
-  dob: Joi.date().iso().optional(),
+  dob: Joi.alternatives().try(Joi.date().iso(), Joi.string()).optional(),
 });
