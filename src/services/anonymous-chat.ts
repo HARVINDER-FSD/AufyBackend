@@ -1,4 +1,4 @@
-import { getRedis } from "../lib/redis"
+import { getRedis, cacheLLen, cacheLPop, cacheRPush, cacheLRem } from "../lib/redis"
 import { ChatService } from "./chat"
 import { errors } from "../lib/utils"
 import MessageModel from "../models/message"
@@ -13,23 +13,13 @@ export class AnonymousChatService {
 
   // Get Queue Length (for "Users Online" count)
   static async getQueueLength(interest: string = 'general'): Promise<number> {
-    const redis = getRedis()
-    if (!redis) return 0
     const tag = interest.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
     const queueKey = `${this.QUEUE_PREFIX}${tag || 'general'}`
-    if ('llen' in redis) {
-      return await redis.llen(queueKey)
-    }
-    return 0
+    return await cacheLLen(queueKey)
   }
 
   // Join the random chat queue with Interests (Tags)
   static async joinQueue(userId: string, interests: string[] = []): Promise<{ status: "queued" | "matched", conversationId?: string }> {
-    const redis = getRedis()
-    if (!redis) {
-      throw errors.internal("Chat service unavailable")
-    }
-
     // Check Reputation
     const user = await UserModel.findById(userId);
     if (!user) throw errors.notFound("User not found");
@@ -66,45 +56,43 @@ export class AnonymousChatService {
       if (attempts >= maxPopAttempts) break;
       const queueKey = `${this.QUEUE_PREFIX}${tag}`
 
-      if ('lpop' in redis) {
-        while (attempts < maxPopAttempts) {
-          partnerId = await redis.lpop(queueKey) as string | null
-          if (!partnerId) break; // Queue empty for this tag
+      while (attempts < maxPopAttempts) {
+        partnerId = await cacheLPop(queueKey)
+        if (!partnerId) break; // Queue empty for this tag
 
-          attempts++;
+        attempts++;
 
-          // --- SAFETY CHECKS ---
+        // --- SAFETY CHECKS ---
 
-          // 1. Don't match with self
-          if (partnerId === userId) {
-            continue; // Discard and try next pop
-          }
-
-          // 2. Check if partner is active and hasn't blocked us (or vice versa)
-          const partner = await UserModel.findById(partnerId).select('is_active');
-          if (!partner || !partner.is_active) {
-            continue; // Discard inactive partner
-          }
-
-          // 3. Block Check (Mutual)
-          const blockExists = await db.collection('blocked_users').findOne({
-            $or: [
-              { userId: new ObjectId(userId), blockedUserId: new ObjectId(partnerId) },
-              { userId: new ObjectId(partnerId), blockedUserId: new ObjectId(userId) }
-            ]
-          });
-
-          if (blockExists) {
-            // Put blocker/blocked guy back at the END of the queue to try someone else?
-            // Actually, better to just discard or put back at the END.
-            await this.addToQueue(partnerId, tag);
-            continue;
-          }
-
-          // Match Found!
-          matchedTag = tag;
-          break;
+        // 1. Don't match with self
+        if (partnerId === userId) {
+          continue; // Discard and try next pop
         }
+
+        // 2. Check if partner is active and hasn't blocked us (or vice versa)
+        const partner = await UserModel.findById(partnerId).select('is_active');
+        if (!partner || !partner.is_active) {
+          continue; // Discard inactive partner
+        }
+
+        // 3. Block Check (Mutual)
+        const blockExists = await db.collection('blocked_users').findOne({
+          $or: [
+            { userId: new ObjectId(userId), blockedUserId: new ObjectId(partnerId) },
+            { userId: new ObjectId(partnerId), blockedUserId: new ObjectId(userId) }
+          ]
+        });
+
+        if (blockExists) {
+          // Put blocker/blocked guy back at the END of the queue to try someone else?
+          // Actually, better to just discard or put back at the END.
+          await this.addToQueue(partnerId, tag);
+          continue;
+        }
+
+        // Match Found!
+        matchedTag = tag;
+        break;
       }
       if (partnerId && matchedTag) break;
     }
@@ -134,20 +122,12 @@ export class AnonymousChatService {
 
   // Add user to queue
   private static async addToQueue(userId: string, tag: string) {
-    const redis = getRedis()
-    if (!redis) return
     const queueKey = `${this.QUEUE_PREFIX}${tag}`
-
-    if ('rpush' in redis) {
-      await redis.rpush(queueKey, userId)
-    }
+    await cacheRPush(queueKey, userId)
   }
 
   // Leave queue
   static async leaveQueue(userId: string, interests: string[] = []) {
-    const redis = getRedis()
-    if (!redis) return
-
     // If interests provided, try to remove from those specific queues
     // If not, we might need to know which queue they are in.
     // Ideally, frontend sends the same tags they joined with.
@@ -164,9 +144,7 @@ export class AnonymousChatService {
     const queueKey = `${this.QUEUE_PREFIX}${primaryTag}`
 
     // Removing specific item from list is O(N), but queue is expected to be short (matches happen fast)
-    if ('lrem' in redis) {
-      await redis.lrem(queueKey, 0, userId)
-    }
+    await cacheLRem(queueKey, 0, userId)
   }
 
   // End Anonymous Conversation (Skip/Next or User Leaves)

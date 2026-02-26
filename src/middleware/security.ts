@@ -135,8 +135,11 @@ export const validateRequestSignature = (req: Request, res: Response, next: Next
     .digest('hex');
 
   if (signature !== expectedSignature) {
-     // console.warn(`[SECURITY] Invalid signature from ${req.ip}`);
-     // return res.status(403).json({ error: 'Invalid request signature' });
+     console.warn(`[SECURITY] Invalid signature from ${req.ip}`);
+     // Temporarily allow in dev, but in prod this should be active
+     if (process.env.NODE_ENV === 'production') {
+        return res.status(403).json({ error: 'Invalid request signature' });
+     }
   }
   
   next();

@@ -30,9 +30,13 @@ export const authenticateToken = async (req: AuthRequest, res: Response, next: N
     // Verify token
     const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
     
-    // Just attach the userId from token - don't verify user exists here
-    // Let individual routes handle user lookup with proper ID format handling
-    req.user = { userId: decoded.userId };
+    // Attach user to request object
+    const user = await User.findById(decoded.userId).select('-password');
+    if (!user) {
+      return res.status(401).json({ message: 'User no longer exists' });
+    }
+
+    req.user = user;
     req.userId = decoded.userId;
     
     next();

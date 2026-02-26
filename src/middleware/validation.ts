@@ -3,13 +3,14 @@ import Joi from 'joi';
 
 export const validate = (schema: Joi.ObjectSchema) => {
   return (req: Request, res: Response, next: NextFunction) => {
-    const { error } = schema.validate(req.body, { abortEarly: false });
+    const { error, value } = schema.validate(req.body, { abortEarly: false, stripUnknown: true });
 
     if (error) {
       const errorMessage = error.details.map((detail) => detail.message).join(', ');
       return res.status(400).json({ error: errorMessage });
     }
 
+    req.body = value;
     next();
   };
 };
@@ -32,5 +33,5 @@ export const registerSchema = Joi.object({
     'string.pattern.base': 'Username can only contain letters, numbers, underscores, and periods',
   }),
   full_name: Joi.string().min(2).max(50).required(),
-  dob: Joi.alternatives().try(Joi.date().iso(), Joi.string()).optional(),
+  dob: Joi.alternatives().try(Joi.date().iso(), Joi.string()).required(),
 });

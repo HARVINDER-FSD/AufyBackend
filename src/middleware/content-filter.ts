@@ -16,6 +16,8 @@ export const validateAgeAndContent = async (req: any, res: Response, next: NextF
             return res.status(404).json({ success: false, message: 'User not found' });
         }
 
+        const userDOB = user.date_of_birth || user.dob;
+
         // 1. Check if user is currently blocked
         if (user.isBlocked && user.blockedUntil && new Date() < new Date(user.blockedUntil)) {
             return res.status(403).json({
@@ -69,7 +71,7 @@ export const validateAgeAndContent = async (req: any, res: Response, next: NextF
         const { estimatedAgeGroup } = await safetyService.estimateAgeFromBehavior(fullText);
 
         if (estimatedAgeGroup === 'minor') {
-            const birthDate = new Date(user.dob || 0);
+            const birthDate = new Date(userDOB || 0);
             const today = new Date();
             let declaredAge = today.getFullYear() - birthDate.getFullYear();
 
@@ -90,7 +92,7 @@ export const validateAgeAndContent = async (req: any, res: Response, next: NextF
             }
         }
 
-        if (hasAdultContent && !user.dob) {
+        if (hasAdultContent && !userDOB) {
             return res.status(400).json({
                 success: false,
                 message: 'Date of birth is required for content verification'
@@ -99,7 +101,7 @@ export const validateAgeAndContent = async (req: any, res: Response, next: NextF
 
         if (hasAdultContent) {
             // Calculate Age
-            const birthDate = new Date(user.dob);
+            const birthDate = new Date(userDOB);
             const today = new Date();
             let age = today.getFullYear() - birthDate.getFullYear();
             const m = today.getMonth() - birthDate.getMonth();

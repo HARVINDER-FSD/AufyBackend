@@ -7,6 +7,7 @@ import { addJob, QUEUE_NAMES, isQueueAvailable } from "../lib/queue"
 import { cacheGet, cacheSet, cacheDel, cacheLLen, cacheLRange } from "../lib/redis"
 import { logger } from "../middleware/logger"
 import { ModerationService } from './moderation'
+import AdModel from '../models/ad'
 
 export class PostService {
   // Create new post
@@ -808,6 +809,40 @@ export class PostService {
         logger.error('Error injecting mood suggestions:', err)
         // Fail silently, return normal feed
       }
+    }
+
+    // --- AD INJECTION: Instagram Style ---
+    // Inject 1 Ad after every 5-6 items
+    try {
+      const activeAds = await AdModel.find({ is_active: true }).limit(3).lean();
+      if (activeAds && activeAds.length > 0) {
+        const postsWithAds = [];
+        let adIdx = 0;
+        
+        for (let i = 0; i < posts.length; i++) {
+          postsWithAds.push(posts[i]);
+          
+          // Inject ad after every 5th item
+          if ((i + 1) % 5 === 0 && adIdx < activeAds.length) {
+            const ad = activeAds[adIdx];
+            postsWithAds.push({
+              ...ad,
+              id: `ad_${ad._id}`,
+              is_ad: true,
+              user: {
+                username: ad.brand_name,
+                avatar_url: ad.avatar_url,
+                full_name: 'Sponsored',
+                is_verified: true
+              }
+            });
+            adIdx++;
+          }
+        }
+        posts = postsWithAds;
+      }
+    } catch (adErr) {
+      console.warn('Ad injection skipped:', adErr);
     }
 
     // Note: enrichPosts handles the final transformation, including masking anonymous users.

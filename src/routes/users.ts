@@ -118,14 +118,10 @@ router.get('/me', authenticate, async (req: any, res: Response) => {
         if (cached) {
             return res.json(cached);
         }
-        const db = await getDatabase();
-        const user = await db.collection('users').findOne(
-            { _id: new ObjectId(userId) },
-            { projection: { password: 0 } }
-        );
-        if (!user) {
-            return res.status(404).json({ message: 'User not found' });
-        }
+        
+        // req.user is now populated by authenticateToken middleware
+        const user = req.user;
+        
         const response = {
             id: user._id.toString(),
             username: user.username,
@@ -146,10 +142,13 @@ router.get('/me', authenticate, async (req: any, res: Response) => {
             is_anonymousMode: user.isAnonymousMode || false,
             anonymousPersona: user.anonymousPersona || null,
             phone: user.phone || '',
-            birthday: user.date_of_birth ? new Date(user.date_of_birth).toISOString().split('T')[0] : '',
+            birthday: (user.date_of_birth || user.dob) ? new Date(user.date_of_birth || user.dob).toISOString().split('T')[0] : '',
             gender: user.gender || '',
             address: user.address || '',
             reels_disabled: user.isAnonymousMode === true,
+            is_blocked: user.isBlocked || false,
+            blocked_until: user.blockedUntil || null,
+            content_warnings: user.contentWarnings || 0
         };
         // Cache for 5 minutes (300 seconds)
         await cacheSet(cacheKey, response, 300);
@@ -192,6 +191,46 @@ router.patch('/me', authenticate, async (req: any, res: Response) => {
     } catch (error: any) {
         console.error('Update personal info error:', error);
         return res.status(500).json({ message: error.message || 'Failed to update information' });
+    }
+});
+
+// GET /api/users/:id - Get user by ID
+router.get('/:id', authenticate, async (req: any, res: Response) => {
+    try {
+        const userId = req.params.id;
+        const db = await getDatabase();
+        
+        const user = await db.collection('users').findOne(
+            { _id: new ObjectId(userId) },
+            { projection: { password: 0 } }
+        );
+        
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+        
+        const response = {
+            id: user._id.toString(),
+            username: user.username,
+            name: user.full_name || user.name || '',
+            full_name: user.full_name || user.name || '',
+            bio: user.bio || '',
+            avatar: user.avatar_url || user.avatar || 'https://ui-avatars.com/api/?name=User&background=random',
+            avatar_url: user.avatar_url || user.avatar || 'https://ui-avatars.com/api/?name=User&background=random',
+            followers_count: user.followers_count || 0,
+            following_count: user.following_count || 0,
+            verified: user.is_verified || false,
+            is_verified: user.is_verified || false,
+            badge_type: user.badge_type || null,
+            posts_count: user.posts_count || 0,
+            is_private: user.is_private || false,
+            is_anonymous: user.isAnonymousMode || false,
+            anonymousPersona: user.isAnonymousMode ? user.anonymousPersona : null
+        };
+        
+        return res.json(response);
+    } catch (error: any) {
+        return res.status(500).json({ message: error.message });
     }
 });
 

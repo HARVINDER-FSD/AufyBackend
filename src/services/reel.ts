@@ -6,6 +6,7 @@ import type { Reel, CreateReelRequest, PaginatedResponse, User } from "../lib/ty
 import { pagination, errors } from "../lib/utils"
 import { maskAnonymousUser } from "../lib/anonymous-utils"
 import { ObjectId } from "mongodb"
+import AdModel from '../models/ad'
 
 export class ReelService {
   // Create reel
@@ -498,9 +499,51 @@ export class ReelService {
         }
       }))
 
+      // --- AD INJECTION: Reels Style ---
+      // Inject 1 Video Ad after every 5-6 reels
+      let finalReels = transformedReels;
+      try {
+        const activeAds = await AdModel.find({ is_active: true, media_type: 'video' }).limit(2).lean();
+        if (activeAds && activeAds.length > 0) {
+          const reelsWithAds = [];
+          let adIdx = 0;
+          
+          for (let i = 0; i < transformedReels.length; i++) {
+            reelsWithAds.push(transformedReels[i]);
+            
+            // Inject ad after every 6th reel
+            if ((i + 1) % 6 === 0 && adIdx < activeAds.length) {
+              const ad = activeAds[adIdx];
+              reelsWithAds.push({
+                id: `ad_${ad._id}`,
+                user_id: 'sponsored',
+                video_url: ad.content_url,
+                thumbnail_url: ad.avatar_url,
+                title: ad.brand_name,
+                description: ad.caption,
+                is_ad: true,
+                cta_text: ad.cta_text,
+                cta_url: ad.cta_url,
+                user: {
+                  id: 'sponsored',
+                  username: ad.brand_name,
+                  full_name: 'Sponsored',
+                  avatar_url: ad.avatar_url,
+                  is_verified: true
+                }
+              });
+              adIdx++;
+            }
+          }
+          finalReels = reelsWithAds;
+        }
+      } catch (adErr) {
+        console.warn('Reels ad injection skipped:', adErr);
+      }
+
       return {
         success: true,
-        data: transformedReels,
+        data: finalReels,
         pagination: {
           page: validPage,
           limit: validLimit,

@@ -8,11 +8,12 @@ import Joi, { Schema } from 'joi';
  */
 export function validateBody(schema: Schema) {
     return (req: Request, res: Response, next: NextFunction) => {
-        const { error } = schema.validate(req.body, { abortEarly: true, stripUnknown: true });
+        const { error, value } = schema.validate(req.body, { abortEarly: true, stripUnknown: true });
         if (error) {
             return res.status(400).json({ error: error.details[0].message });
         }
-        // validated (and possibly stripped) data is now in req.body
+        // Replace req.body with validated value (important for defaults and stripping)
+        req.body = value;
         next();
     };
 }

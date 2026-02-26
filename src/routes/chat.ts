@@ -102,7 +102,7 @@ router.get('/conversations', auth, async (req, res) => {
         { type: 'group' }
       ]
     })
-      .populate('participants.user', 'username fullName profileImage')
+      .populate('participants.user', 'username full_name avatar_url')
       .populate('last_message')
       .sort({ updatedAt: -1 });
 
@@ -121,7 +121,7 @@ router.post('/conversations', auth, async (req, res) => {
     let conversation = await Conversation.findOne({
       'participants.user': { $all: [req.userId, userId] }
     })
-      .populate('participants.user', 'username fullName profileImage')
+      .populate('participants.user', 'username full_name avatar_url')
       .populate('last_message');
 
     if (!conversation) {
@@ -134,7 +134,7 @@ router.post('/conversations', auth, async (req, res) => {
         created_by: req.userId
       });
 
-      conversation = await conversation.populate('participants.user', 'username fullName profileImage');
+      conversation = await conversation.populate('participants.user', 'username full_name avatar_url');
     }
 
     res.json(conversation);

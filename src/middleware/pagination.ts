@@ -21,7 +21,7 @@ declare global {
 export function paginate(req: Request, _res: Response, next: NextFunction) {
     const limit = Math.min(Number.parseInt(req.query.limit as string) || 20, 100);
     const cursor = req.query.cursor as string | undefined;
-    const page = Number.parseInt(req.query.page as string) || 1;
+    const page = Math.max(Number.parseInt(req.query.page as string) || 1, 1);
 
     req.pagination = { limit, cursor, page };
     next();

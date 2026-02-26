@@ -96,7 +96,7 @@ router.post('/login', validate(loginSchema), async (req: Request, res: Response)
         userId: user._id.toString(),
         email: user.email,
         username: user.username,
-        name: user.name
+        name: user.full_name || user.name || user.username
       },
       JWT_SECRET,
       { expiresIn: '90d' }
@@ -145,14 +145,17 @@ router.post('/login', validate(loginSchema), async (req: Request, res: Response)
         id: user._id.toString(),
         username: user.username,
         email: user.email,
-        name: user.name || "",
-        fullName: user.name || "",
+        name: user.full_name || user.name || user.username,
+        fullName: user.full_name || user.name || user.username,
+        full_name: user.full_name || user.name || user.username,
         bio: user.bio || "",
         avatar: avatarUrl,
         avatar_url: avatarUrl,
         followers_count: user.followers_count || user.followers || 0,
         following_count: user.following_count || user.following || 0,
-        is_verified: user.is_verified || user.verified || false
+        is_verified: user.is_verified || user.verified || false,
+        date_of_birth: user.date_of_birth || user.dob,
+        dob: user.date_of_birth || user.dob
       },
       token: token
     })
@@ -299,12 +302,15 @@ router.post('/register', validate(registerSchema), async (req: Request, res: Res
         email,
         name: newUser.full_name,
         fullName: newUser.full_name,
+        full_name: newUser.full_name,
         bio: "",
         avatar: defaultAvatar,
         avatar_url: defaultAvatar,
         followers_count: 0,
         following_count: 0,
-        is_verified: false
+        is_verified: false,
+        date_of_birth: newUser.date_of_birth,
+        dob: newUser.date_of_birth
       },
       token
     })
